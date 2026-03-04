@@ -1,26 +1,31 @@
+import type { AgentInterface, MemoryStore } from '@bcc/foundation';
 import { ChatSession, type ChatSessionOptions } from '@bcc/conversation';
-import type { MemoryStore } from '@bcc/foundation';
 import type { ModelAdapter } from '@bcc/model-core';
 import { bold, cyan, dim, green } from './ansi.js';
 import { startRepl } from './repl.js';
 
 export interface CliChannelOptions {
-  /** 模型适配器或 ModelRouter */
-  model: ModelAdapter;
+  /**
+   * 传入已构建好的 AgentInterface（如 AgentEngine）。
+   * 与 model 二选一。
+   */
+  agent?: AgentInterface | undefined;
 
-  /** 系统提示词（Agent 人格/行为定义） */
+  /**
+   * 模型适配器或 ModelRouter（CliChannel 内部自动创建 ChatSession）。
+   * 与 agent 二选一。
+   */
+  model?: ModelAdapter | undefined;
+
+  // ── 以下选项仅在使用 model 时有效 ─────────────────────────────────────────
+
+  /** 系统提示词 */
   system?: string | undefined;
 
-  /**
-   * 持久化存储（可选）。
-   * 不提供则历史仅保存在内存，进程退出后丢失。
-   */
+  /** 持久化存储（可选） */
   memory?: MemoryStore | undefined;
 
-  /**
-   * 会话 ID，用于持久化。
-   * 提供 memory 时建议同时设置，默认 'default'。
-   */
+  /** 会话 ID，用于持久化（默认 'default'） */
   sessionId?: string | undefined;
 
   /** 单次对话最大 token 数 */
@@ -29,54 +34,65 @@ export interface CliChannelOptions {
   /** 保留的最大历史消息数 */
   maxMessages?: number | undefined;
 
-  /** 终端横幅（不设置则使用默认横幅） */
+  // ── 通用选项 ──────────────────────────────────────────────────────────────
+
+  /** 终端横幅 */
   banner?: string | undefined;
 }
 
 /**
  * CliChannel：交互式命令行对话渠道。
  *
- * 用法：
- *   const cli = new CliChannel({ model: new ClaudeAdapter() });
- *   await cli.start();
+ * 两种用法：
  *
- * 或使用工厂方法（支持持久化历史恢复）：
- *   const cli = await CliChannel.create({ model, memory, sessionId: 'my-chat' });
- *   await cli.start();
+ * A. 简单对话（传入 model，内部自动建立 ChatSession）：
+ *   const cli = await CliChannel.create({ model: new ClaudeAdapter() });
+ *
+ * B. 带工具的 Agent（传入 AgentEngine）：
+ *   const engine = await AgentEngine.create({ model, tools: [...] });
+ *   const cli = await CliChannel.create({ agent: engine });
  */
 export class CliChannel {
-  private session: ChatSession;
+  private session: AgentInterface;
   private options: CliChannelOptions;
 
-  private constructor(session: ChatSession, options: CliChannelOptions) {
+  private constructor(session: AgentInterface, options: CliChannelOptions) {
     this.session = session;
     this.options = options;
   }
 
-  /**
-   * 创建 CliChannel 并自动从持久化存储恢复历史。
-   * 如果不需要持久化，直接使用 `new CliChannel(options)` 即可。
-   */
   static async create(options: CliChannelOptions): Promise<CliChannel> {
-    const sessionOpts: ChatSessionOptions = {
-      model: options.model,
-      sessionId: options.sessionId ?? 'default',
-      ...(options.system !== undefined && { system: options.system }),
-      ...(options.memory !== undefined && { memory: options.memory }),
-      ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-      ...(options.maxMessages !== undefined && { history: { maxMessages: options.maxMessages } }),
-    };
+    if (!options.agent && !options.model) {
+      throw new Error('CliChannel.create() 需要提供 agent 或 model 之一。');
+    }
 
-    const session = await ChatSession.create(sessionOpts);
+    let session: AgentInterface;
 
-    const restored = options.memory
-      ? session.getHistory().length > 0
-      : false;
+    if (options.agent) {
+      // 直接使用传入的 AgentInterface（AgentEngine 等）
+      session = options.agent;
 
-    if (restored) {
-      console.log(
-        green('✓') + ` 已从存储恢复 ${session.getHistory().length} 条历史消息`,
-      );
+      const restored = session.getHistory().length > 0;
+      if (restored) {
+        console.log(green('✓') + ` 已恢复 ${session.getHistory().length} 条历史消息`);
+      }
+    } else {
+      // 用 model 自动创建 ChatSession
+      const sessionOpts: ChatSessionOptions = {
+        model: options.model!,
+        sessionId: options.sessionId ?? 'default',
+        ...(options.system !== undefined && { system: options.system }),
+        ...(options.memory !== undefined && { memory: options.memory }),
+        ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+        ...(options.maxMessages !== undefined && { history: { maxMessages: options.maxMessages } }),
+      };
+
+      session = await ChatSession.create(sessionOpts);
+
+      const restored = options.memory !== undefined && session.getHistory().length > 0;
+      if (restored) {
+        console.log(green('✓') + ` 已从存储恢复 ${session.getHistory().length} 条历史消息`);
+      }
     }
 
     return new CliChannel(session, options);
@@ -89,8 +105,8 @@ export class CliChannel {
     await startRepl({ session: this.session, banner, hint });
   }
 
-  /** 获取底层 ChatSession（用于高级控制） */
-  get chatSession(): ChatSession {
+  /** 获取底层 AgentInterface */
+  get agentSession(): AgentInterface {
     return this.session;
   }
 
@@ -105,12 +121,16 @@ export class CliChannel {
   }
 
   private buildHint(): string {
-    const parts: string[] = [];
-    parts.push(`  模型：${this.session.currentModel}`);
-    if (this.options.memory) {
+    const parts: string[] = [`  模型：${this.session.currentModel}`];
+
+    if (this.options.agent) {
+      // AgentEngine 模式
+      parts.push('  [Agent 模式]');
+    } else if (this.options.memory !== undefined) {
       const id = this.options.sessionId ?? 'default';
       parts.push(`  会话：${id}（自动保存）`);
     }
+
     return parts.join('  |  ');
   }
 }

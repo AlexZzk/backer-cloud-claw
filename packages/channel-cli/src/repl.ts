@@ -1,10 +1,10 @@
 import * as readline from 'node:readline';
-import { ChatSession } from '@bcc/conversation';
+import type { AgentInterface } from '@bcc/foundation';
 import { bold, cyan, green, yellow, red, gray, dim, clearLine, showCursor } from './ansi.js';
 
-const PROMPT = cyan('You') + gray(' › ') + ' ';
+const PROMPT    = cyan('You') + gray(' › ') + ' ';
 const AI_PREFIX = green('AI') + gray('  › ') + ' ';
-const THINKING = dim('  …thinking');
+const THINKING  = dim('  …thinking');
 
 /** 内置斜杠命令列表 */
 const HELP_TEXT = `
@@ -15,26 +15,21 @@ ${bold('可用命令：')}
   ${yellow('/model <id>')}        切换模型（需配置 ModelRouter）
   ${yellow('/models')}            列出所有可用模型
   ${yellow('/save')}              手动保存当前历史到持久化存储
-  ${yellow('/session')}           显示当前 Session ID
+  ${yellow('/session')}           显示当前 Session 信息
   ${yellow('/exit')} 或 ${yellow('Ctrl+C')}  退出
 `;
 
 export interface ReplOptions {
-  session: ChatSession;
-  banner?: string;
-  hint?: string;
+  session: AgentInterface;
+  banner?: string | undefined;
+  hint?: string | undefined;
 }
 
 export async function startRepl(options: ReplOptions): Promise<void> {
   const { session } = options;
 
-  // 打印欢迎横幅
-  if (options.banner) {
-    console.log(options.banner);
-  }
-  if (options.hint) {
-    console.log(dim(options.hint));
-  }
+  if (options.banner) console.log(options.banner);
+  if (options.hint)   console.log(dim(options.hint));
   console.log(dim('  输入 /help 查看命令，Ctrl+C 或 /exit 退出\n'));
 
   const rl = readline.createInterface({
@@ -48,10 +43,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
   rl.on('line', async (line) => {
     const input = line.trim();
-    if (!input) {
-      rl.prompt();
-      return;
-    }
+    if (!input) { rl.prompt(); return; }
 
     // ─── 斜杠命令 ──────────────────────────────────────────────────────────
     if (input.startsWith('/')) {
@@ -64,27 +56,55 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     rl.pause();
     process.stdout.write(THINKING);
 
-    let firstChunk = true;
+    let firstTextChunk = true;
     try {
       for await (const chunk of session.stream(input)) {
-        if (chunk.type === 'text' && chunk.text) {
-          if (firstChunk) {
+        switch (chunk.type) {
+          case 'text':
+            if (chunk.text) {
+              if (firstTextChunk) {
+                clearLine();
+                process.stdout.write(AI_PREFIX);
+                firstTextChunk = false;
+              }
+              process.stdout.write(chunk.text);
+            }
+            break;
+
+          case 'tool_call':
+            // 工具调用：换行后显示正在执行哪个工具
+            if (!firstTextChunk) process.stdout.write('\n');
+            firstTextChunk = true; // 重置，工具结果后可能还有文本
             clearLine();
-            process.stdout.write(AI_PREFIX);
-            firstChunk = false;
-          }
-          process.stdout.write(chunk.text);
+            process.stdout.write(
+              dim('  ⚙ ') + cyan(chunk.tool) + dim(' › ') +
+              gray(JSON.stringify(chunk.input).slice(0, 80)) + '\n',
+            );
+            break;
+
+          case 'tool_result':
+            // 工具结果
+            process.stdout.write(
+              (chunk.isError ? red('  ✗ ') : dim('  ✓ ')) +
+              dim(chunk.tool + ': ') +
+              gray(chunk.result.slice(0, 120)) + '\n',
+            );
+            break;
+
+          case 'done':
+            // 完成，不需要额外输出
+            break;
         }
       }
     } catch (err) {
+      if (!firstTextChunk) process.stdout.write('\n');
       clearLine();
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('\n' + red('错误：') + msg);
+      console.error(red('错误：') + msg);
     }
 
-    if (firstChunk) {
-      // 没有任何输出（空回复或出错）
-      clearLine();
+    if (firstTextChunk) {
+      clearLine(); // 没有任何文本输出时清掉"…thinking"
     } else {
       process.stdout.write('\n');
     }
@@ -101,7 +121,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     process.exit(0);
   });
 
-  // Ctrl+C：第一次中断当前输入，第二次退出
+  // Ctrl+C：第一次中断输入，第二次退出
   let sigintCount = 0;
   rl.on('SIGINT', () => {
     sigintCount++;
@@ -122,7 +142,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 async function handleCommand(
   cmd: string,
   args: string[],
-  session: ChatSession,
+  session: AgentInterface,
   rl: readline.Interface,
 ): Promise<void> {
   switch (cmd.toLowerCase()) {
@@ -133,36 +153,26 @@ async function handleCommand(
 
     case 'clear':
       session.clearHistory();
-      console.log(green('✓') + ' 对话历史已清空（持久化文件保留）\n');
+      console.log(green('✓') + ' 对话历史已清空\n');
       break;
 
     case 'history': {
       const history = session.getHistory();
-      if (history.length === 0) {
-        console.log(dim('  （暂无历史）\n'));
-        break;
-      }
+      if (history.length === 0) { console.log(dim('  （暂无历史）\n')); break; }
       console.log(bold('\n  对话历史：'));
-      console.log(session.dumpHistory()
-        .split('\n')
-        .map(l => '  ' + l)
-        .join('\n'));
+      console.log(session.dumpHistory().split('\n').map(l => '  ' + l).join('\n'));
       console.log();
       break;
     }
 
     case 'model': {
       const modelId = args[0];
-      if (!modelId) {
-        console.log(yellow('  用法：/model <model-id>\n'));
-        break;
-      }
+      if (!modelId) { console.log(yellow('  用法：/model <model-id>\n')); break; }
       try {
-        session.switchModel(modelId);
+        session.switchModel?.(modelId);
         console.log(green('✓') + ` 已切换到 ${bold(session.currentModel)}\n`);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.log(red('✗') + ' ' + msg + '\n');
+        console.log(red('✗') + ' ' + (err instanceof Error ? err.message : String(err)) + '\n');
       }
       break;
     }
@@ -171,8 +181,8 @@ async function handleCommand(
       const models = session.listModels();
       console.log(bold('\n  可用模型：'));
       for (const m of models) {
-        const current = m === session.currentModel;
-        console.log(`  ${current ? green('▶') : ' '} ${m}${current ? dim(' (当前)') : ''}`);
+        const cur = m === session.currentModel;
+        console.log(`  ${cur ? green('▶') : ' '} ${m}${cur ? dim(' (当前)') : ''}`);
       }
       console.log();
       break;
@@ -180,11 +190,10 @@ async function handleCommand(
 
     case 'save':
       try {
-        await session.persist();
+        await session.persist?.();
         console.log(green('✓') + ' 历史已保存\n');
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.log(red('✗') + ' 保存失败：' + msg + '\n');
+        console.log(red('✗') + ' 保存失败：' + (err instanceof Error ? err.message : String(err)) + '\n');
       }
       break;
 

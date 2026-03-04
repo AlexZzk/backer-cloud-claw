@@ -86,3 +86,58 @@ export interface ModelInfo {
   supportStreaming: boolean;
   supportTools: boolean;
 }
+
+// ─── Agent 输出 chunk（含工具调用事件）────────────────────────────────────────
+
+/** 工具调用事件：Agent 即将执行某个工具 */
+export interface ToolCallChunk {
+  type: 'tool_call';
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+/** 工具结果事件：执行完成后的输出 */
+export interface ToolResultChunk {
+  type: 'tool_result';
+  tool: string;
+  result: string;
+  isError: boolean;
+}
+
+/**
+ * AgentChunk：AgentEngine.stream() 产生的事件类型。
+ * 是 StreamChunk 的超集，额外包含工具调用/结果事件。
+ */
+export type AgentChunk = StreamChunk | ToolCallChunk | ToolResultChunk;
+
+// ─── Agent 统一接口 ──────────────────────────────────────────────────────────
+
+/**
+ * AgentInterface：ChatSession 与 AgentEngine 共同实现的接口。
+ * CliChannel 和 REPL 针对此接口编程，与底层实现解耦。
+ */
+export interface AgentInterface {
+  /** 流式输出（含工具调用事件） */
+  stream(userInput: string): AsyncIterable<AgentChunk>;
+
+  /** 当前使用的模型 ID */
+  readonly currentModel: string;
+
+  /** 列出所有可用模型 */
+  listModels(): string[];
+
+  /** 获取当前会话历史 */
+  getHistory(): Message[];
+
+  /** 清空历史 */
+  clearHistory(): void;
+
+  /** 导出历史文本（调试用） */
+  dumpHistory(): string;
+
+  /** 切换模型（需要底层支持 ModelRouter） */
+  switchModel?(modelId: string): void;
+
+  /** 手动持久化（不提供 memory 则为空操作） */
+  persist?(): Promise<void>;
+}

@@ -12,7 +12,8 @@ packages/
 ├── model-core      ModelAdapter 接口 + ModelRouter（故障转移 & 手动切换）
 ├── model-claude    Anthropic Claude 适配器（流式）
 ├── model-deepseek  DeepSeek 适配器（兼容 OpenAI 格式，流式）
-├── conversation    ChatSession 多轮对话管理
+├── conversation    ChatSession 多轮对话管理（无工具调用）
+├── agent-engine    AgentEngine 执行引擎（工具调用循环 + 上下文文件加载）
 ├── memory-fs       文件系统会话持久化（无数据库依赖）
 └── channel-cli     交互式命令行对话渠道（bcc-chat）
 
@@ -133,6 +134,72 @@ session.switchModel('deepseek:deepseek-chat');
 const { text } = await session.chat('今天天气如何？');
 // DeepSeek 能基于历史回答"今天是晴天"
 console.log(session.currentModel); // deepseek:deepseek-chat
+```
+
+### Agent 模式（工具调用）
+
+当需要让 AI 调用外部工具（计算、查询、执行命令等）时，使用 `AgentEngine`：
+
+```ts
+import { AgentEngine } from '@bcc/agent-engine';
+import { ClaudeAdapter } from '@bcc/model-claude';
+import { FileMemoryStore } from '@bcc/memory-fs';
+
+// 定义工具
+const calculatorTool = {
+  definition: {
+    name: 'calculator',
+    description: '计算数学表达式，返回结果',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { expression: { type: 'string', description: '数学表达式，如 "2**10"' } },
+      required: ['expression'],
+    },
+  },
+  handler: async ({ expression }: Record<string, unknown>) => {
+    // 实际项目中应使用安全的表达式解析库
+    return String(Function(`"use strict"; return (${expression})`)());
+  },
+};
+
+const engine = await AgentEngine.create({
+  model: new ClaudeAdapter(),
+  tools: [calculatorTool],
+  contextFiles: ['./AGENTS.md'],   // 可选：从文件加载系统提示
+  memory: new FileMemoryStore(),
+  sessionId: 'my-agent',
+  maxIterations: 10,               // 防止无限工具循环
+});
+
+// 模型会自动调用 calculator 工具，再回答
+const answer = await engine.chat('2 的 10 次方是多少？');
+console.log(answer); // "2 的 10 次方是 1024。"
+
+// 流式输出（可看到工具调用过程）
+for await (const chunk of engine.stream('计算 fibonacci(10)')) {
+  if (chunk.type === 'text')        process.stdout.write(chunk.text ?? '');
+  if (chunk.type === 'tool_call')   console.log(`\n⚙ 调用 ${chunk.tool}:`, chunk.input);
+  if (chunk.type === 'tool_result') console.log(`✓ 结果: ${chunk.result}`);
+}
+```
+
+**与 CliChannel 结合（带工具的命令行 Agent）：**
+
+```ts
+import { AgentEngine } from '@bcc/agent-engine';
+import { CliChannel } from '@bcc/channel-cli';
+import { ClaudeAdapter } from '@bcc/model-claude';
+
+const engine = await AgentEngine.create({
+  model: new ClaudeAdapter(),
+  tools: [calculatorTool, webSearchTool],
+});
+
+const cli = await CliChannel.create({ agent: engine });
+await cli.start();
+// REPL 中工具调用会实时显示：
+//   ⚙ calculator › {"expression":"2**10"}
+//   ✓ 结果: 1024
 ```
 
 ---
