@@ -80,6 +80,22 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
+  packages/memory-fs:
+    dependencies:
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.13)
+
   packages/model-claude:
     dependencies:
       '@anthropic-ai/sdk':
