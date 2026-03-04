@@ -22,13 +22,13 @@ export interface FileMemoryStoreOptions {
    *   dir: '/mnt/secure/ai-sessions'   // 外部安全存储
    *   dir: process.env.BCC_SESSION_DIR // 环境变量
    */
-  dir?: string;
+  dir?: string | undefined;
 
   /**
    * 单个会话最多保存的消息条数（超出时裁剪最旧的，system 消息永远保留）。
    * 默认不限制。
    */
-  maxMessages?: number;
+  maxMessages?: number | undefined;
 }
 
 const DEFAULT_DIR = join(homedir(), '.bcc', 'sessions');

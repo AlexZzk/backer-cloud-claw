@@ -49,6 +49,40 @@ importers:
         specifier: '*'
         version: 5.9.3
 
+  packages/channel-cli:
+    dependencies:
+      '@bcc/conversation':
+        specifier: workspace:*
+        version: link:../conversation
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+      '@bcc/memory-fs':
+        specifier: workspace:*
+        version: link:../memory-fs
+      '@bcc/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+    devDependencies:
+      '@bcc/model-claude':
+        specifier: workspace:*
+        version: link:../model-claude
+      '@bcc/model-deepseek':
+        specifier: workspace:*
+        version: link:../model-deepseek
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      tsx:
+        specifier: '*'
+        version: 4.21.0
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.13)
+
   packages/conversation:
     dependencies:
       '@bcc/foundation':

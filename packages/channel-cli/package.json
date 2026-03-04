@@ -1,0 +1,46 @@
+{
+  "name": "@bcc/channel-cli",
+  "version": "0.1.0",
+  "description": "交互式命令行 AI 对话渠道",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "bcc-chat": "./dist/bin/bcc-chat.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "tsx bin/bcc-chat.ts",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/conversation": "workspace:*",
+    "@bcc/foundation": "workspace:*",
+    "@bcc/memory-fs": "workspace:*",
+    "@bcc/model-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@bcc/model-claude": "workspace:*",
+    "@bcc/model-deepseek": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@bcc/model-claude": { "optional": true },
+    "@bcc/model-deepseek": { "optional": true }
+  },
+  "devDependencies": {
+    "@bcc/model-claude": "workspace:*",
+    "@bcc/model-deepseek": "workspace:*",
+    "typescript": "*",
+    "vitest": "*",
+    "@types/node": "*",
+    "tsx": "*"
+  }
+}

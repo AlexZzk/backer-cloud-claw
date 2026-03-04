@@ -13,7 +13,8 @@ packages/
 ├── model-claude    Anthropic Claude 适配器（流式）
 ├── model-deepseek  DeepSeek 适配器（兼容 OpenAI 格式，流式）
 ├── conversation    ChatSession 多轮对话管理
-└── memory-fs       文件系统会话持久化（无数据库依赖）
+├── memory-fs       文件系统会话持久化（无数据库依赖）
+└── channel-cli     交互式命令行对话渠道（bcc-chat）
 
 examples/
 └── basic-chat      最小可运行示例
@@ -224,7 +225,55 @@ const session = await ChatSession.create({
 
 ---
 
-## 运行示例
+## 命令行 Agent（bcc-chat）
+
+`@bcc/channel-cli` 提供开箱即用的交互式命令行 Agent。
+
+```bash
+# 最简启动（默认 Claude，历史自动保存到 ~/.bcc/sessions/）
+ANTHROPIC_API_KEY=sk-ant-... \
+pnpm --filter @bcc/channel-cli exec tsx bin/bcc-chat.ts
+
+# 使用 DeepSeek
+DEEPSEEK_API_KEY=sk-... \
+pnpm --filter @bcc/channel-cli exec tsx bin/bcc-chat.ts --model deepseek
+
+# 双模型路由（Claude 主 + DeepSeek 故障转移）
+ANTHROPIC_API_KEY=sk-ant-... DEEPSEEK_API_KEY=sk-... \
+pnpm --filter @bcc/channel-cli exec tsx bin/bcc-chat.ts --model both
+
+# 指定系统提示词和会话 ID
+ANTHROPIC_API_KEY=sk-ant-... \
+pnpm --filter @bcc/channel-cli exec tsx bin/bcc-chat.ts \
+  --system "你是一个 Python 专家，回答要简洁" \
+  --session python-tutor
+
+# 自定义存储目录
+ANTHROPIC_API_KEY=sk-ant-... \
+pnpm --filter @bcc/channel-cli exec tsx bin/bcc-chat.ts \
+  --session-dir ./my-sessions
+
+# 禁用持久化（纯内存模式，退出后历史丢失）
+ANTHROPIC_API_KEY=sk-ant-... \
+pnpm --filter @bcc/channel-cli exec tsx bin/bcc-chat.ts --no-memory
+```
+
+**会话内可用命令：**
+
+| 命令 | 说明 |
+|---|---|
+| `/help` | 显示所有命令 |
+| `/clear` | 清空当前对话历史 |
+| `/history` | 查看完整对话历史 |
+| `/models` | 列出可用模型 |
+| `/model <id>` | 切换到指定模型 |
+| `/save` | 手动保存历史 |
+| `/session` | 查看当前会话信息 |
+| `/exit` 或 `Ctrl+C` | 退出 |
+
+---
+
+## 运行示例（代码验证）
 
 ```bash
 # 无 API Key：结构验证模式（不发起真实请求）
