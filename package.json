@@ -1,0 +1,30 @@
+{
+  "name": "backer-cloud-claw",
+  "private": true,
+  "version": "0.0.0",
+  "description": "模块化可拼装 AI Agent 框架",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean",
+    "bcc-init": "pnpm --filter @bcc/channel-cli run init",
+    "bcc-chat": "pnpm --filter @bcc/channel-cli run start"
+  },
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@types/node": "^22.10.2"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@10.29.3"
+}

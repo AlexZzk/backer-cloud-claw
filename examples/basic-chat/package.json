@@ -1,0 +1,24 @@
+{
+  "name": "@bcc-examples/basic-chat",
+  "version": "0.0.0",
+  "private": true,
+  "description": "验证完整链路的最小示例",
+  "type": "module",
+  "scripts": {
+    "start": "node --loader ts-node/esm src/index.ts",
+    "build": "tsc",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@bcc/conversation": "workspace:*",
+    "@bcc/foundation": "workspace:*",
+    "@bcc/model-claude": "workspace:*",
+    "@bcc/model-core": "workspace:*",
+    "@bcc/model-deepseek": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "@types/node": "*",
+    "tsx": "^4.19.2"
+  }
+}
