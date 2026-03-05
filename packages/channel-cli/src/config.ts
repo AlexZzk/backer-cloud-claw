@@ -36,11 +36,12 @@ export interface BccConfig {
   providers: {
     claude?:   ProviderConfig;
     deepseek?: ProviderConfig;
+    bailian?:  ProviderConfig;
   };
 
   defaults: {
     /** 默认使用的提供商 */
-    provider: 'claude' | 'deepseek' | 'both';
+    provider: 'claude' | 'deepseek' | 'bailian' | 'both';
 
     /** 是否启用会话持久化 */
     enableMemory: boolean;
@@ -63,7 +64,7 @@ export function makeDefaultConfig(): BccConfig {
     version: '1',
     providers: {},
     defaults: {
-      provider:     'claude',
+      provider:     'claude' as 'claude' | 'deepseek' | 'bailian' | 'both',
       enableMemory: true,
       sessionDir:   DEFAULT_SESSION_DIR,
       maxMessages:  50,

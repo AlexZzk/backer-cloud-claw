@@ -149,40 +149,65 @@ export async function askSecret(prompt: string): Promise<string> {
   return ask(`  ${prompt} (输入不会被遮蔽): `);
 }
 
-/** 原始模式密钥读取：逐字符读取，显示 * */
+/** 原始模式密钥读取：逐字符读取，显示 *；支持粘贴 */
 function readRawSecret(prefix: string): Promise<string> {
   return new Promise(resolve => {
     // 关闭当前的 readline（以免与 raw mode 冲突）
     _rl?.close();
-    _rl = null;
+    _rl     = null;
+    _closed = false;  // 重置关闭标志，让后续步骤可以继续创建 readline
 
     process.stdout.write(prefix);
 
-    const chars: number[] = [];
+    const chars: string[] = [];
     const stdin = process.stdin as NodeJS.ReadStream & { setRawMode: (mode: boolean) => void };
     stdin.setRawMode(true);
     stdin.resume();
     stdin.setEncoding('utf8');
 
+    const finish = (): void => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.removeListener('data', onData);
+    };
+
     const onData = (key: string): void => {
+      // 处理多字符输入（粘贴场景）：逐个字符处理
+      if (key.length > 1) {
+        // 检查是否包含回车（粘贴内容末尾可能带换行）
+        const enterIdx = key.search(/[\r\n]/);
+        const chunk = enterIdx >= 0 ? key.slice(0, enterIdx) : key;
+
+        for (const ch of chunk) {
+          const c = ch.charCodeAt(0);
+          if (c >= 0x20 && c <= 0x7e) {
+            chars.push(ch);
+            process.stdout.write('*');
+          }
+        }
+
+        if (enterIdx >= 0) {
+          process.stdout.write('\n');
+          finish();
+          resolve(chars.join(''));
+        }
+        return;
+      }
+
       const code = key.charCodeAt(0);
 
       // Ctrl+C → 退出
       if (code === 0x03) {
         process.stdout.write('\n');
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.removeListener('data', onData);
+        finish();
         process.exit(0);
       }
 
       // Enter（\r 或 \n）→ 完成
       if (code === 0x0d || code === 0x0a) {
         process.stdout.write('\n');
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.removeListener('data', onData);
-        resolve(Buffer.from(chars).toString('utf8'));
+        finish();
+        resolve(chars.join(''));
         return;
       }
 
@@ -197,7 +222,7 @@ function readRawSecret(prefix: string): Promise<string> {
 
       // 可打印 ASCII 字符
       if (code >= 0x20 && code <= 0x7e) {
-        chars.push(code);
+        chars.push(key);
         process.stdout.write('*');
       }
     };

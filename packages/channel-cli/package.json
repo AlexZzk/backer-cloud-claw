@@ -31,14 +31,17 @@
   },
   "peerDependencies": {
     "@bcc/model-claude": "workspace:*",
+    "@bcc/model-bailian": "workspace:*",
     "@bcc/model-deepseek": "workspace:*"
   },
   "peerDependenciesMeta": {
     "@bcc/model-claude": { "optional": true },
+    "@bcc/model-bailian": { "optional": true },
     "@bcc/model-deepseek": { "optional": true }
   },
   "devDependencies": {
     "@bcc/model-claude": "workspace:*",
+    "@bcc/model-bailian": "workspace:*",
     "@bcc/model-deepseek": "workspace:*",
     "typescript": "*",
     "vitest": "*",
