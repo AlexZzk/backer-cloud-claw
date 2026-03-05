@@ -337,13 +337,21 @@ async function editModelWizard(models: ModelInstanceConfig[]): Promise<void> {
   if (models.length === 0) return;
   console.log();
   const idx = await selectOne<number>('选择要编辑的模型',
-    models.map((m, i) => ({
-      label: `${i + 1}. ${m.id}`,
-      value: i,
-      description: `${PROVIDER_LABELS[m.provider]} / ${m.model ?? '默认'} [${m.primary ? '主' : m.fallback ? '备用' : '手动'}]`,
-    })), 0);
+    [
+      ...models.map((m, i) => ({
+        label: `${i + 1}. ${m.id}`,
+        value: i,
+        description: `${PROVIDER_LABELS[m.provider]} / ${m.model ?? '默认'} [${m.primary ? '主' : m.fallback ? '备用' : '手动'}]`,
+      })),
+      { label: '← 返回', value: -1, description: '不编辑，返回上级菜单' },
+    ], 0);
+
+  if (idx === -1) { console.log(); return; }
 
   const t = models[idx]!;
+  // 保存快照，以便用户取消时恢复
+  const snapshot: ModelInstanceConfig = { ...t };
+
   console.log(`\n  编辑 "${t.id}"（回车保持当前值）\n`);
 
   // Key
@@ -374,6 +382,20 @@ async function editModelWizard(models: ModelInstanceConfig[]): Promise<void> {
     { label: '故障转移备用', value: 'fallback' },
     { label: '仅手动切换',   value: 'manual'   },
   ], cur === 'primary' ? 0 : cur === 'fallback' ? 1 : 2);
+
+  // 确认或取消
+  console.log();
+  const save = await askConfirm('  保存以上更改？（选 n 放弃修改）', true);
+  if (!save) {
+    // 还原快照：先删掉编辑中新增的字段，再复制回原值
+    for (const key of Object.keys(t)) {
+      if (!(key in snapshot)) delete (t as unknown as Record<string, unknown>)[key];
+    }
+    Object.assign(t, snapshot);
+    warn(`已取消，"${t.id}" 保持原配置`);
+    console.log();
+    return;
+  }
 
   if (newRole === 'primary') { for (const m of models) m.primary = false; }
   t.primary  = newRole === 'primary';
