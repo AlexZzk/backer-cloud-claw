@@ -12,12 +12,14 @@
     }
   },
   "bin": {
-    "bcc-chat": "./dist/bin/bcc-chat.js"
+    "bcc-chat": "./dist/bin/bcc-chat.js",
+    "bcc-init": "./dist/bin/bcc-init.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "tsx bin/bcc-chat.ts",
+    "init": "tsx bin/bcc-init.ts",
     "test": "vitest run",
     "clean": "rm -rf dist"
   },

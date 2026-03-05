@@ -8,7 +8,9 @@
     "dev": "turbo run dev",
     "test": "turbo run test",
     "lint": "turbo run lint",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "bcc-init": "pnpm --filter @bcc/channel-cli run init",
+    "bcc-chat": "pnpm --filter @bcc/channel-cli run start"
   },
   "workspaces": [
     "packages/*",
