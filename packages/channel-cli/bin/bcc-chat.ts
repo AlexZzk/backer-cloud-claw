@@ -94,11 +94,17 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
 
 // ─── 模型构建 ─────────────────────────────────────────────────────────────────
 
+interface BailianOpts {
+  apiKey?:  string;
+  model?:   string;
+  baseUrl?: string;
+}
+
 async function buildModel(
-  provider: 'claude' | 'deepseek' | 'bailian' | 'both',
+  provider:    'claude' | 'deepseek' | 'bailian' | 'both',
   claudeKey:   string | undefined,
   deepSeekKey: string | undefined,
-  bailianKey:  string | undefined,
+  bailian:     BailianOpts,
 ): Promise<ModelRouter> {
   const router = new ModelRouter({ enableFailover: true });
   let registered = 0;
@@ -109,9 +115,13 @@ async function buildModel(
     registered++;
   }
 
-  if (provider === 'bailian' && bailianKey) {
+  if (provider === 'bailian' && bailian.apiKey) {
     const { BailianAdapter } = await import('@bcc/model-bailian');
-    router.register(new BailianAdapter({ apiKey: bailianKey }), { priority: 0 });
+    router.register(new BailianAdapter({
+      apiKey: bailian.apiKey,
+      ...(bailian.model   && { model:   bailian.model }),
+      ...(bailian.baseUrl && { baseUrl: bailian.baseUrl }),
+    }), { priority: 0 });
     registered++;
   }
 
@@ -168,8 +178,13 @@ async function main(): Promise<void> {
   // 三层优先级合并
   const provider    = (args.model ?? config?.defaults.provider ?? 'claude') as 'claude' | 'deepseek' | 'bailian' | 'both';
   const claudeKey   = process.env['ANTHROPIC_API_KEY']  || config?.providers.claude?.apiKey;
-  const bailianKey  = process.env['DASHSCOPE_API_KEY']  || config?.providers.bailian?.apiKey;
   const deepSeekKey = process.env['DEEPSEEK_API_KEY']   || config?.providers.deepseek?.apiKey;
+  const bailianApiKey = process.env['DASHSCOPE_API_KEY'] || config?.providers.bailian?.apiKey;
+  const bailian: BailianOpts = {
+    ...(bailianApiKey                          && { apiKey:  bailianApiKey }),
+    ...(config?.providers.bailian?.model       && { model:   config.providers.bailian.model }),
+    ...(config?.providers.bailian?.baseUrl     && { baseUrl: config.providers.bailian.baseUrl }),
+  };
 
   const sessionDir  = args.sessionDir ?? process.env['BCC_SESSION_DIR'] ?? config?.defaults.sessionDir;
   const enableMem   = args.noMemory ? false : (config?.defaults.enableMemory ?? true);
@@ -177,7 +192,7 @@ async function main(): Promise<void> {
   const maxMessages = args.maxMessages ?? (config?.defaults.maxMessages ?? 50);
   const system      = args.system;
 
-  const model  = await buildModel(provider, claudeKey, deepSeekKey, bailianKey);
+  const model  = await buildModel(provider, claudeKey, deepSeekKey, bailian);
   const memory = enableMem
     ? new FileMemoryStore(sessionDir ? { dir: sessionDir } : {})
     : undefined;

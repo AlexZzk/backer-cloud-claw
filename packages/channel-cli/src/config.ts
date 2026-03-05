@@ -27,6 +27,17 @@ export const DEFAULT_SESSION_DIR = join(BCC_HOME, 'sessions');
 export interface ProviderConfig {
   /** API Key（明文存储于本地文件，文件权限 600） */
   apiKey: string;
+  /**
+   * 使用的模型名称。
+   * 不填时使用各适配器内置默认值（如 qwen-plus、deepseek-chat 等）。
+   */
+  model?: string;
+  /**
+   * 自定义 API 地址。
+   * 适用于私有部署、代理中转等场景。
+   * 不填时使用各适配器内置默认地址。
+   */
+  baseUrl?: string;
 }
 
 export interface BccConfig {
