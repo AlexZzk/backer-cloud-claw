@@ -23,7 +23,7 @@ import { loadConfig } from '../src/config.js';
 // ─── CLI 参数解析 ─────────────────────────────────────────────────────────────
 
 interface CliArgs {
-  model:       'claude' | 'deepseek' | 'both' | undefined;
+  model:       'claude' | 'deepseek' | 'bailian' | 'both' | undefined;
   sessionId:   string | undefined;
   system:      string | undefined;
   noMemory:    boolean;
@@ -72,7 +72,7 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
   node dist/bin/bcc-chat.js [选项]   （构建后）
 
 选项：
-  --model <id>          模型：claude | deepseek | both（双模型路由）
+  --model <id>          模型：claude | bailian | deepseek | both（双模型路由）
   --session <id>        会话 ID，用于持久化（默认：default）
   --system <prompt>     系统提示词
   --no-memory           禁用持久化（本次历史不保存）
@@ -86,6 +86,7 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
 
 环境变量（覆盖配置文件）：
   ANTHROPIC_API_KEY     Claude API Key
+  DASHSCOPE_API_KEY     阿里百炼（Qwen）API Key
   DEEPSEEK_API_KEY      DeepSeek API Key
   BCC_SESSION_DIR       会话存储目录
 `);
@@ -94,9 +95,10 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
 // ─── 模型构建 ─────────────────────────────────────────────────────────────────
 
 async function buildModel(
-  provider: 'claude' | 'deepseek' | 'both',
-  claudeKey: string | undefined,
+  provider: 'claude' | 'deepseek' | 'bailian' | 'both',
+  claudeKey:   string | undefined,
   deepSeekKey: string | undefined,
+  bailianKey:  string | undefined,
 ): Promise<ModelRouter> {
   const router = new ModelRouter({ enableFailover: true });
   let registered = 0;
@@ -104,6 +106,12 @@ async function buildModel(
   if ((provider === 'claude' || provider === 'both') && claudeKey) {
     const { ClaudeAdapter } = await import('@bcc/model-claude');
     router.register(new ClaudeAdapter({ apiKey: claudeKey }), { priority: 0 });
+    registered++;
+  }
+
+  if (provider === 'bailian' && bailianKey) {
+    const { BailianAdapter } = await import('@bcc/model-bailian');
+    router.register(new BailianAdapter({ apiKey: bailianKey }), { priority: 0 });
     registered++;
   }
 
@@ -117,13 +125,31 @@ async function buildModel(
   }
 
   if (registered === 0) {
-    const hasConfig = Boolean(await loadConfig());
-    const hint = hasConfig
-      ? `当前提供商为 "${provider}"，但未找到对应 API Key。\n` +
-        '  请检查 ~/.bcc/config.json 或重新运行：pnpm bcc-init'
-      : '尚未找到配置文件，请先运行初始化向导：\n  pnpm bcc-init';
+    // 未找到可用模型 — 友好提示并退出
+    const config = await loadConfig();
+    const hasAnyKey = config?.providers.claude?.apiKey
+      || config?.providers.bailian?.apiKey
+      || config?.providers.deepseek?.apiKey;
 
-    console.error(`\n错误：未找到可用的 API Key。\n  ${hint}\n`);
+    if (!config) {
+      console.error(`
+错误：尚未找到配置文件。
+  请先运行初始化向导：
+    pnpm bcc-init
+`);
+    } else if (!hasAnyKey) {
+      console.error(`
+错误：配置文件中没有任何 API Key。
+  请重新运行初始化向导设置密钥：
+    pnpm bcc-init
+`);
+    } else {
+      console.error(`
+错误：当前提供商为 "${provider}"，但未找到对应 API Key。
+  请检查配置文件或重新运行：
+    pnpm bcc-init
+`);
+    }
     process.exit(1);
   }
 
@@ -140,9 +166,10 @@ async function main(): Promise<void> {
   const config = await loadConfig();
 
   // 三层优先级合并
-  const provider    = (args.model ?? config?.defaults.provider ?? 'claude') as 'claude' | 'deepseek' | 'both';
-  const claudeKey   = process.env['ANTHROPIC_API_KEY'] || config?.providers.claude?.apiKey;
-  const deepSeekKey = process.env['DEEPSEEK_API_KEY']  || config?.providers.deepseek?.apiKey;
+  const provider    = (args.model ?? config?.defaults.provider ?? 'claude') as 'claude' | 'deepseek' | 'bailian' | 'both';
+  const claudeKey   = process.env['ANTHROPIC_API_KEY']  || config?.providers.claude?.apiKey;
+  const bailianKey  = process.env['DASHSCOPE_API_KEY']  || config?.providers.bailian?.apiKey;
+  const deepSeekKey = process.env['DEEPSEEK_API_KEY']   || config?.providers.deepseek?.apiKey;
 
   const sessionDir  = args.sessionDir ?? process.env['BCC_SESSION_DIR'] ?? config?.defaults.sessionDir;
   const enableMem   = args.noMemory ? false : (config?.defaults.enableMemory ?? true);
@@ -150,7 +177,7 @@ async function main(): Promise<void> {
   const maxMessages = args.maxMessages ?? (config?.defaults.maxMessages ?? 50);
   const system      = args.system;
 
-  const model  = await buildModel(provider, claudeKey, deepSeekKey);
+  const model  = await buildModel(provider, claudeKey, deepSeekKey, bailianKey);
   const memory = enableMem
     ? new FileMemoryStore(sessionDir ? { dir: sessionDir } : {})
     : undefined;
