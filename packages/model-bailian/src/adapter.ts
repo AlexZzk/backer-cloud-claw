@@ -12,6 +12,8 @@ export interface BailianAdapterOptions {
   apiKey?: string;
   model?: string;
   maxTokens?: number;
+  /** 自定义 API 地址，默认使用阿里百炼官方地址 */
+  baseUrl?: string;
 }
 
 const DEFAULT_MODEL = 'qwen-plus';
@@ -39,7 +41,7 @@ export class BailianAdapter implements ModelAdapter {
     // 阿里百炼兼容 OpenAI API 格式，复用 openai SDK
     this.client = new OpenAI({
       apiKey: options.apiKey ?? process.env['DASHSCOPE_API_KEY'],
-      baseURL: BAILIAN_BASE_URL,
+      baseURL: options.baseUrl ?? BAILIAN_BASE_URL,
     });
   }
 

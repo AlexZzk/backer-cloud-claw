@@ -25,7 +25,20 @@ export class ModelUnavailableError extends BccError {
 
 export class AllModelsFailedError extends BccError {
   constructor(public readonly errors: Error[]) {
-    super('All models failed', 'ALL_MODELS_FAILED');
+    // 把每个子错误的关键信息提取出来，作为主消息的一部分
+    const details = errors
+      .map((e, i) => {
+        const status = (e as { status?: number }).status;
+        const statusStr = status ? ` [HTTP ${status}]` : '';
+        return `  ${i + 1}. ${e.message}${statusStr}`;
+      })
+      .join('\n');
+    super(
+      errors.length > 0
+        ? `All models failed:\n${details}`
+        : 'All models failed (no errors recorded)',
+      'ALL_MODELS_FAILED',
+    );
     this.name = 'AllModelsFailedError';
   }
 }

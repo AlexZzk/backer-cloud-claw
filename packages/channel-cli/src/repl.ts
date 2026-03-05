@@ -1,5 +1,6 @@
 import * as readline from 'node:readline';
 import type { AgentInterface } from '@bcc/foundation';
+import { AllModelsFailedError } from '@bcc/foundation';
 import { bold, cyan, green, yellow, red, gray, dim, clearLine, showCursor } from './ansi.js';
 
 const PROMPT    = cyan('You') + gray(' › ') + ' ';
@@ -16,8 +17,63 @@ ${bold('可用命令：')}
   ${yellow('/models')}            列出所有可用模型
   ${yellow('/save')}              手动保存当前历史到持久化存储
   ${yellow('/session')}           显示当前 Session 信息
+  ${yellow('/debug')}             显示上一次错误的完整详情
   ${yellow('/exit')} 或 ${yellow('Ctrl+C')}  退出
 `;
+
+// ─── 错误展示 ─────────────────────────────────────────────────────────────────
+
+/** 保存最近一次错误，供 /debug 命令查看 */
+let lastError: unknown = null;
+
+/** 将 HTTP 状态码转为中文提示 */
+function httpStatusHint(status: number): string {
+  switch (status) {
+    case 401: return '认证失败（API Key 错误或已过期）';
+    case 403: return '无权限（Key 可能没有该模型的访问权限）';
+    case 404: return '模型不存在（请检查模型名称是否正确）';
+    case 429: return '请求过于频繁（已达到速率限制）';
+    case 500: return '服务端错误（提供商服务异常，稍后重试）';
+    case 503: return '服务暂不可用（提供商服务维护中）';
+    default:  return '';
+  }
+}
+
+const isDebug = (): boolean => process.env['BCC_DEBUG'] === '1';
+
+function printError(err: unknown): void {
+  lastError = err;
+
+  if (err instanceof AllModelsFailedError && err.errors.length > 0) {
+    console.error(red('✗ 模型调用失败：'));
+    for (let i = 0; i < err.errors.length; i++) {
+      const sub = err.errors[i]!;
+      const status = (sub as { status?: number }).status;
+      const statusStr = status ? red(` [HTTP ${status}]`) : '';
+      const hint = status ? gray(`  → ${httpStatusHint(status)}`) : '';
+      console.error(`  ${gray(String(i + 1) + '.')} ${sub.message}${statusStr}`);
+      if (hint) console.error(hint);
+      if (isDebug()) {
+        const body = (sub as { error?: unknown }).error;
+        if (body) console.error(gray(`  响应：${JSON.stringify(body)}`));
+        if (sub.stack) {
+          const frames = sub.stack.split('\n').slice(1, 4);
+          for (const f of frames) console.error(dim('  ' + f.trim()));
+        }
+      }
+    }
+    if (!isDebug()) console.error(dim('  输入 /debug 查看完整错误详情'));
+  } else {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(red('✗ 错误：') + msg);
+    if (isDebug() && err instanceof Error && err.stack) {
+      const frames = err.stack.split('\n').slice(1, 5);
+      for (const f of frames) console.error(dim('  ' + f.trim()));
+    } else {
+      console.error(dim('  输入 /debug 查看完整错误详情'));
+    }
+  }
+}
 
 export interface ReplOptions {
   session: AgentInterface;
@@ -99,8 +155,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     } catch (err) {
       if (!firstTextChunk) process.stdout.write('\n');
       clearLine();
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(red('错误：') + msg);
+      printError(err);
     }
 
     if (firstTextChunk) {
@@ -201,6 +256,42 @@ async function handleCommand(
       console.log(`  ${dim('模型：')} ${session.currentModel}`);
       console.log(`  ${dim('历史：')} ${session.getHistory().length} 条消息\n`);
       break;
+
+    case 'debug': {
+      if (!lastError) {
+        console.log(dim('  （暂无错误记录）\n'));
+        break;
+      }
+      console.log(bold('\n  最近一次错误详情：'));
+      if (lastError instanceof AllModelsFailedError && lastError.errors.length > 0) {
+        for (let i = 0; i < lastError.errors.length; i++) {
+          const sub = lastError.errors[i]!;
+          console.log(`\n  ${bold(`[${i + 1}] ${sub.name ?? 'Error'}`)}`);
+          console.log(`  消息：${sub.message}`);
+          const status = (sub as { status?: number }).status;
+          if (status) console.log(`  HTTP：${status} ${httpStatusHint(status)}`);
+          // 打印 OpenAI/Anthropic SDK 附带的响应体（如果有）
+          const body = (sub as { error?: unknown }).error;
+          if (body) console.log(`  响应：${JSON.stringify(body, null, 2).split('\n').join('\n  ')}`);
+          if (sub.stack) {
+            console.log(dim('  Stack:'));
+            const lines = sub.stack.split('\n').slice(1, 6); // 只显示前5帧
+            for (const l of lines) console.log(dim('  ' + l.trim()));
+          }
+        }
+      } else if (lastError instanceof Error) {
+        console.log(`  ${lastError.name}: ${lastError.message}`);
+        if (lastError.stack) {
+          console.log(dim('  Stack:'));
+          const lines = lastError.stack.split('\n').slice(1, 8);
+          for (const l of lines) console.log(dim('  ' + l.trim()));
+        }
+      } else {
+        console.log(`  ${String(lastError)}`);
+      }
+      console.log();
+      break;
+    }
 
     case 'exit':
     case 'quit':

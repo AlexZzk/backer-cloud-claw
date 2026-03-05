@@ -29,6 +29,7 @@ interface CliArgs {
   noMemory:    boolean;
   sessionDir:  string | undefined;
   maxMessages: number | undefined;
+  debug:       boolean;
   help:        boolean;
 }
 
@@ -40,6 +41,7 @@ function parseArgs(argv: string[]): CliArgs {
     noMemory:    false,
     sessionDir:  undefined,
     maxMessages: undefined,
+    debug:       false,
     help:        false,
   };
 
@@ -56,6 +58,7 @@ function parseArgs(argv: string[]): CliArgs {
         if (!isNaN(n)) args.maxMessages = n;
         break;
       }
+      case '--debug': args.debug = true; break;
       case '--help': case '-h': args.help = true; break;
     }
   }
@@ -78,6 +81,7 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
   --no-memory           禁用持久化（本次历史不保存）
   --session-dir <dir>   自定义会话存储目录
   --max-messages <n>    本次对话保留的最大历史消息数
+  --debug               输出详细错误信息（等同于 BCC_DEBUG=1）
   --help, -h            显示此帮助
 
 配置文件：
@@ -89,16 +93,23 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
   DASHSCOPE_API_KEY     阿里百炼（Qwen）API Key
   DEEPSEEK_API_KEY      DeepSeek API Key
   BCC_SESSION_DIR       会话存储目录
+  BCC_DEBUG=1           等同于 --debug，输出详细错误信息
 `);
 }
 
 // ─── 模型构建 ─────────────────────────────────────────────────────────────────
 
+interface BailianOpts {
+  apiKey?:  string;
+  model?:   string;
+  baseUrl?: string;
+}
+
 async function buildModel(
-  provider: 'claude' | 'deepseek' | 'bailian' | 'both',
+  provider:    'claude' | 'deepseek' | 'bailian' | 'both',
   claudeKey:   string | undefined,
   deepSeekKey: string | undefined,
-  bailianKey:  string | undefined,
+  bailian:     BailianOpts,
 ): Promise<ModelRouter> {
   const router = new ModelRouter({ enableFailover: true });
   let registered = 0;
@@ -109,9 +120,13 @@ async function buildModel(
     registered++;
   }
 
-  if (provider === 'bailian' && bailianKey) {
+  if (provider === 'bailian' && bailian.apiKey) {
     const { BailianAdapter } = await import('@bcc/model-bailian');
-    router.register(new BailianAdapter({ apiKey: bailianKey }), { priority: 0 });
+    router.register(new BailianAdapter({
+      apiKey: bailian.apiKey,
+      ...(bailian.model   && { model:   bailian.model }),
+      ...(bailian.baseUrl && { baseUrl: bailian.baseUrl }),
+    }), { priority: 0 });
     registered++;
   }
 
@@ -162,14 +177,24 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { printHelp(); process.exit(0); }
 
+  // 调试模式：--debug 或 BCC_DEBUG=1
+  if (args.debug || process.env['BCC_DEBUG'] === '1') {
+    process.env['BCC_DEBUG'] = '1';
+  }
+
   // 加载配置文件（不存在时为 null，不报错）
   const config = await loadConfig();
 
   // 三层优先级合并
   const provider    = (args.model ?? config?.defaults.provider ?? 'claude') as 'claude' | 'deepseek' | 'bailian' | 'both';
   const claudeKey   = process.env['ANTHROPIC_API_KEY']  || config?.providers.claude?.apiKey;
-  const bailianKey  = process.env['DASHSCOPE_API_KEY']  || config?.providers.bailian?.apiKey;
   const deepSeekKey = process.env['DEEPSEEK_API_KEY']   || config?.providers.deepseek?.apiKey;
+  const bailianApiKey = process.env['DASHSCOPE_API_KEY'] || config?.providers.bailian?.apiKey;
+  const bailian: BailianOpts = {
+    ...(bailianApiKey                          && { apiKey:  bailianApiKey }),
+    ...(config?.providers.bailian?.model       && { model:   config.providers.bailian.model }),
+    ...(config?.providers.bailian?.baseUrl     && { baseUrl: config.providers.bailian.baseUrl }),
+  };
 
   const sessionDir  = args.sessionDir ?? process.env['BCC_SESSION_DIR'] ?? config?.defaults.sessionDir;
   const enableMem   = args.noMemory ? false : (config?.defaults.enableMemory ?? true);
@@ -177,7 +202,7 @@ async function main(): Promise<void> {
   const maxMessages = args.maxMessages ?? (config?.defaults.maxMessages ?? 50);
   const system      = args.system;
 
-  const model  = await buildModel(provider, claudeKey, deepSeekKey, bailianKey);
+  const model  = await buildModel(provider, claudeKey, deepSeekKey, bailian);
   const memory = enableMem
     ? new FileMemoryStore(sessionDir ? { dir: sessionDir } : {})
     : undefined;

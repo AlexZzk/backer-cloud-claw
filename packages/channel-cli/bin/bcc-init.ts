@@ -237,29 +237,91 @@ async function setupClaudeKey(config: BccConfig): Promise<void> {
   console.log();
 }
 
+const BAILIAN_DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+
+// 常用百炼模型列表（供向导选择）
+const BAILIAN_MODELS = [
+  { label: 'qwen-turbo',  value: 'qwen-turbo',  description: '快速响应，成本最低，适合日常对话' },
+  { label: 'qwen-plus',   value: 'qwen-plus',   description: '均衡性能，适合通用任务（推荐）' },
+  { label: 'qwen-max',    value: 'qwen-max',    description: '最强性能，适合复杂推理，成本较高' },
+  { label: 'qwen-long',   value: 'qwen-long',   description: '超长上下文，适合文档分析、长对话' },
+  { label: '自定义',      value: 'custom',      description: '手动输入模型名称（如 qwen-max-latest）' },
+] as const;
+
 async function setupBailianKey(config: BccConfig): Promise<void> {
-  const current = config.providers.bailian?.apiKey;
+  const existing = config.providers.bailian;
+
+  // ── API Key ──────────────────────────────────────────────────────────────
   console.log('  阿里百炼（DashScope）API Key');
   console.log('  获取地址：https://bailian.console.aliyun.com/ → API Key 管理');
   console.log('  Key 格式：sk-...');
 
-  if (current) {
-    console.log(`  当前：${'*'.repeat(8)}...${current.slice(-4)}`);
+  let key = existing?.apiKey ?? '';
+  if (key) {
+    console.log(`  当前：${'*'.repeat(8)}...${key.slice(-4)}`);
     const change = await askConfirm('  是否更换？', false);
-    if (!change) return;
+    if (change) key = '';
   }
-
-  console.log();
-  console.log('  提示：支持粘贴（Ctrl+V / Cmd+V），输入显示为 *');
-  const key = await askSecret('  输入 API Key');
 
   if (!key) {
-    warn('未输入 Key，已跳过百炼配置。');
-    return;
+    console.log();
+    console.log('  提示：支持粘贴（Ctrl+V / Cmd+V），输入显示为 *');
+    key = await askSecret('  输入 API Key');
+    if (!key) {
+      warn('未输入 Key，已跳过百炼配置。');
+      return;
+    }
+    ok('Key 已保存。');
   }
 
-  ok('Key 已保存。');
-  config.providers.bailian = { apiKey: key };
+  // ── 模型选择 ──────────────────────────────────────────────────────────────
+  console.log();
+  const currentModel = existing?.model ?? 'qwen-plus';
+  const defaultModelIdx = BAILIAN_MODELS.findIndex(m => m.value === currentModel) ?? 1;
+
+  const modelChoice = await selectOne<string>(
+    '选择模型',
+    BAILIAN_MODELS as unknown as Array<{ label: string; value: string; description: string }>,
+    defaultModelIdx >= 0 ? defaultModelIdx : 1,
+  );
+
+  let model: string;
+  if (modelChoice === 'custom') {
+    console.log();
+    model = await askText('  输入模型名称', currentModel !== 'qwen-plus' ? currentModel : '');
+    if (!model) {
+      warn('未输入模型名，已使用默认值 qwen-plus。');
+      model = 'qwen-plus';
+    }
+  } else {
+    model = modelChoice;
+  }
+  ok(`模型：${model}`);
+
+  // ── API 地址（高级） ───────────────────────────────────────────────────────
+  console.log();
+  const currentBaseUrl = existing?.baseUrl ?? BAILIAN_DEFAULT_BASE_URL;
+  const changeUrl = await askConfirm(
+    `  API 地址：${currentBaseUrl}\n  是否修改（代理/私有部署时使用）？`,
+    false,
+  );
+
+  let baseUrl: string | undefined;
+  if (changeUrl) {
+    console.log();
+    const input = await askText('  输入 API 地址', currentBaseUrl);
+    baseUrl = input || BAILIAN_DEFAULT_BASE_URL;
+    ok(`API 地址：${baseUrl}`);
+  } else {
+    // 只有用户主动配置过非默认地址时才保存，否则留空（适配器内置默认值）
+    baseUrl = currentBaseUrl !== BAILIAN_DEFAULT_BASE_URL ? currentBaseUrl : undefined;
+  }
+
+  config.providers.bailian = {
+    apiKey: key,
+    model,
+    ...(baseUrl !== undefined && { baseUrl }),
+  };
   console.log();
 }
 
@@ -315,6 +377,10 @@ function buildSummaryRows(config: BccConfig, skipped: boolean): Array<[string, s
   if (config.providers.bailian?.apiKey) {
     const k = config.providers.bailian.apiKey;
     rows.push(['百炼 Key', `${k.slice(0, 6)}...${'*'.repeat(4)}`]);
+    rows.push(['百炼 模型', config.providers.bailian.model ?? 'qwen-plus（默认）']);
+    if (config.providers.bailian.baseUrl) {
+      rows.push(['百炼 地址', config.providers.bailian.baseUrl.slice(0, 36)]);
+    }
   }
   if (config.providers.deepseek?.apiKey) {
     const k = config.providers.deepseek.apiKey;
