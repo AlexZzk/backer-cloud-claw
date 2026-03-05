@@ -18,54 +18,97 @@ import { homedir, platform } from 'node:os';
 
 // ─── 路径常量 ─────────────────────────────────────────────────────────────────
 
-export const BCC_HOME          = join(homedir(), '.bcc');
-export const CONFIG_PATH       = join(BCC_HOME, 'config.json');
+export const BCC_HOME            = join(homedir(), '.bcc');
+export const CONFIG_PATH         = join(BCC_HOME, 'config.json');
 export const DEFAULT_SESSION_DIR = join(BCC_HOME, 'sessions');
 
 // ─── 配置 Schema ──────────────────────────────────────────────────────────────
 
-export interface ProviderConfig {
-  /** API Key（明文存储于本地文件，文件权限 600） */
-  apiKey: string;
+export type ProviderType = 'claude' | 'bailian' | 'deepseek' | 'custom';
+
+/**
+ * 单个模型实例配置。
+ * 支持同一提供商配置多个实例（例如两个不同 Key 的 Claude 账号）。
+ */
+export interface ModelInstanceConfig {
   /**
-   * 使用的模型名称。
-   * 不填时使用各适配器内置默认值（如 qwen-plus、deepseek-chat 等）。
+   * 实例唯一标识，用于 /model 命令和日志。
+   * 例如："claude-main"、"bailian-qwen"、"local-llama"
+   */
+  id: string;
+
+  /** 提供商类型 */
+  provider: ProviderType;
+
+  /** API Key */
+  apiKey: string;
+
+  /**
+   * 模型名称，留空时各提供商使用内置默认值：
+   *   claude   → claude-sonnet-4-5
+   *   bailian  → qwen-plus
+   *   deepseek → deepseek-chat
+   *   custom   → 必须填写
    */
   model?: string;
+
   /**
-   * 自定义 API 地址。
-   * 适用于私有部署、代理中转等场景。
-   * 不填时使用各适配器内置默认地址。
+   * 自定义 API 地址：
+   *   custom   → 必须填写
+   *   其他     → 不填时使用官方地址，填写时覆盖（代理/私有部署）
    */
   baseUrl?: string;
+
+  /** 是否为默认主模型（对话时默认使用此模型） */
+  primary?: boolean;
+
+  /** 是否为故障转移备用（仅当更高优先级模型失败时自动切换） */
+  fallback?: boolean;
 }
 
 export interface BccConfig {
-  /** schema 版本，用于未来迁移 */
+  /** schema 版本 */
   version: '1';
 
-  providers: {
-    claude?:   ProviderConfig;
-    deepseek?: ProviderConfig;
-    bailian?:  ProviderConfig;
-  };
+  /**
+   * 模型实例列表。
+   * 支持任意数量、任意提供商的实例，每个实例独立 API Key + baseUrl + 模型名。
+   * 替代旧的 providers + defaults.provider 单提供商设计。
+   */
+  models: ModelInstanceConfig[];
 
   defaults: {
-    /** 默认使用的提供商 */
-    provider: 'claude' | 'deepseek' | 'bailian' | 'both';
-
     /** 是否启用会话持久化 */
     enableMemory: boolean;
-
     /** 会话文件存储绝对路径 */
     sessionDir: string;
-
-    /**
-     * 历史消息上限（超出后截断最早的消息）。
-     * 0 表示无限制。
-     */
+    /** 历史消息上限（0 = 无限制） */
     maxMessages: number;
   };
+}
+
+// ─── 旧格式（兼容迁移用）────────────────────────────────────────────────────
+
+interface LegacyProviderConfig {
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+}
+
+interface LegacyConfig {
+  version?: '1';
+  providers?: {
+    claude?:   LegacyProviderConfig;
+    deepseek?: LegacyProviderConfig;
+    bailian?:  LegacyProviderConfig;
+  };
+  defaults?: {
+    provider?:     string;
+    enableMemory?: boolean;
+    sessionDir?:   string;
+    maxMessages?:  number;
+  };
+  models?: ModelInstanceConfig[];
 }
 
 // ─── 默认值 ───────────────────────────────────────────────────────────────────
@@ -73,9 +116,8 @@ export interface BccConfig {
 export function makeDefaultConfig(): BccConfig {
   return {
     version: '1',
-    providers: {},
+    models: [],
     defaults: {
-      provider:     'claude' as 'claude' | 'deepseek' | 'bailian' | 'both',
       enableMemory: true,
       sessionDir:   DEFAULT_SESSION_DIR,
       maxMessages:  50,
@@ -83,46 +125,82 @@ export function makeDefaultConfig(): BccConfig {
   };
 }
 
+// ─── 旧格式迁移 ───────────────────────────────────────────────────────────────
+
+function migrateFromLegacy(raw: LegacyConfig): BccConfig {
+  const defaultCfg = makeDefaultConfig();
+
+  const defaults: BccConfig['defaults'] = {
+    enableMemory: raw.defaults?.enableMemory ?? defaultCfg.defaults.enableMemory,
+    sessionDir:   raw.defaults?.sessionDir   ?? defaultCfg.defaults.sessionDir,
+    maxMessages:  raw.defaults?.maxMessages  ?? defaultCfg.defaults.maxMessages,
+  };
+
+  // 新格式：直接使用
+  if (raw.models && raw.models.length > 0) {
+    return { version: '1', models: raw.models, defaults };
+  }
+
+  // 旧格式：从 providers 迁移
+  const legacyProvider = raw.defaults?.provider ?? 'claude';
+  const models: ModelInstanceConfig[] = [];
+
+  if (raw.providers?.claude?.apiKey) {
+    models.push({
+      id: 'claude', provider: 'claude',
+      apiKey: raw.providers.claude.apiKey,
+      ...(raw.providers.claude.model && { model: raw.providers.claude.model }),
+      primary:  legacyProvider === 'claude' || legacyProvider === 'both',
+      fallback: false,
+    });
+  }
+  if (raw.providers?.bailian?.apiKey) {
+    models.push({
+      id: 'bailian', provider: 'bailian',
+      apiKey: raw.providers.bailian.apiKey,
+      ...(raw.providers.bailian.model   && { model:   raw.providers.bailian.model }),
+      ...(raw.providers.bailian.baseUrl && { baseUrl: raw.providers.bailian.baseUrl }),
+      primary:  legacyProvider === 'bailian',
+      fallback: false,
+    });
+  }
+  if (raw.providers?.deepseek?.apiKey) {
+    models.push({
+      id: 'deepseek', provider: 'deepseek',
+      apiKey: raw.providers.deepseek.apiKey,
+      primary:  legacyProvider === 'deepseek',
+      fallback: legacyProvider === 'both',
+    });
+  }
+
+  if (models.length > 0 && !models.some(m => m.primary)) {
+    models[0]!.primary = true;
+  }
+
+  return { version: '1', models, defaults };
+}
+
 // ─── I/O ──────────────────────────────────────────────────────────────────────
 
-/**
- * 加载配置文件。
- * 如果文件不存在或解析失败，返回 null（不抛出错误）。
- */
 export async function loadConfig(): Promise<BccConfig | null> {
   try {
     const raw = await readFile(CONFIG_PATH, 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<BccConfig>;
-    // 合并默认值，防止旧版配置缺字段
-    return deepMerge(
-      makeDefaultConfig() as unknown as Record<string, unknown>,
-      parsed as unknown as Record<string, unknown>,
-    ) as unknown as BccConfig;
+    return migrateFromLegacy(JSON.parse(raw) as LegacyConfig);
   } catch {
     return null;
   }
 }
 
-/**
- * 保存配置文件。
- * 自动创建 ~/.bcc/ 目录；在 Unix 系统上设置文件权限 600（保护 API Key）。
- */
 export async function saveConfig(config: BccConfig): Promise<void> {
   await mkdir(BCC_HOME, { recursive: true });
   await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-
-  // 在非 Windows 平台限制文件读权限
   if (platform() !== 'win32') {
-    try { await chmod(CONFIG_PATH, 0o600); } catch { /* 忽略权限设置失败 */ }
+    try { await chmod(CONFIG_PATH, 0o600); } catch { /* 忽略 */ }
   }
 }
 
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
-/**
- * 将 ~/.bcc/sessions 路径格式化为用于显示的 "~/.bcc/sessions"。
- * 在所有平台上使用 / 作为显示分隔符。
- */
 export function displayPath(absPath: string): string {
   const home = homedir();
   if (absPath.startsWith(home)) {
@@ -131,21 +209,7 @@ export function displayPath(absPath: string): string {
   return absPath.replace(/\\/g, '/');
 }
 
-/** 简单深合并（仅合并普通对象，不合并数组） */
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
-  const result = { ...target };
-  for (const key of Object.keys(source)) {
-    const sv = source[key];
-    const tv = target[key];
-    if (isPlainObject(sv) && isPlainObject(tv)) {
-      result[key] = deepMerge(tv as Record<string, unknown>, sv as Record<string, unknown>);
-    } else if (sv !== undefined) {
-      result[key] = sv;
-    }
-  }
-  return result;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+/** 获取主模型（primary = true 的第一个，否则列表第一个） */
+export function getPrimaryModel(models: ModelInstanceConfig[]): ModelInstanceConfig | undefined {
+  return models.find(m => m.primary) ?? models[0];
 }

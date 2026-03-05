@@ -32,17 +32,20 @@
   "peerDependencies": {
     "@bcc/model-claude": "workspace:*",
     "@bcc/model-bailian": "workspace:*",
-    "@bcc/model-deepseek": "workspace:*"
+    "@bcc/model-deepseek": "workspace:*",
+    "@bcc/model-openai-compat": "workspace:*"
   },
   "peerDependenciesMeta": {
     "@bcc/model-claude": { "optional": true },
     "@bcc/model-bailian": { "optional": true },
-    "@bcc/model-deepseek": { "optional": true }
+    "@bcc/model-deepseek": { "optional": true },
+    "@bcc/model-openai-compat": { "optional": true }
   },
   "devDependencies": {
     "@bcc/model-claude": "workspace:*",
     "@bcc/model-bailian": "workspace:*",
     "@bcc/model-deepseek": "workspace:*",
+    "@bcc/model-openai-compat": "workspace:*",
     "typescript": "*",
     "vitest": "*",
     "@types/node": "*",
