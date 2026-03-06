@@ -15,6 +15,7 @@ ${bold('可用命令：')}
   ${yellow('/history')}           查看当前对话历史
   ${yellow('/model <id>')}        切换模型（需配置 ModelRouter）
   ${yellow('/models')}            列出所有可用模型
+  ${yellow('/ping')}              测试所有模型连通性
   ${yellow('/save')}              手动保存当前历史到持久化存储
   ${yellow('/session')}           显示当前 Session 信息
   ${yellow('/debug')}             显示上一次错误的完整详情
@@ -41,6 +42,24 @@ function httpStatusHint(status: number): string {
 
 const isDebug = (): boolean => process.env['BCC_DEBUG'] === '1';
 
+/**
+ * 遍历 Error.cause 链，收集每一层的 message。
+ * 用于把 "Connection error." → "fetch failed" → "connect ECONNREFUSED ..." 完整展示出来。
+ */
+function collectCauseChain(err: Error): string[] {
+  const msgs: string[] = [];
+  let cur: unknown = err.cause;
+  const seen = new Set<unknown>([err]);
+  while (cur instanceof Error && !seen.has(cur)) {
+    seen.add(cur);
+    if (cur.message && cur.message !== err.message) {
+      msgs.push(cur.message);
+    }
+    cur = cur.cause;
+  }
+  return msgs;
+}
+
 function printError(err: unknown): void {
   lastError = err;
 
@@ -53,6 +72,13 @@ function printError(err: unknown): void {
       const hint = status ? gray(`  → ${httpStatusHint(status)}`) : '';
       console.error(`  ${gray(String(i + 1) + '.')} ${sub.message}${statusStr}`);
       if (hint) console.error(hint);
+
+      // 始终展示 cause 链（连接错误的根因在这里）
+      const causes = collectCauseChain(sub);
+      for (const c of causes) {
+        console.error(gray(`     ↳ ${c}`));
+      }
+
       if (isDebug()) {
         const body = (sub as { error?: unknown }).error;
         if (body) console.error(gray(`  响应：${JSON.stringify(body)}`));
@@ -66,6 +92,10 @@ function printError(err: unknown): void {
   } else {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(red('✗ 错误：') + msg);
+    if (err instanceof Error) {
+      const causes = collectCauseChain(err);
+      for (const c of causes) console.error(gray(`  ↳ ${c}`));
+    }
     if (isDebug() && err instanceof Error && err.stack) {
       const frames = err.stack.split('\n').slice(1, 5);
       for (const f of frames) console.error(dim('  ' + f.trim()));
@@ -240,6 +270,38 @@ async function handleCommand(
         console.log(`  ${cur ? green('▶') : ' '} ${m}${cur ? dim(' (当前)') : ''}`);
       }
       console.log();
+      break;
+    }
+
+    case 'ping': {
+      const models = session.listModels();
+      if (models.length === 0) { console.log(dim('  （无可用模型）\n')); break; }
+      console.log(bold('\n  测试模型连通性：'));
+      for (const modelId of models) {
+        process.stdout.write(`  ${dim('…')} ${modelId.padEnd(32)}`);
+        const t0 = Date.now();
+        try {
+          // 临时切换到目标模型测试（测完恢复）
+          const prev = session.currentModel;
+          session.switchModel?.(modelId);
+          // 用极短请求探测（复用 stream，遇到第一个 chunk 就算通）
+          const gen = session.stream('\u200b'); // 零宽空格，尽量短
+          let ok = false;
+          for await (const chunk of gen) {
+            if (chunk.type === 'text' || chunk.type === 'done') { ok = true; break; }
+          }
+          session.switchModel?.(prev);
+          // 回滚刚才的探测消息（不污染历史）
+          session.clearHistory();
+          const ms = Date.now() - t0;
+          process.stdout.write(`\r  ${green('✓')} ${modelId.padEnd(32)} ${dim(ms + 'ms')}\n`);
+        } catch (err) {
+          const causes = err instanceof Error ? collectCauseChain(err) : [];
+          const rootCause = causes.at(-1) ?? (err instanceof Error ? err.message : String(err));
+          process.stdout.write(`\r  ${red('✗')} ${modelId.padEnd(32)} ${red(rootCause)}\n`);
+        }
+      }
+      console.log(yellow('\n  提示：/ping 会清空当前对话历史，仅用于测试。\n'));
       break;
     }
 
