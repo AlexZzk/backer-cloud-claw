@@ -24,7 +24,7 @@ export const DEFAULT_SESSION_DIR = join(BCC_HOME, 'sessions');
 
 // ─── 配置 Schema ──────────────────────────────────────────────────────────────
 
-export type ProviderType = 'claude' | 'bailian' | 'deepseek' | 'custom';
+export type ProviderType = 'claude' | 'openai' | 'bailian' | 'deepseek' | 'custom';
 
 /**
  * 单个模型实例配置。

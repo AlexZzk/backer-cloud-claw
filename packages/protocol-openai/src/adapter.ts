@@ -8,52 +8,67 @@ import {
 } from '@bcc/foundation';
 import type { ModelAdapter } from '@bcc/model-core';
 
-export interface OpenAICompatAdapterOptions {
+export interface OpenAIAdapterOptions {
   /**
-   * 适配器的唯一名称，用于在 ModelRouter 中标识。
-   * 例如："local-llama"、"my-proxy-gpt4"
+   * 实例名称，用作适配器 ID（对应配置文件中的 instance.id）。
+   * 例如："deepseek"、"bailian"、"my-llama"
    */
   name: string;
 
-  /** API Key（部分私有部署可随意填写，如 "none"） */
+  /** API Key（私有部署可填 "none"） */
   apiKey?: string;
 
-  /** OpenAI 兼容 API 的 Base URL，例如 http://localhost:11434/v1 */
+  /**
+   * OpenAI 兼容 API 的 Base URL。
+   * 例如：https://api.deepseek.com/v1、http://localhost:11434/v1
+   */
   baseUrl: string;
 
-  /** 模型名称，例如 "llama3"、"qwen2.5-72b-instruct" */
+  /**
+   * 模型名称。
+   * 例如："deepseek-chat"、"qwen-plus"、"llama3"
+   */
   model: string;
 
   /** 单次最大生成 token 数（默认 8192） */
   maxTokens?: number;
 
-  /**
-   * 上下文窗口大小（tokens，默认 128000）。
-   * 仅作为元信息展示，不影响请求参数。
-   */
+  /** 上下文窗口大小（token，默认 128000），仅作元信息展示 */
   contextWindow?: number;
+
+  /**
+   * 该端点是否支持工具调用（默认 true）。
+   * 私有部署若不支持 function calling，请设为 false。
+   */
+  supportTools?: boolean;
+
+  /**
+   * ModelInfo 中展示的提供商标识（默认 'openai'）。
+   * 例如："deepseek"、"bailian"、"custom"
+   */
+  provider?: string;
 }
 
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
-export class OpenAICompatAdapter implements ModelAdapter {
+export class OpenAIAdapter implements ModelAdapter {
   readonly id: string;
   readonly info: ModelInfo;
   private client: OpenAI;
   private model: string;
   private maxTokens: number;
 
-  constructor(options: OpenAICompatAdapterOptions) {
+  constructor(options: OpenAIAdapterOptions) {
     this.model = options.model;
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
-    this.id = `custom:${options.name}`;
+    this.id = options.name;
     this.info = {
       id: this.id,
-      provider: 'custom',
+      provider: options.provider ?? 'openai',
       contextWindow: options.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       supportStreaming: true,
-      supportTools: false, // 工具支持取决于后端，保守设为 false
+      supportTools: options.supportTools ?? true,
     };
     this.client = new OpenAI({
       apiKey: options.apiKey ?? 'none',
@@ -103,7 +118,6 @@ export class OpenAICompatAdapter implements ModelAdapter {
 
   async ping(): Promise<boolean> {
     try {
-      // 发送一个极短的请求来验证连通性
       await this.client.chat.completions.create({
         model: this.model,
         messages: [{ role: 'user', content: 'hi' }],

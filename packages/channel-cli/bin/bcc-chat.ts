@@ -11,7 +11,7 @@
 import { ModelRouter } from '@bcc/model-core';
 import { FileMemoryStore } from '@bcc/memory-fs';
 import { CliChannel } from '../src/index.js';
-import { loadConfig, type ModelInstanceConfig } from '../src/config.js';
+import { loadConfig, type ModelInstanceConfig, type ProviderType } from '../src/config.js';
 
 // ─── CLI 参数解析 ─────────────────────────────────────────────────────────────
 
@@ -72,6 +72,7 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
 
 环境变量（可覆盖单个实例的 API Key）：
   ANTHROPIC_API_KEY     覆盖所有 claude 实例的 Key
+  OPENAI_API_KEY        覆盖所有 openai 实例的 Key
   DASHSCOPE_API_KEY     覆盖所有 bailian 实例的 Key
   DEEPSEEK_API_KEY      覆盖所有 deepseek 实例的 Key
   BCC_SESSION_DIR       会话存储目录
@@ -79,51 +80,96 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
 `);
 }
 
+// ─── 提供商预设（协议层派发依据）────────────────────────────────────────────
+
+/**
+ * 每个提供商对应的底层协议。
+ *   anthropic → @bcc/protocol-anthropic (AnthropicAdapter)
+ *   openai    → @bcc/protocol-openai    (OpenAIAdapter)
+ */
+const PROVIDER_PROTOCOL: Record<ProviderType, 'anthropic' | 'openai'> = {
+  claude:   'anthropic',
+  openai:   'openai',
+  deepseek: 'openai',
+  bailian:  'openai',
+  custom:   'openai',
+};
+
+/** 提供商默认 baseUrl（未填写 baseUrl 时使用）。空字符串表示使用 SDK 内置地址。 */
+const PROVIDER_DEFAULT_BASE_URL: Record<ProviderType, string> = {
+  claude:   '',  // Anthropic SDK 内置
+  openai:   'https://api.openai.com/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  bailian:  'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  custom:   '',
+};
+
+/** 提供商默认模型名 */
+const PROVIDER_DEFAULT_MODEL: Record<ProviderType, string> = {
+  claude:   'claude-sonnet-4-5',
+  openai:   'gpt-4o',
+  deepseek: 'deepseek-chat',
+  bailian:  'qwen-plus',
+  custom:   '',
+};
+
+/** 覆盖 API Key 的环境变量名 */
+const PROVIDER_ENV_KEY: Partial<Record<ProviderType, string>> = {
+  claude:   'ANTHROPIC_API_KEY',
+  openai:   'OPENAI_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  bailian:  'DASHSCOPE_API_KEY',
+};
+
+/** 已知支持工具调用的提供商（custom 由用户自行保证） */
+const PROVIDER_SUPPORT_TOOLS: Record<ProviderType, boolean> = {
+  claude:   true,
+  openai:   true,
+  deepseek: true,
+  bailian:  true,
+  custom:   false,  // 私有部署工具调用能力不确定，保守设为 false
+};
+
 // ─── 从 ModelInstanceConfig 创建适配器 ──────────────────────────────────────
 
 async function createAdapter(instance: ModelInstanceConfig) {
-  switch (instance.provider) {
-    case 'claude': {
-      const { ClaudeAdapter } = await import('@bcc/model-claude');
-      const key = process.env['ANTHROPIC_API_KEY'] || instance.apiKey;
-      return new ClaudeAdapter({
-        apiKey: key,
-        ...(instance.model   && { model:   instance.model }),
-        ...(instance.baseUrl && { baseURL: instance.baseUrl }),
-      });
-    }
-    case 'bailian': {
-      const { BailianAdapter } = await import('@bcc/model-bailian');
-      const key = process.env['DASHSCOPE_API_KEY'] || instance.apiKey;
-      return new BailianAdapter({
-        apiKey: key,
-        ...(instance.model   && { model:   instance.model }),
-        ...(instance.baseUrl && { baseUrl: instance.baseUrl }),
-      });
-    }
-    case 'deepseek': {
-      const { DeepSeekAdapter } = await import('@bcc/model-deepseek');
-      const key = process.env['DEEPSEEK_API_KEY'] || instance.apiKey;
-      return new DeepSeekAdapter({
-        apiKey: key,
-        ...(instance.model   && { model:   instance.model }),
-        ...(instance.baseUrl && { baseURL: instance.baseUrl }),
-      });
-    }
-    case 'custom': {
-      const { OpenAICompatAdapter } = await import('@bcc/model-openai-compat');
-      if (!instance.baseUrl) throw new Error(`自定义实例 "${instance.id}" 缺少 baseUrl`);
-      if (!instance.model)   throw new Error(`自定义实例 "${instance.id}" 缺少 model 名称`);
-      return new OpenAICompatAdapter({
-        name:   instance.id,
-        apiKey: instance.apiKey,
-        baseUrl: instance.baseUrl,
-        model:  instance.model,
-      });
-    }
-    default:
-      throw new Error(`未知提供商类型：${String((instance as { provider: unknown }).provider)}`);
+  const protocol = PROVIDER_PROTOCOL[instance.provider];
+
+  // 环境变量可覆盖 API Key
+  const envKey = PROVIDER_ENV_KEY[instance.provider];
+  const apiKey = (envKey && process.env[envKey]) || instance.apiKey;
+
+  if (protocol === 'anthropic') {
+    const { AnthropicAdapter } = await import('@bcc/protocol-anthropic');
+    return new AnthropicAdapter({
+      name:   instance.id,
+      apiKey,
+      ...(instance.model   && { model:   instance.model }),
+      ...(instance.baseUrl && { baseURL: instance.baseUrl }),
+    });
   }
+
+  // protocol === 'openai' — 通用 OpenAI 兼容协议
+  const { OpenAIAdapter } = await import('@bcc/protocol-openai');
+
+  const baseUrl = instance.baseUrl || PROVIDER_DEFAULT_BASE_URL[instance.provider];
+  if (!baseUrl) {
+    throw new Error(`实例 "${instance.id}"（${instance.provider}）缺少 baseUrl，请在配置中填写 API 地址。`);
+  }
+
+  const model = instance.model || PROVIDER_DEFAULT_MODEL[instance.provider];
+  if (!model) {
+    throw new Error(`实例 "${instance.id}"（${instance.provider}）缺少模型名称，请在配置中填写 model。`);
+  }
+
+  return new OpenAIAdapter({
+    name:         instance.id,
+    apiKey,
+    baseUrl,
+    model,
+    provider:     instance.provider,
+    supportTools: PROVIDER_SUPPORT_TOOLS[instance.provider],
+  });
 }
 
 // ─── 构建 ModelRouter ─────────────────────────────────────────────────────────

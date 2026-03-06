@@ -29,15 +29,15 @@ importers:
       '@bcc/foundation':
         specifier: workspace:*
         version: link:../../packages/foundation
-      '@bcc/model-claude':
-        specifier: workspace:*
-        version: link:../../packages/model-claude
       '@bcc/model-core':
         specifier: workspace:*
         version: link:../../packages/model-core
-      '@bcc/model-deepseek':
+      '@bcc/protocol-anthropic':
         specifier: workspace:*
-        version: link:../../packages/model-deepseek
+        version: link:../../packages/protocol-anthropic
+      '@bcc/protocol-openai':
+        specifier: workspace:*
+        version: link:../../packages/protocol-openai
     devDependencies:
       '@types/node':
         specifier: '*'
@@ -83,18 +83,12 @@ importers:
         specifier: workspace:*
         version: link:../model-core
     devDependencies:
-      '@bcc/model-bailian':
+      '@bcc/protocol-anthropic':
         specifier: workspace:*
-        version: link:../model-bailian
-      '@bcc/model-claude':
+        version: link:../protocol-anthropic
+      '@bcc/protocol-openai':
         specifier: workspace:*
-        version: link:../model-claude
-      '@bcc/model-deepseek':
-        specifier: workspace:*
-        version: link:../model-deepseek
-      '@bcc/model-openai-compat':
-        specifier: workspace:*
-        version: link:../model-openai-compat
+        version: link:../protocol-openai
       '@types/node':
         specifier: '*'
         version: 22.19.13
@@ -155,17 +149,11 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
-  packages/model-bailian:
+  packages/model-core:
     dependencies:
       '@bcc/foundation':
         specifier: workspace:*
         version: link:../foundation
-      '@bcc/model-core':
-        specifier: workspace:*
-        version: link:../model-core
-      openai:
-        specifier: ^4.77.0
-        version: 4.104.0
     devDependencies:
       '@types/node':
         specifier: '*'
@@ -177,7 +165,7 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
-  packages/model-claude:
+  packages/protocol-anthropic:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.36.3
@@ -199,45 +187,7 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
-  packages/model-core:
-    dependencies:
-      '@bcc/foundation':
-        specifier: workspace:*
-        version: link:../foundation
-    devDependencies:
-      '@types/node':
-        specifier: '*'
-        version: 22.19.13
-      typescript:
-        specifier: '*'
-        version: 5.9.3
-      vitest:
-        specifier: '*'
-        version: 2.1.9(@types/node@22.19.13)
-
-  packages/model-deepseek:
-    dependencies:
-      '@bcc/foundation':
-        specifier: workspace:*
-        version: link:../foundation
-      '@bcc/model-core':
-        specifier: workspace:*
-        version: link:../model-core
-      openai:
-        specifier: ^4.77.0
-        version: 4.104.0
-    devDependencies:
-      '@types/node':
-        specifier: '*'
-        version: 22.19.13
-      typescript:
-        specifier: '*'
-        version: 5.9.3
-      vitest:
-        specifier: '*'
-        version: 2.1.9(@types/node@22.19.13)
-
-  packages/model-openai-compat:
+  packages/protocol-openai:
     dependencies:
       '@bcc/foundation':
         specifier: workspace:*

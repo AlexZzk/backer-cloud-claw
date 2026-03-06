@@ -9,7 +9,13 @@ import {
 } from '@bcc/foundation';
 import type { ModelAdapter } from '@bcc/model-core';
 
-export interface ClaudeAdapterOptions {
+export interface AnthropicAdapterOptions {
+  /**
+   * 实例名称，用作适配器 ID（对应配置文件中的 instance.id）。
+   * 例如："claude"、"claude-pro"
+   */
+  name: string;
+
   apiKey?: string;
   model?: string;
   maxTokens?: number;
@@ -19,17 +25,17 @@ export interface ClaudeAdapterOptions {
 const DEFAULT_MODEL = 'claude-sonnet-4-5';
 const DEFAULT_MAX_TOKENS = 8192;
 
-export class ClaudeAdapter implements ModelAdapter {
+export class AnthropicAdapter implements ModelAdapter {
   readonly id: string;
   readonly info: ModelInfo;
   private client: Anthropic;
   private model: string;
   private maxTokens: number;
 
-  constructor(options: ClaudeAdapterOptions = {}) {
+  constructor(options: AnthropicAdapterOptions) {
     this.model = options.model ?? DEFAULT_MODEL;
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
-    this.id = `claude:${this.model}`;
+    this.id = options.name;
     this.info = {
       id: this.id,
       provider: 'anthropic',
@@ -39,7 +45,7 @@ export class ClaudeAdapter implements ModelAdapter {
     };
     this.client = new Anthropic({
       apiKey: options.apiKey ?? process.env['ANTHROPIC_API_KEY'],
-      baseURL: options.baseURL,
+      ...(options.baseURL && { baseURL: options.baseURL }),
     });
   }
 
@@ -89,7 +95,7 @@ export class ClaudeAdapter implements ModelAdapter {
       yield { type: 'done', message: assistantMsg };
     } catch (err) {
       throw new ModelError(
-        `Claude stream failed: ${err instanceof Error ? err.message : String(err)}`,
+        `${this.id} stream failed: ${err instanceof Error ? err.message : String(err)}`,
         err,
       );
     }

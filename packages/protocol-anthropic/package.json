@@ -1,7 +1,7 @@
 {
-  "name": "@bcc/model-bailian",
+  "name": "@bcc/protocol-anthropic",
   "version": "0.1.0",
-  "description": "阿里百炼（Qwen）模型适配器（兼容 OpenAI API 格式）",
+  "description": "Anthropic 原生协议适配器（Claude 系列）",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
   "dependencies": {
     "@bcc/foundation": "workspace:*",
     "@bcc/model-core": "workspace:*",
-    "openai": "^4.77.0"
+    "@anthropic-ai/sdk": "^0.36.3"
   },
   "devDependencies": {
     "typescript": "*",
