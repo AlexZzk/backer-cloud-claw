@@ -30,22 +30,16 @@
     "@bcc/model-core": "workspace:*"
   },
   "peerDependencies": {
-    "@bcc/model-claude": "workspace:*",
-    "@bcc/model-bailian": "workspace:*",
-    "@bcc/model-deepseek": "workspace:*",
-    "@bcc/model-openai-compat": "workspace:*"
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*"
   },
   "peerDependenciesMeta": {
-    "@bcc/model-claude": { "optional": true },
-    "@bcc/model-bailian": { "optional": true },
-    "@bcc/model-deepseek": { "optional": true },
-    "@bcc/model-openai-compat": { "optional": true }
+    "@bcc/protocol-anthropic": { "optional": true },
+    "@bcc/protocol-openai": { "optional": true }
   },
   "devDependencies": {
-    "@bcc/model-claude": "workspace:*",
-    "@bcc/model-bailian": "workspace:*",
-    "@bcc/model-deepseek": "workspace:*",
-    "@bcc/model-openai-compat": "workspace:*",
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*",
     "typescript": "*",
     "vitest": "*",
     "@types/node": "*",

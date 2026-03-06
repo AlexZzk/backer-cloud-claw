@@ -1,5 +1,5 @@
 /**
- * basic-chat：验证 Phase 0 完整链路
+ * basic-chat：验证完整链路的最小示例
  *
  * 演示：
  *   1. 最简用法（单模型）
@@ -9,9 +9,11 @@
  */
 import { logger } from '@bcc/foundation';
 import { ModelRouter } from '@bcc/model-core';
-import { ClaudeAdapter } from '@bcc/model-claude';
-import { DeepSeekAdapter } from '@bcc/model-deepseek';
+import { AnthropicAdapter } from '@bcc/protocol-anthropic';
+import { OpenAIAdapter } from '@bcc/protocol-openai';
 import { ChatSession } from '@bcc/conversation';
+
+const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 
 const log = logger.child('example');
 
@@ -21,7 +23,7 @@ async function demo1() {
   log.info('=== Demo 1: 单模型对话 ===');
 
   const session = new ChatSession({
-    model: new ClaudeAdapter(),
+    model: new AnthropicAdapter({ name: 'claude' }),
     system: '你是一个简洁的 AI 助手，回复不超过 2 句话。',
   });
 
@@ -40,8 +42,10 @@ async function demo2() {
   log.info('\n=== Demo 2: 故障转移（Claude 主 → DeepSeek 备） ===');
 
   const router = new ModelRouter({ enableFailover: true })
-    .register(new ClaudeAdapter(), { priority: 0 })               // 主模型
-    .register(new DeepSeekAdapter(), { priority: 1, fallback: true }); // 备用
+    .register(new AnthropicAdapter({ name: 'claude' }), { priority: 0 })
+    .register(new OpenAIAdapter({
+      name: 'deepseek', baseUrl: DEEPSEEK_BASE_URL, model: 'deepseek-chat', provider: 'deepseek',
+    }), { priority: 1, fallback: true });
 
   const session = new ChatSession({ model: router });
   log.info(`当前模型: ${session.currentModel}`);
@@ -57,8 +61,10 @@ async function demo3() {
   log.info('\n=== Demo 3: 手动切换模型，历史保留 ===');
 
   const router = new ModelRouter()
-    .register(new ClaudeAdapter())
-    .register(new DeepSeekAdapter());
+    .register(new AnthropicAdapter({ name: 'claude' }))
+    .register(new OpenAIAdapter({
+      name: 'deepseek', baseUrl: DEEPSEEK_BASE_URL, model: 'deepseek-chat', provider: 'deepseek',
+    }));
 
   const session = new ChatSession({ model: router });
 
@@ -66,7 +72,7 @@ async function demo3() {
   const r1 = await session.chat('记住这个数字：42');
   log.info(`Claude: ${r1.text}`);
 
-  session.switchModel('deepseek:deepseek-chat');
+  session.switchModel('deepseek');
   log.info(`切换后模型: ${session.currentModel}`);
 
   const r2 = await session.chat('我刚才让你记住的数字是多少？');
@@ -79,7 +85,7 @@ async function demo4() {
   log.info('\n=== Demo 4: 流式输出 ===');
 
   const session = new ChatSession({
-    model: new ClaudeAdapter(),
+    model: new AnthropicAdapter({ name: 'claude' }),
   });
 
   process.stdout.write('流式回复: ');
@@ -94,7 +100,6 @@ async function demo4() {
 // ─── 主入口 ──────────────────────────────────────────────────────────────────
 
 async function main() {
-  // 没有 API Key 时跳过真实调用，只做结构验证
   const hasApiKey = Boolean(
     process.env['ANTHROPIC_API_KEY'] || process.env['DEEPSEEK_API_KEY'],
   );
@@ -115,15 +120,16 @@ async function main() {
 async function structureCheck() {
   log.info('验证模块导入与类型结构...');
 
-  // 验证 ModelRouter
   const router = new ModelRouter({ enableFailover: true, maxRetries: 3 })
-    .register(new ClaudeAdapter({ apiKey: 'mock' }), { priority: 0 })
-    .register(new DeepSeekAdapter({ apiKey: 'mock' }), { priority: 1, fallback: true });
+    .register(new AnthropicAdapter({ name: 'claude', apiKey: 'mock' }), { priority: 0 })
+    .register(new OpenAIAdapter({
+      name: 'deepseek', apiKey: 'mock',
+      baseUrl: DEEPSEEK_BASE_URL, model: 'deepseek-chat', provider: 'deepseek',
+    }), { priority: 1, fallback: true });
 
   log.info(`ModelRouter 当前模型: ${router.currentModelId}`);
   log.info(`可用模型列表: ${router.listModels().map(m => m.id).join(', ')}`);
 
-  // 验证 ChatSession
   const session = new ChatSession({
     model: router,
     system: '你是一个助手',
@@ -133,11 +139,9 @@ async function structureCheck() {
   log.info(`ChatSession 当前模型: ${session.currentModel}`);
   log.info(`可用模型: ${session.listModels().join(', ')}`);
 
-  // 验证手动切换
-  session.switchModel('deepseek:deepseek-chat');
+  session.switchModel('deepseek');
   log.info(`切换后模型: ${session.currentModel}`);
 
-  // 验证历史注入
   session.injectMessage({ role: 'user', content: '你好' });
   session.injectMessage({ role: 'assistant', content: '你好！有什么可以帮你？' });
   log.info(`历史条数: ${session.getHistory().length}`);

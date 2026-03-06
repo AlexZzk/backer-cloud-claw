@@ -12,9 +12,9 @@
   "dependencies": {
     "@bcc/conversation": "workspace:*",
     "@bcc/foundation": "workspace:*",
-    "@bcc/model-claude": "workspace:*",
     "@bcc/model-core": "workspace:*",
-    "@bcc/model-deepseek": "workspace:*"
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*"
   },
   "devDependencies": {
     "typescript": "*",

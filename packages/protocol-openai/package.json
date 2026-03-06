@@ -1,7 +1,7 @@
 {
-  "name": "@bcc/model-deepseek",
+  "name": "@bcc/protocol-openai",
   "version": "0.1.0",
-  "description": "DeepSeek 模型适配器（兼容 OpenAI API 格式）",
+  "description": "OpenAI 兼容协议适配器（OpenAI / DeepSeek / 阿里百炼 / 私有部署）",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

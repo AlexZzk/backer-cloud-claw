@@ -43,6 +43,7 @@ const VERSION = '0.1.0';
 
 const PROVIDER_LABELS: Record<ProviderType, string> = {
   claude:   'Claude（Anthropic）',
+  openai:   'OpenAI（GPT 系列）',
   bailian:  '阿里百炼（通义千问）',
   deepseek: 'DeepSeek',
   custom:   '自定义（OpenAI 兼容接口）',
@@ -50,6 +51,7 @@ const PROVIDER_LABELS: Record<ProviderType, string> = {
 
 const PROVIDER_KEY_HINT: Record<ProviderType, string> = {
   claude:   'https://console.anthropic.com/settings/keys  格式：sk-ant-...',
+  openai:   'https://platform.openai.com/api-keys  格式：sk-proj-...',
   bailian:  'https://bailian.console.aliyun.com/ → API Key 管理  格式：sk-...',
   deepseek: 'https://platform.deepseek.com/api_keys  格式：sk-...',
   custom:   '取决于你的部署配置，部分私有部署可填任意值',
@@ -61,6 +63,12 @@ const PROVIDER_MODELS: Record<ProviderType, Array<{ label: string; value: string
     { label: 'claude-sonnet-4-5',  value: 'claude-sonnet-4-5',  description: '均衡性能（推荐）' },
     { label: 'claude-opus-4-5',    value: 'claude-opus-4-5',    description: '最强性能，高成本' },
     { label: '自定义',             value: '__custom__',          description: '手动输入模型名称' },
+  ],
+  openai: [
+    { label: 'gpt-4o',         value: 'gpt-4o',         description: '旗舰多模态模型（推荐）' },
+    { label: 'gpt-4o-mini',    value: 'gpt-4o-mini',    description: '轻量快速，低成本' },
+    { label: 'o1',             value: 'o1',              description: '深度推理模型' },
+    { label: '自定义',         value: '__custom__',      description: '手动输入模型名称' },
   ],
   bailian: [
     { label: 'qwen-turbo',  value: 'qwen-turbo',  description: '快速响应，成本最低' },
@@ -78,7 +86,8 @@ const PROVIDER_MODELS: Record<ProviderType, Array<{ label: string; value: string
 };
 
 const PROVIDER_DEFAULT_BASE_URL: Record<ProviderType, string> = {
-  claude:   '',
+  claude:   '',  // Anthropic SDK 内置
+  openai:   'https://api.openai.com/v1',
   bailian:  'https://dashscope.aliyuncs.com/compatible-mode/v1',
   deepseek: 'https://api.deepseek.com/v1',
   custom:   '',
@@ -231,6 +240,7 @@ async function addModelWizard(existing: ModelInstanceConfig[]): Promise<ModelIns
   // 提供商
   const provider = await selectOne<ProviderType>('提供商', [
     { label: 'Claude（Anthropic）',       value: 'claude',   description: '强大安全，适合通用任务' },
+    { label: 'OpenAI（GPT 系列）',        value: 'openai',   description: 'GPT-4o / o1，最广泛兼容' },
     { label: '阿里百炼（通义千问）',       value: 'bailian',  description: '国内友好，千问系列模型' },
     { label: 'DeepSeek',                  value: 'deepseek', description: '高性价比，擅长推理' },
     { label: '自定义（OpenAI 兼容接口）', value: 'custom',   description: '私有部署 / 本地模型 / 第三方代理' },
@@ -250,7 +260,10 @@ async function addModelWizard(existing: ModelInstanceConfig[]): Promise<ModelIns
   const apiKey = await askSecret('  输入 API Key');
   if (!apiKey && provider !== 'custom') { warn('未输入 Key，已取消。'); return null; }
   if (provider === 'claude' && apiKey && !apiKey.startsWith('sk-ant')) {
-    warn('Key 格式看起来不对（通常以 sk-ant 开头），已保存但请核实。');
+    warn('Key 格式看起来不对（Claude Key 通常以 sk-ant 开头），已保存但请核实。');
+  }
+  if (provider === 'openai' && apiKey && !apiKey.startsWith('sk-')) {
+    warn('Key 格式看起来不对（OpenAI Key 通常以 sk- 开头），已保存但请核实。');
   }
 
   // 模型名
