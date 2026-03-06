@@ -14,7 +14,8 @@
   "bin": {
     "bcc-chat":  "./dist/bin/bcc-chat.js",
     "bcc-init":  "./dist/bin/bcc-init.js",
-    "bcc-skill": "./dist/bin/bcc-skill.js"
+    "bcc-skill": "./dist/bin/bcc-skill.js",
+    "bcc-agent": "./dist/bin/bcc-agent.js"
   },
   "scripts": {
     "build": "tsc",
@@ -25,6 +26,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@bcc/agents": "workspace:*",
     "@bcc/conversation": "workspace:*",
     "@bcc/foundation": "workspace:*",
     "@bcc/memory-fs": "workspace:*",

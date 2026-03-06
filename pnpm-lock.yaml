@@ -68,8 +68,33 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
+  packages/agents:
+    dependencies:
+      '@bcc/agent-engine':
+        specifier: workspace:*
+        version: link:../agent-engine
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+      '@bcc/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.13)
+
   packages/channel-cli:
     dependencies:
+      '@bcc/agents':
+        specifier: workspace:*
+        version: link:../agents
       '@bcc/conversation':
         specifier: workspace:*
         version: link:../conversation

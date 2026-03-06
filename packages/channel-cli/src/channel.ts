@@ -1,15 +1,22 @@
 import type { AgentInterface, MemoryStore } from '@bcc/foundation';
 import { ChatSession, type ChatSessionOptions } from '@bcc/conversation';
 import type { ModelAdapter } from '@bcc/model-core';
+import type { AgentRegistry } from '@bcc/agents';
 import { bold, cyan, dim, green } from './ansi.js';
 import { startRepl } from './repl.js';
 
 export interface CliChannelOptions {
   /**
-   * 传入已构建好的 AgentInterface（如 AgentEngine）。
+   * 传入已构建好的 AgentInterface（如 AgentEngine 或 BccAgent）。
    * 与 model 二选一。
    */
   agent?: AgentInterface | undefined;
+
+  /**
+   * 多 Agent 注册表（可选）。当 agent 为 BccAgent 时配合使用。
+   * 用于 /agents、/agent 命令列举和切换 Agent。
+   */
+  agentRegistry?: AgentRegistry | undefined;
 
   /**
    * 模型适配器或 ModelRouter（CliChannel 内部自动创建 ChatSession）。
@@ -102,7 +109,12 @@ export class CliChannel {
   async start(): Promise<void> {
     const banner = this.options.banner ?? this.defaultBanner();
     const hint = this.buildHint();
-    await startRepl({ session: this.session, banner, hint });
+    await startRepl({
+      session: this.session,
+      banner,
+      hint,
+      ...(this.options.agentRegistry !== undefined && { agentRegistry: this.options.agentRegistry }),
+    });
   }
 
   /** 获取底层 AgentInterface */
@@ -123,8 +135,12 @@ export class CliChannel {
   private buildHint(): string {
     const parts: string[] = [`  模型：${this.session.currentModel}`];
 
-    if (this.options.agent) {
-      // AgentEngine 模式
+    if (this.options.agentRegistry) {
+      const reg = this.options.agentRegistry;
+      const primary = reg.getPrimary();
+      const name = primary?.def.name ?? 'Agent';
+      parts.push(`  [多 Agent 模式 | 主 Agent：${name} | 共 ${reg.size} 个 Agent]`);
+    } else if (this.options.agent) {
       parts.push('  [Agent 模式]');
     } else if (this.options.memory !== undefined) {
       const id = this.options.sessionId ?? 'default';

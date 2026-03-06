@@ -66,6 +66,27 @@ export interface ModelInstanceConfig {
   fallback?: boolean;
 }
 
+/**
+ * Agent 配置（可序列化到 config.json）。
+ * 每个 Agent 有独立角色、system prompt 和可选的首选模型。
+ */
+export interface AgentConfig {
+  /** 唯一 ID，用于 /agent 命令和 Agent 间委托（如 "orchestrator"、"coder"） */
+  id: string;
+  /** 显示名称（如"研究员"） */
+  name: string;
+  /** 能力描述 — 当此 Agent 被其他 Agent 作为 Tool 调用时，告知模型何时使用它 */
+  description: string;
+  /** System Prompt — 定义角色、行为边界 */
+  system: string;
+  /** 引用 config.models 中的实例 ID；不填则使用全局主模型 */
+  model?: string;
+  /** 是否为主 Agent（用户默认对话对象）；多 Agent 时有且只有一个 */
+  primary?: boolean;
+  /** 技能标签（元数据，表明擅长领域，不影响运行行为） */
+  skills?: string[];
+}
+
 export interface BccConfig {
   /** schema 版本 */
   version: '1';
@@ -73,9 +94,15 @@ export interface BccConfig {
   /**
    * 模型实例列表。
    * 支持任意数量、任意提供商的实例，每个实例独立 API Key + baseUrl + 模型名。
-   * 替代旧的 providers + defaults.provider 单提供商设计。
    */
   models: ModelInstanceConfig[];
+
+  /**
+   * Agent 配置列表（可选）。
+   * 若为空，bcc-chat 使用默认的 ModelRouter 单对话模式。
+   * 若配置了多个 Agent，primary Agent 自动获得其他 Agent 作为委托工具（Orchestrator 模式）。
+   */
+  agents?: AgentConfig[];
 
   defaults: {
     /** 是否启用会话持久化 */
