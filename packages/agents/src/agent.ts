@@ -1,6 +1,5 @@
 import { AgentEngine } from '@bcc/agent-engine';
-import type { Tool } from '@bcc/agent-engine';
-import type { AgentChunk, AgentInterface, MemoryStore, Message } from '@bcc/foundation';
+import type { AgentChunk, AgentInterface, MemoryStore, Message, Tool } from '@bcc/foundation';
 import type { ModelAdapter } from '@bcc/model-core';
 import type { AgentDef } from './types.js';
 

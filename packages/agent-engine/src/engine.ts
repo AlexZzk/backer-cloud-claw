@@ -7,8 +7,7 @@ import {
   type ToolUseContent,
   extractText,
 } from '@bcc/foundation';
-import type { ModelAdapter } from '@bcc/model-core';
-import { ModelRouter } from '@bcc/model-core';
+import { type ModelAdapter, isRoutableModel } from '@bcc/model-core';
 import { loadContextFiles, mergeSystemPrompt } from './context.js';
 import { ToolRegistry, type Tool } from './tool.js';
 
@@ -120,12 +119,12 @@ export class AgentEngine implements AgentInterface {
   // ─── AgentInterface 实现 ──────────────────────────────────────────────────
 
   get currentModel(): string {
-    if (this.model instanceof ModelRouter) return this.model.currentModelId;
+    if (isRoutableModel(this.model)) return this.model.currentModelId;
     return this.model.id;
   }
 
   listModels(): string[] {
-    if (this.model instanceof ModelRouter) {
+    if (isRoutableModel(this.model)) {
       return this.model.listModels().map(m => m.id);
     }
     return [this.model.id];
@@ -146,7 +145,7 @@ export class AgentEngine implements AgentInterface {
   }
 
   switchModel(modelId: string): void {
-    if (!(this.model instanceof ModelRouter)) {
+    if (!isRoutableModel(this.model)) {
       throw new Error('switchModel() requires a ModelRouter.');
     }
     this.model.switchTo(modelId);

@@ -1,3 +1,20 @@
+import type { AgentInterface, Tool } from '@bcc/foundation';
+
+/**
+ * NamedAgent — 具名、可组合 Agent 的最小接口。
+ *
+ * AgentRegistry 针对此接口编程，不依赖具体的 BccAgent 实现，
+ * 便于注册任意满足此协议的 Agent（如 ScheduledAgent、VisionAgent 等）。
+ */
+export interface NamedAgent extends AgentInterface {
+  /** Agent 元数据 */
+  readonly def: AgentDef;
+  /** 将自身转为可委托工具，供 Orchestrator 调用 */
+  asTool(): Tool;
+  /** 动态追加工具 */
+  registerTool(tool: Tool): void;
+}
+
 /**
  * AgentDef — Agent 的定义（可序列化到 config.json）
  *

@@ -1,11 +1,11 @@
-import type { Tool } from '@bcc/agent-engine';
-import type { BccAgent } from './agent.js';
+import type { Tool } from '@bcc/foundation';
+import type { NamedAgent } from './types.js';
 
 /**
  * AgentRegistry — 多 Agent 注册与管理
  *
  * 职责：
- *   1. 管理所有已创建的 BccAgent 实例
+ *   1. 管理所有已创建的 NamedAgent 实例
  *   2. 提供 asTools() — 将所有 Agent 转为 Tool 列表，供 Orchestrator 调用
  *   3. 支持 Orchestrator 模式：主 Agent 自动获得其他所有 Agent 作为委托工具
  *
@@ -19,14 +19,14 @@ import type { BccAgent } from './agent.js';
  *   orchestratorAgent.registerTool(tools[0]!);  // 注入子 Agent 工具
  */
 export class AgentRegistry {
-  private agents = new Map<string, BccAgent>();
+  private agents = new Map<string, NamedAgent>();
 
-  register(agent: BccAgent): this {
+  register(agent: NamedAgent): this {
     this.agents.set(agent.def.id, agent);
     return this;
   }
 
-  find(id: string): BccAgent | undefined {
+  find(id: string): NamedAgent | undefined {
     return this.agents.get(id);
   }
 
@@ -35,7 +35,7 @@ export class AgentRegistry {
   }
 
   /** 返回所有 Agent，按注册顺序 */
-  list(): BccAgent[] {
+  list(): NamedAgent[] {
     return [...this.agents.values()];
   }
 
@@ -59,7 +59,8 @@ export class AgentRegistry {
   /**
    * 返回 primary Agent（def.primary = true 的第一个，否则列表第一个）。
    */
-  getPrimary(): BccAgent | undefined {
-    return this.list().find(a => a.def.primary) ?? this.list()[0];
+  getPrimary(): NamedAgent | undefined {
+    const all = this.list();
+    return all.find(a => a.def.primary) ?? all[0];
   }
 }

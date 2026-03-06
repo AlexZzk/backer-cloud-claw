@@ -110,6 +110,19 @@ export interface ToolResultChunk {
  */
 export type AgentChunk = StreamChunk | ToolCallChunk | ToolResultChunk;
 
+// ─── 工具（可被模型调用的函数）──────────────────────────────────────────────
+
+/**
+ * Tool：一个可被模型调用的工具。
+ *
+ * definition 告诉模型"这个工具是什么、接受什么参数"；
+ * handler    是实际执行逻辑，返回字符串结果（模型可读）。
+ */
+export interface Tool {
+  definition: ToolDefinition;
+  handler: (input: Record<string, unknown>) => Promise<string>;
+}
+
 // ─── Agent 统一接口 ──────────────────────────────────────────────────────────
 
 /**

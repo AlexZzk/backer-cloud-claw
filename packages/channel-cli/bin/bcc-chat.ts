@@ -321,7 +321,10 @@ async function main(): Promise<void> {
   const system      = args.system;
 
   const memory = enableMem
-    ? new FileMemoryStore(sessionDir ? { dir: sessionDir } : {})
+    ? new FileMemoryStore({
+        ...(sessionDir ? { dir: sessionDir } : {}),
+        ...(maxMessages > 0 ? { maxMessages } : {}),
+      })
     : undefined;
 
   // ── 多 Agent 模式 vs 普通模式 ────────────────────────────────────────────
@@ -332,6 +335,9 @@ async function main(): Promise<void> {
 
   if (agentRegistry) {
     // 多 Agent 模式：primary Agent 作为主对话对象（已内置子 Agent 委托工具）
+    if (system !== undefined) {
+      console.warn('  ⚠ --system 在多 Agent 模式下不生效（各 Agent 使用配置中各自的 system 提示词）');
+    }
     const primary = agentRegistry.getPrimary()!;
     cli = await CliChannel.create({
       agent:          primary,
