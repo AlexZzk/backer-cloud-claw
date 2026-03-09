@@ -172,6 +172,9 @@ interface LegacyConfig {
     maxMessages?:  number;
   };
   models?: ModelInstanceConfig[];
+  /** 新格式字段，透传不迁移 */
+  agents?:  AgentConfig[];
+  workers?: WorkerConfig[];
 }
 
 // ─── 默认值 ───────────────────────────────────────────────────────────────────
@@ -199,9 +202,15 @@ function migrateFromLegacy(raw: LegacyConfig): BccConfig {
     maxMessages:  raw.defaults?.maxMessages  ?? defaultCfg.defaults.maxMessages,
   };
 
-  // 新格式：直接使用
+  // 新格式：直接使用，同时透传 agents / workers
   if (raw.models && raw.models.length > 0) {
-    return { version: '1', models: raw.models, defaults };
+    return {
+      version: '1',
+      models: raw.models,
+      ...(raw.agents  && raw.agents.length  > 0 && { agents:  raw.agents  }),
+      ...(raw.workers && raw.workers.length > 0 && { workers: raw.workers }),
+      defaults,
+    };
   }
 
   // 旧格式：从 providers 迁移
