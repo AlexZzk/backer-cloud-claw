@@ -1,6 +1,5 @@
 import { type Message, type StreamChunk, type MemoryStore, extractText } from '@bcc/foundation';
-import type { ModelAdapter } from '@bcc/model-core';
-import { ModelRouter } from '@bcc/model-core';
+import { type ModelAdapter, isRoutableModel } from '@bcc/model-core';
 import { ConversationHistory, type HistoryOptions } from './history.js';
 
 export interface ChatSessionOptions {
@@ -184,7 +183,7 @@ export class ChatSession {
    * 需要 model 是 ModelRouter 实例。
    */
   switchModel(modelId: string): void {
-    if (!(this.model instanceof ModelRouter)) {
+    if (!isRoutableModel(this.model)) {
       throw new Error(
         'switchModel() requires a ModelRouter. Pass ModelRouter as the model option.',
       );
@@ -194,17 +193,13 @@ export class ChatSession {
 
   /** 获取当前使用的模型 id */
   get currentModel(): string {
-    if (this.model instanceof ModelRouter) {
-      return this.model.currentModelId;
-    }
+    if (isRoutableModel(this.model)) return this.model.currentModelId;
     return this.model.id;
   }
 
   /** 查看可用模型列表（仅 ModelRouter 下有效） */
   listModels(): string[] {
-    if (this.model instanceof ModelRouter) {
-      return this.model.listModels().map(m => m.id);
-    }
+    if (isRoutableModel(this.model)) return this.model.listModels().map(m => m.id);
     return [this.model.id];
   }
 

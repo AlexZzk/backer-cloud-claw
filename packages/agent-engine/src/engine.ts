@@ -7,8 +7,7 @@ import {
   type ToolUseContent,
   extractText,
 } from '@bcc/foundation';
-import type { ModelAdapter } from '@bcc/model-core';
-import { ModelRouter } from '@bcc/model-core';
+import { type ModelAdapter, isRoutableModel } from '@bcc/model-core';
 import { loadContextFiles, mergeSystemPrompt } from './context.js';
 import { ToolRegistry, type Tool } from './tool.js';
 
@@ -120,12 +119,12 @@ export class AgentEngine implements AgentInterface {
   // ─── AgentInterface 实现 ──────────────────────────────────────────────────
 
   get currentModel(): string {
-    if (this.model instanceof ModelRouter) return this.model.currentModelId;
+    if (isRoutableModel(this.model)) return this.model.currentModelId;
     return this.model.id;
   }
 
   listModels(): string[] {
-    if (this.model instanceof ModelRouter) {
+    if (isRoutableModel(this.model)) {
       return this.model.listModels().map(m => m.id);
     }
     return [this.model.id];
@@ -146,7 +145,7 @@ export class AgentEngine implements AgentInterface {
   }
 
   switchModel(modelId: string): void {
-    if (!(this.model instanceof ModelRouter)) {
+    if (!isRoutableModel(this.model)) {
       throw new Error('switchModel() requires a ModelRouter.');
     }
     this.model.switchTo(modelId);
@@ -182,6 +181,9 @@ export class AgentEngine implements AgentInterface {
    *   { type: 'done', message }          本轮完成
    */
   async *stream(userInput: string): AsyncIterable<AgentChunk> {
+    // 记录用户消息入队前的历史长度，出错时全量回滚
+    const snapshotLen = this.history.length;
+
     // 1. 追加用户消息
     this.history.push({ role: 'user', content: userInput });
 
@@ -220,8 +222,9 @@ export class AgentEngine implements AgentInterface {
           }
         }
       } catch (err) {
-        // 出错时回滚最后一条用户消息
-        this.history.pop();
+        // 出错时回滚到用户消息发送前的完整历史状态
+        // （单纯 pop 只能移除最后一条，在多轮工具迭代中会留下残留消息）
+        this.history.length = snapshotLen;
         throw err;
       }
 

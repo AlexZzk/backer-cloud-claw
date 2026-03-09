@@ -1,6 +1,33 @@
 import type { CompletionParams, ModelInfo, StreamChunk } from '@bcc/foundation';
 
 /**
+ * RoutableModel：支持多模型路由的适配器接口（由 ModelRouter 实现）。
+ *
+ * 使用 isRoutableModel() 类型守卫代替 instanceof ModelRouter，
+ * 使上层模块（ChatSession、AgentEngine）无需直接依赖具体的 ModelRouter 类。
+ */
+export interface RoutableModel {
+  readonly currentModelId: string;
+  switchTo(modelId: string): void;
+  listModels(): ModelInfo[];
+}
+
+/**
+ * 判断一个 ModelAdapter 是否实现了 RoutableModel 接口。
+ * 通过检查方法存在性而非 instanceof，对扩展保持开放。
+ */
+export function isRoutableModel(m: unknown): m is RoutableModel {
+  return (
+    typeof m === 'object' &&
+    m !== null &&
+    'currentModelId' in m &&
+    'switchTo' in m &&
+    'listModels' in m &&
+    typeof (m as Record<string, unknown>)['switchTo'] === 'function'
+  );
+}
+
+/**
  * 所有模型适配器必须实现此接口。
  * 每个适配器代表一个具体的模型提供商（Claude / OpenAI / DeepSeek 等）。
  */

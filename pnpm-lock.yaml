@@ -68,8 +68,33 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
+  packages/agents:
+    dependencies:
+      '@bcc/agent-engine':
+        specifier: workspace:*
+        version: link:../agent-engine
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+      '@bcc/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.13)
+
   packages/channel-cli:
     dependencies:
+      '@bcc/agents':
+        specifier: workspace:*
+        version: link:../agents
       '@bcc/conversation':
         specifier: workspace:*
         version: link:../conversation
@@ -82,6 +107,9 @@ importers:
       '@bcc/model-core':
         specifier: workspace:*
         version: link:../model-core
+      '@bcc/skills':
+        specifier: workspace:*
+        version: link:../skills
     devDependencies:
       '@bcc/protocol-anthropic':
         specifier: workspace:*
@@ -198,6 +226,22 @@ importers:
       openai:
         specifier: ^4.77.0
         version: 4.104.0
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+      vitest:
+        specifier: '*'
+        version: 2.1.9(@types/node@22.19.13)
+
+  packages/skills:
+    dependencies:
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
     devDependencies:
       '@types/node':
         specifier: '*'

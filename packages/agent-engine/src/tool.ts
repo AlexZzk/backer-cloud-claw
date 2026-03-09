@@ -1,25 +1,7 @@
-import type { ToolDefinition } from '@bcc/foundation';
+import type { Tool, ToolDefinition } from '@bcc/foundation';
 
-/**
- * Tool：一个可被模型调用的工具。
- *
- * definition 告诉模型"这个工具是什么、接受什么参数"；
- * handler    是实际执行逻辑，返回字符串结果（模型可读）。
- *
- * 示例：
- *   {
- *     definition: {
- *       name: 'calculator',
- *       description: '计算数学表达式',
- *       inputSchema: { type: 'object', properties: { expr: { type: 'string' } }, required: ['expr'] },
- *     },
- *     handler: async ({ expr }) => String(eval(String(expr))),
- *   }
- */
-export interface Tool {
-  definition: ToolDefinition;
-  handler: (input: Record<string, unknown>) => Promise<string>;
-}
+// Tool 接口已移至 @bcc/foundation，此处重新导出保持向后兼容
+export type { Tool };
 
 /**
  * ToolRegistry：管理已注册的工具集合。

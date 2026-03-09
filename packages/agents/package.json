@@ -1,0 +1,30 @@
+{
+  "name": "@bcc/agents",
+  "version": "0.1.0",
+  "description": "bcc 多 Agent 系统 — 命名 Agent、注册表与 Agent 间委托通信",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/foundation": "workspace:*",
+    "@bcc/model-core": "workspace:*",
+    "@bcc/agent-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "vitest": "*",
+    "@types/node": "*"
+  }
+}

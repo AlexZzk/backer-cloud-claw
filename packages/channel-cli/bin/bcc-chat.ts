@@ -11,7 +11,8 @@
 import { ModelRouter } from '@bcc/model-core';
 import { FileMemoryStore } from '@bcc/memory-fs';
 import { CliChannel } from '../src/index.js';
-import { loadConfig, type ModelInstanceConfig, type ProviderType } from '../src/config.js';
+import { loadConfig, type ModelInstanceConfig, type ProviderType, type AgentConfig } from '../src/config.js';
+import { BccAgent, AgentRegistry } from '@bcc/agents';
 
 // ─── CLI 参数解析 ─────────────────────────────────────────────────────────────
 
@@ -229,6 +230,69 @@ async function buildRouter(
   return router;
 }
 
+// ─── 构建 AgentRegistry ───────────────────────────────────────────────────────
+
+/**
+ * 根据 config.agents 构建 AgentRegistry。
+ *
+ * 构建顺序：
+ *   1. 为每个 Agent 创建对应的模型适配器（引用 config.models）
+ *   2. 实例化 BccAgent（使用 AgentEngine，含 tool-use loop）
+ *   3. 将所有 Agent 注册到 AgentRegistry
+ *   4. 为 primary Agent 注入其他所有 Agent 作为委托工具（Orchestrator 模式）
+ *
+ * @returns 若 agentDefs 为空，返回 null（使用普通 ModelRouter 模式）
+ */
+async function buildAgentRegistry(
+  agentDefs: AgentConfig[],
+  modelInstances: ModelInstanceConfig[],
+  memory?: FileMemoryStore,
+): Promise<AgentRegistry | null> {
+  if (agentDefs.length === 0) return null;
+
+  const registry = new AgentRegistry();
+
+  for (const def of agentDefs) {
+    // 找到 Agent 指定的模型实例（或 primary 模型）
+    const modelId = def.model;
+    const modelInstance = modelId
+      ? modelInstances.find(m => m.id === modelId)
+      : modelInstances.find(m => m.primary) ?? modelInstances[0];
+
+    if (!modelInstance) {
+      console.warn(`  ⚠ Agent "${def.id}" 找不到模型实例 "${modelId ?? 'primary'}"，已跳过`);
+      continue;
+    }
+
+    try {
+      const adapter = await createAdapter(modelInstance);
+      const agent = await BccAgent.create({
+        def,
+        model: adapter,
+        tools: [],
+        ...(memory && { memory }),
+      });
+      registry.register(agent);
+    } catch (err) {
+      console.warn(`  ⚠ Agent "${def.id}" 创建失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (registry.size === 0) return null;
+
+  // Orchestrator 模式：primary Agent 自动获得其他所有 Agent 作为委托工具
+  const primary = registry.getPrimary();
+  if (primary && registry.size > 1) {
+    const subTools = registry.asTools(primary.def.id);
+    for (const tool of subTools) {
+      primary.registerTool(tool);
+    }
+    console.log(`  ⚡ Orchestrator 模式：${primary.def.name}（${primary.def.id}）可委托给 ${subTools.length} 个子 Agent`);
+  }
+
+  return registry;
+}
+
 // ─── 主入口 ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -250,8 +314,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const modelRouter = await buildRouter(config.models, args.model);
-
   const sessionDir  = args.sessionDir ?? process.env['BCC_SESSION_DIR'] ?? config.defaults.sessionDir;
   const enableMem   = args.noMemory ? false : config.defaults.enableMemory;
   const sessionId   = args.sessionId ?? 'default';
@@ -259,16 +321,39 @@ async function main(): Promise<void> {
   const system      = args.system;
 
   const memory = enableMem
-    ? new FileMemoryStore(sessionDir ? { dir: sessionDir } : {})
+    ? new FileMemoryStore({
+        ...(sessionDir ? { dir: sessionDir } : {}),
+        ...(maxMessages > 0 ? { maxMessages } : {}),
+      })
     : undefined;
 
-  const cli = await CliChannel.create({
-    model: modelRouter,
-    ...(system      !== undefined && { system }),
-    ...(memory      !== undefined && { memory }),
-    sessionId,
-    ...(maxMessages > 0           && { maxMessages }),
-  });
+  // ── 多 Agent 模式 vs 普通模式 ────────────────────────────────────────────
+  const agentDefs = config.agents ?? [];
+  const agentRegistry = await buildAgentRegistry(agentDefs, config.models, memory);
+
+  let cli: CliChannel;
+
+  if (agentRegistry) {
+    // 多 Agent 模式：primary Agent 作为主对话对象（已内置子 Agent 委托工具）
+    if (system !== undefined) {
+      console.warn('  ⚠ --system 在多 Agent 模式下不生效（各 Agent 使用配置中各自的 system 提示词）');
+    }
+    const primary = agentRegistry.getPrimary()!;
+    cli = await CliChannel.create({
+      agent:          primary,
+      agentRegistry,
+    });
+  } else {
+    // 普通模式：ModelRouter（故障转移）
+    const modelRouter = await buildRouter(config.models, args.model);
+    cli = await CliChannel.create({
+      model:          modelRouter,
+      ...(system      !== undefined && { system }),
+      ...(memory      !== undefined && { memory }),
+      sessionId,
+      ...(maxMessages > 0           && { maxMessages }),
+    });
+  }
 
   await cli.start();
 }

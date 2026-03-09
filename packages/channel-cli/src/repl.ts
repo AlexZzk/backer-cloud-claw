@@ -1,7 +1,9 @@
 import * as readline from 'node:readline';
 import type { AgentInterface } from '@bcc/foundation';
 import { AllModelsFailedError } from '@bcc/foundation';
+import type { AgentRegistry } from '@bcc/agents';
 import { bold, cyan, green, yellow, red, gray, dim, clearLine, showCursor } from './ansi.js';
+import { SkillRegistry, expandSkill, skillNeedsInput } from '@bcc/skills';
 
 const PROMPT    = cyan('You') + gray(' › ') + ' ';
 const AI_PREFIX = green('AI') + gray('  › ') + ' ';
@@ -10,16 +12,28 @@ const THINKING  = dim('  …thinking');
 /** 内置斜杠命令列表 */
 const HELP_TEXT = `
 ${bold('可用命令：')}
-  ${yellow('/help')}              显示此帮助
-  ${yellow('/clear')}             清空对话历史（不影响已保存的文件）
-  ${yellow('/history')}           查看当前对话历史
-  ${yellow('/model <id>')}        切换模型（需配置 ModelRouter）
-  ${yellow('/models')}            列出所有可用模型
-  ${yellow('/ping')}              测试所有模型连通性
-  ${yellow('/save')}              手动保存当前历史到持久化存储
-  ${yellow('/session')}           显示当前 Session 信息
-  ${yellow('/debug')}             显示上一次错误的完整详情
-  ${yellow('/exit')} 或 ${yellow('Ctrl+C')}  退出
+  ${yellow('/help')}                    显示此帮助
+  ${yellow('/clear')}                   清空对话历史（不影响已保存的文件）
+  ${yellow('/history')}                 查看当前对话历史
+  ${yellow('/model <id>')}              切换模型（需配置 ModelRouter）
+  ${yellow('/models')}                  列出所有可用模型
+  ${yellow('/ping')}                    测试所有模型连通性
+  ${yellow('/save')}                    手动保存当前历史到持久化存储
+  ${yellow('/session')}                 显示当前 Session 信息
+  ${yellow('/debug')}                   显示上一次错误的完整详情
+
+${bold('多 Agent：')}
+  ${yellow('/agents')}                  列出所有已配置的 Agent
+  ${yellow('/agent <id>')}              切换主对话 Agent
+  ${yellow('/agent <id> <消息>')}       向指定 Agent 发送一次消息（不切换）
+  ${dim('  使用 pnpm bcc-agent 创建、编辑、删除 Agent 配置')}
+
+${bold('技能（Skill）：')}
+  ${yellow('/skills')}                  列出所有可用技能
+  ${yellow('/skill <名称> [内容]')}     执行技能（如 /skill summarize 这段文字…）
+  ${dim('  使用 pnpm bcc-skill 创建、编辑、删除自定义技能')}
+
+  ${yellow('/exit')} 或 ${yellow('Ctrl+C')}          退出
 `;
 
 // ─── 错误展示 ─────────────────────────────────────────────────────────────────
@@ -109,10 +123,21 @@ export interface ReplOptions {
   session: AgentInterface;
   banner?: string | undefined;
   hint?: string | undefined;
+  /** 多 Agent 注册表，用于 /agents、/agent 命令 */
+  agentRegistry?: AgentRegistry | undefined;
 }
 
 export async function startRepl(options: ReplOptions): Promise<void> {
-  const { session } = options;
+  // 用可变引用支持 /agent <id> 切换焦点
+  let activeSession: AgentInterface = options.session;
+  const { agentRegistry } = options;
+
+  // 懒加载技能注册表（含内置 + 用户 + 项目技能）
+  let skills: SkillRegistry | undefined;
+  const getSkills = async (): Promise<SkillRegistry> => {
+    if (!skills) skills = await SkillRegistry.load();
+    return skills;
+  };
 
   if (options.banner) console.log(options.banner);
   if (options.hint)   console.log(dim(options.hint));
@@ -134,7 +159,10 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     // ─── 斜杠命令 ──────────────────────────────────────────────────────────
     if (input.startsWith('/')) {
       const [cmd, ...args] = input.slice(1).split(/\s+/);
-      await handleCommand(cmd ?? '', args, session, rl);
+      const switched = await handleCommand(
+        cmd ?? '', args, activeSession, rl, getSkills, agentRegistry,
+      );
+      if (switched) activeSession = switched;
       return;
     }
 
@@ -144,7 +172,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
     let firstTextChunk = true;
     try {
-      for await (const chunk of session.stream(input)) {
+      for await (const chunk of activeSession.stream(input)) {
         switch (chunk.type) {
           case 'text':
             if (chunk.text) {
@@ -224,12 +252,18 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 
 // ─── 命令处理器 ────────────────────────────────────────────────────────────────
 
+/**
+ * 返回值：如果切换了 Agent，返回新的 AgentInterface；否则返回 null。
+ */
 async function handleCommand(
   cmd: string,
   args: string[],
   session: AgentInterface,
   rl: readline.Interface,
-): Promise<void> {
+  getSkills: () => Promise<SkillRegistry>,
+  agentRegistry?: AgentRegistry,
+): Promise<AgentInterface | null> {
+  let switchedSession: AgentInterface | null = null;
   switch (cmd.toLowerCase()) {
 
     case 'help':
@@ -355,6 +389,173 @@ async function handleCommand(
       break;
     }
 
+    // ── 技能命令 ─────────────────────────────────────────────────────────────
+
+    case 'skills': {
+      const reg = await getSkills();
+      const list = reg.list();
+      if (list.length === 0) {
+        console.log(dim('  （暂无技能）\n'));
+        break;
+      }
+      const stats = reg.stats();
+      console.log(bold(`\n  技能列表（内置 ${stats.builtin} / 用户 ${stats.user} / 项目 ${stats.project}）：`));
+      console.log();
+
+      let lastSource = '';
+      for (const s of list) {
+        const src = s.source ?? 'builtin';
+        if (src !== lastSource) {
+          const label = src === 'builtin' ? '内置' : src === 'user' ? '用户自定义' : '项目';
+          console.log(`  ${dim('── ' + label + ' ──')}`);
+          lastSource = src;
+        }
+        const hasSystem = s.system ? dim(' [覆盖 system]') : '';
+        console.log(`    ${yellow(s.name.padEnd(18))} ${s.description}${hasSystem}`);
+      }
+      console.log();
+      console.log(dim('  用法：/skill <名称> [内容]'));
+      console.log(dim('  管理：pnpm bcc-skill'));
+      console.log();
+      break;
+    }
+
+    case 'skill': {
+      const skillName = args[0];
+      if (!skillName) {
+        console.log(yellow('  用法：/skill <名称> [内容]\n'));
+        console.log(dim('  输入 /skills 查看所有可用技能\n'));
+        break;
+      }
+
+      const reg = await getSkills();
+      const skill = reg.find(skillName);
+      if (!skill) {
+        console.log(red(`  ✗ 找不到技能 "${skillName}"`) + dim('，输入 /skills 查看可用技能\n'));
+        break;
+      }
+
+      // 行内输入 or 交互式询问
+      let input = args.slice(1).join(' ');
+      if (skillNeedsInput(skill) && !input) {
+        rl.pause();
+        input = await new Promise<string>(resolve => {
+          rl.question(cyan('  输入内容') + gray(' › ') + ' ', resolve);
+        });
+        rl.resume();
+      }
+
+      const expandedPrompt = expandSkill(skill, input);
+
+      // 如有 system 覆盖，提示用户（当前版本作为 context 注入到 prompt 前）
+      const fullPrompt = skill.system
+        ? `[角色设定：${skill.system}]\n\n${expandedPrompt}`
+        : expandedPrompt;
+
+      console.log(dim(`  ⚡ 技能：${skill.name}`));
+      if (skill.source !== 'builtin') {
+        console.log(dim(`  提示词（前80字）：${expandedPrompt.slice(0, 80)}…`));
+      }
+      console.log();
+
+      // 执行技能（与普通对话流程相同）
+      rl.pause();
+      process.stdout.write(THINKING);
+      let firstChunk = true;
+      try {
+        for await (const chunk of session.stream(fullPrompt)) {
+          if (chunk.type === 'text' && chunk.text) {
+            if (firstChunk) { clearLine(); process.stdout.write(AI_PREFIX); firstChunk = false; }
+            process.stdout.write(chunk.text);
+          }
+        }
+      } catch (err) {
+        clearLine();
+        printError(err);
+      }
+      if (firstChunk) clearLine(); else process.stdout.write('\n');
+      console.log();
+      rl.resume();
+      break;
+    }
+
+    // ── 多 Agent 命令 ────────────────────────────────────────────────────────
+
+    case 'agents': {
+      if (!agentRegistry || agentRegistry.size === 0) {
+        console.log(dim('  （未配置 Agent，在 bcc.json 中添加 agents 字段）\n'));
+        break;
+      }
+      console.log(bold(`\n  Agent 列表（共 ${agentRegistry.size} 个）：\n`));
+      for (const agent of agentRegistry.list()) {
+        const isPrimary = agent.def.primary === true;
+        const isCurrent = agent === session;
+        const marker = isCurrent ? green('▶') : isPrimary ? yellow('★') : ' ';
+        const tag = isPrimary ? dim(' [主]') : '';
+        const model = agent.def.model ? dim(` (${agent.def.model})`) : '';
+        console.log(`  ${marker} ${bold(agent.def.id.padEnd(16))} ${agent.def.name}${tag}${model}`);
+        console.log(`      ${dim(agent.def.description)}`);
+        if (agent.def.skills && agent.def.skills.length > 0) {
+          console.log(`      ${dim('技能：' + agent.def.skills.join(', '))}`);
+        }
+      }
+      console.log();
+      console.log(dim('  ▶=当前  ★=主 Agent'));
+      console.log(dim('  切换：/agent <id>  |  一次性委托：/agent <id> <消息>'));
+      console.log();
+      break;
+    }
+
+    case 'agent': {
+      if (!agentRegistry || agentRegistry.size === 0) {
+        console.log(yellow('  当前未启用多 Agent 模式（bcc.json 中需配置 agents 字段）\n'));
+        break;
+      }
+      const agentId = args[0];
+      if (!agentId) {
+        console.log(yellow('  用法：/agent <id> [消息]\n'));
+        break;
+      }
+      const targetAgent = agentRegistry.find(agentId);
+      if (!targetAgent) {
+        console.log(red(`  ✗ 找不到 Agent "${agentId}"`) + dim('，输入 /agents 查看可用列表\n'));
+        break;
+      }
+
+      const delegateMsg = args.slice(1).join(' ');
+
+      if (delegateMsg) {
+        // 一次性委托：发消息给指定 Agent，不切换焦点
+        console.log(dim(`  → 委托给 ${targetAgent.def.name}（${agentId}）`));
+        rl.pause();
+        process.stdout.write(THINKING);
+        let firstChunk = true;
+        try {
+          for await (const chunk of targetAgent.stream(delegateMsg)) {
+            if (chunk.type === 'text' && chunk.text) {
+              if (firstChunk) {
+                clearLine();
+                process.stdout.write(green(targetAgent.def.name) + gray(' › ') + ' ');
+                firstChunk = false;
+              }
+              process.stdout.write(chunk.text);
+            }
+          }
+        } catch (err) {
+          clearLine();
+          printError(err);
+        }
+        if (firstChunk) clearLine(); else process.stdout.write('\n');
+        console.log();
+        rl.resume();
+      } else {
+        // 切换焦点
+        switchedSession = targetAgent;
+        console.log(green('✓') + ` 已切换到 Agent ${bold(targetAgent.def.name)}（${agentId}）\n`);
+      }
+      break;
+    }
+
     case 'exit':
     case 'quit':
       showCursor();
@@ -367,4 +568,5 @@ async function handleCommand(
   }
 
   rl.prompt();
+  return switchedSession;
 }
