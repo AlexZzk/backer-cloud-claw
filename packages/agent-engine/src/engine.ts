@@ -3,6 +3,7 @@ import {
   type AgentInterface,
   type MemoryStore,
   type Message,
+  type TokenUsage,
   type ToolResultContent,
   type ToolUseContent,
   extractText,
@@ -189,6 +190,9 @@ export class AgentEngine implements AgentInterface {
 
     const toolDefs = this.registry.definitions();
 
+    // 跨迭代累积 token 用量（工具循环每轮都可能消耗 token）
+    const accumulatedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
     for (let iter = 0; iter < this.maxIterations; iter++) {
       const toolCalls: ToolUseContent[] = [];
 
@@ -206,6 +210,13 @@ export class AgentEngine implements AgentInterface {
           if (chunk.type === 'done' && chunk.message) {
             // 追加 assistant 消息到历史
             this.history.push(chunk.message);
+
+            // 累积本轮 token 用量
+            if (chunk.tokenUsage) {
+              accumulatedUsage.inputTokens += chunk.tokenUsage.inputTokens;
+              accumulatedUsage.outputTokens += chunk.tokenUsage.outputTokens;
+              accumulatedUsage.totalTokens += chunk.tokenUsage.totalTokens;
+            }
 
             // 提取工具调用
             const content = Array.isArray(chunk.message.content)
@@ -228,10 +239,12 @@ export class AgentEngine implements AgentInterface {
         throw err;
       }
 
-      // 3. 没有工具调用 → 完成
+      // 3. 没有工具调用 → 完成，携带累积 token 用量
       if (toolCalls.length === 0) {
         await this.persist();
-        yield { type: 'done' };
+        yield accumulatedUsage.totalTokens > 0
+          ? { type: 'done', tokenUsage: accumulatedUsage }
+          : { type: 'done' };
         return;
       }
 
@@ -272,7 +285,9 @@ export class AgentEngine implements AgentInterface {
 
     // 超出最大迭代次数
     await this.persist();
-    yield { type: 'done' };
+    yield accumulatedUsage.totalTokens > 0
+      ? { type: 'done', tokenUsage: accumulatedUsage }
+      : { type: 'done' };
   }
 
   // ─── 工具注册（运行时追加）────────────────────────────────────────────────
