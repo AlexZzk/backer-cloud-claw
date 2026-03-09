@@ -11,4 +11,5 @@ export {
   CONFIG_PATH,
   DEFAULT_SESSION_DIR,
 } from './config.js';
-export type { BccConfig, ModelInstanceConfig, ProviderType, AgentConfig } from './config.js';
+export type { BccConfig, ModelInstanceConfig, ProviderType, AgentConfig, WorkerConfig } from './config.js';
+export { WorkerSession, WorkerRegistry } from './worker-session.js';

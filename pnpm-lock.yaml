@@ -107,6 +107,9 @@ importers:
       '@bcc/model-core':
         specifier: workspace:*
         version: link:../model-core
+      '@bcc/org':
+        specifier: workspace:*
+        version: link:../org
       '@bcc/skills':
         specifier: workspace:*
         version: link:../skills

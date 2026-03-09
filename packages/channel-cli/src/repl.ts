@@ -4,6 +4,7 @@ import { AllModelsFailedError } from '@bcc/foundation';
 import type { AgentRegistry } from '@bcc/agents';
 import { bold, cyan, green, yellow, red, gray, dim, clearLine, showCursor } from './ansi.js';
 import { SkillRegistry, expandSkill, skillNeedsInput } from '@bcc/skills';
+import type { WorkerRegistry, WorkerSession } from './worker-session.js';
 
 const PROMPT    = cyan('You') + gray(' › ') + ' ';
 const AI_PREFIX = green('AI') + gray('  › ') + ' ';
@@ -22,7 +23,13 @@ ${bold('可用命令：')}
   ${yellow('/session')}                 显示当前 Session 信息
   ${yellow('/debug')}                   显示上一次错误的完整详情
 
-${bold('多 Agent：')}
+${bold('员工（Worker）：')}
+  ${yellow('/workers')}                 列出所有员工及 Token 消耗统计
+  ${yellow('/worker <id>')}             切换对话员工
+  ${yellow('/worker <id> <消息>')}      向指定员工发送一次消息（不切换）
+  ${dim('  在 ~/.bcc/config.json 中配置 workers 字段创建员工')}
+
+${bold('多 Agent（旧版）：')}
   ${yellow('/agents')}                  列出所有已配置的 Agent
   ${yellow('/agent <id>')}              切换主对话 Agent
   ${yellow('/agent <id> <消息>')}       向指定 Agent 发送一次消息（不切换）
@@ -125,12 +132,14 @@ export interface ReplOptions {
   hint?: string | undefined;
   /** 多 Agent 注册表，用于 /agents、/agent 命令 */
   agentRegistry?: AgentRegistry | undefined;
+  /** Worker 注册表，用于 /workers、/worker 命令 */
+  workerRegistry?: WorkerRegistry | undefined;
 }
 
 export async function startRepl(options: ReplOptions): Promise<void> {
-  // 用可变引用支持 /agent <id> 切换焦点
+  // 用可变引用支持 /agent <id> / /worker <id> 切换焦点
   let activeSession: AgentInterface = options.session;
-  const { agentRegistry } = options;
+  const { agentRegistry, workerRegistry } = options;
 
   // 懒加载技能注册表（含内置 + 用户 + 项目技能）
   let skills: SkillRegistry | undefined;
@@ -160,7 +169,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
     if (input.startsWith('/')) {
       const [cmd, ...args] = input.slice(1).split(/\s+/);
       const switched = await handleCommand(
-        cmd ?? '', args, activeSession, rl, getSkills, agentRegistry,
+        cmd ?? '', args, activeSession, rl, getSkills, agentRegistry, workerRegistry,
       );
       if (switched) activeSession = switched;
       return;
@@ -206,7 +215,13 @@ export async function startRepl(options: ReplOptions): Promise<void> {
             break;
 
           case 'done':
-            // 完成，不需要额外输出
+            // 完成：若有 token 用量则显示统计
+            if (chunk.tokenUsage) {
+              const { inputTokens, outputTokens, totalTokens } = chunk.tokenUsage;
+              process.stdout.write(
+                '\n' + dim(`  ↑${inputTokens.toLocaleString()} ↓${outputTokens.toLocaleString()} = ${totalTokens.toLocaleString()} tokens`),
+              );
+            }
             break;
         }
       }
@@ -253,7 +268,7 @@ export async function startRepl(options: ReplOptions): Promise<void> {
 // ─── 命令处理器 ────────────────────────────────────────────────────────────────
 
 /**
- * 返回值：如果切换了 Agent，返回新的 AgentInterface；否则返回 null。
+ * 返回值：如果切换了 Agent/Worker，返回新的 AgentInterface；否则返回 null。
  */
 async function handleCommand(
   cmd: string,
@@ -262,6 +277,7 @@ async function handleCommand(
   rl: readline.Interface,
   getSkills: () => Promise<SkillRegistry>,
   agentRegistry?: AgentRegistry,
+  workerRegistry?: WorkerRegistry,
 ): Promise<AgentInterface | null> {
   let switchedSession: AgentInterface | null = null;
   switch (cmd.toLowerCase()) {
@@ -476,6 +492,90 @@ async function handleCommand(
       if (firstChunk) clearLine(); else process.stdout.write('\n');
       console.log();
       rl.resume();
+      break;
+    }
+
+    // ── Worker 命令 ──────────────────────────────────────────────────────────
+
+    case 'workers': {
+      if (!workerRegistry || workerRegistry.size === 0) {
+        console.log(dim('  （未配置 Worker，在 ~/.bcc/config.json 中添加 workers 字段）\n'));
+        break;
+      }
+      console.log(bold(`\n  员工列表（共 ${workerRegistry.size} 人）：\n`));
+      for (const ws of workerRegistry.list()) {
+        const isCurrent = ws === session;
+        const marker = isCurrent ? green('▶') : ' ';
+        const summary = ws.getTokenSummary();
+        const tokenStr = summary.callCount > 0
+          ? dim(` | ↑${summary.totalInputTokens.toLocaleString()} ↓${summary.totalOutputTokens.toLocaleString()} tokens（${summary.callCount} 次对话）`)
+          : dim(' | 暂无对话');
+        console.log(`  ${marker} ${bold(ws.workerId.padEnd(16))} ${ws.workerName}  [${ws.currentModel}]${tokenStr}`);
+        console.log(`      ${dim(ws.workerDescription || '（无描述）')}`);
+        if (ws.workerSkills.length > 0) {
+          console.log(`      ${dim('技能：' + ws.workerSkills.join('、'))}`);
+        }
+      }
+      console.log();
+      console.log(dim('  ▶=当前员工'));
+      console.log(dim('  切换：/worker <id>  |  一次性委托：/worker <id> <消息>'));
+      console.log();
+      break;
+    }
+
+    case 'worker': {
+      if (!workerRegistry || workerRegistry.size === 0) {
+        console.log(yellow('  当前未启用 Worker 模式（config.json 中需配置 workers 字段）\n'));
+        break;
+      }
+      const workerId = args[0];
+      if (!workerId) {
+        console.log(yellow('  用法：/worker <id> [消息]\n'));
+        break;
+      }
+      const targetWorker = workerRegistry.find(workerId);
+      if (!targetWorker) {
+        console.log(red(`  ✗ 找不到 Worker "${workerId}"`) + dim('，输入 /workers 查看可用列表\n'));
+        break;
+      }
+
+      const delegateMsg = args.slice(1).join(' ');
+
+      if (delegateMsg) {
+        // 一次性委托：发消息给指定 Worker，不切换焦点
+        console.log(dim(`  → 发给 ${targetWorker.workerName}（${workerId}）`));
+        rl.pause();
+        process.stdout.write(THINKING);
+        let firstChunk = true;
+        try {
+          for await (const chunk of targetWorker.stream(delegateMsg)) {
+            if (chunk.type === 'text' && chunk.text) {
+              if (firstChunk) {
+                clearLine();
+                process.stdout.write(green(targetWorker.workerName) + gray(' › ') + ' ');
+                firstChunk = false;
+              }
+              process.stdout.write(chunk.text);
+            }
+            if (chunk.type === 'done' && chunk.tokenUsage) {
+              const { inputTokens, outputTokens, totalTokens } = chunk.tokenUsage;
+              process.stdout.write(
+                '\n' + dim(`  ↑${inputTokens.toLocaleString()} ↓${outputTokens.toLocaleString()} = ${totalTokens.toLocaleString()} tokens`),
+              );
+            }
+          }
+        } catch (err) {
+          clearLine();
+          printError(err);
+        }
+        if (firstChunk) clearLine(); else process.stdout.write('\n');
+        console.log();
+        rl.resume();
+      } else {
+        // 切换焦点
+        switchedSession = targetWorker;
+        console.log(green('✓') + ` 已切换到员工 ${bold(targetWorker.workerName)}（${workerId}）\n`);
+      }
       break;
     }
 
