@@ -87,6 +87,36 @@ export interface AgentConfig {
   skills?: string[];
 }
 
+/**
+ * Worker 配置（可序列化到 config.json）。
+ *
+ * 一个 Worker = 一个模型实例（modelId）+ 一个身份（name/role）+ 一组技能标签（skills）。
+ * 示例：
+ *   { id: 'coder',  name: '代码工程师 Claude', role: '你是一位专注后端开发的工程师…',
+ *     modelId: 'claude',   skills: ['编写代码', '代码审查'], description: '…' }
+ *   { id: 'writer', name: '文案策划 Qwen',     role: '你是一位擅长营销文案的策划师…',
+ *     modelId: 'bailian', skills: ['文本生成', '内容润色'], description: '…' }
+ */
+export interface WorkerConfig {
+  /** 唯一 ID，用于 /worker <id> 命令 */
+  id: string;
+  /** 显示名称，例如"代码工程师 Claude" */
+  name: string;
+  /**
+   * System Prompt — 定义员工的角色、职责、行为边界。
+   * 会作为 AgentEngine 的 system 参数注入。
+   */
+  role: string;
+  /** 技能标签（元数据），例如 ["编写代码", "代码审查"] */
+  skills: string[];
+  /** 对其他 Worker 的能力自述（供 /workers 命令展示） */
+  description: string;
+  /** 引用 config.models 中的实例 ID，例如 "claude"、"bailian" */
+  modelId: string;
+  /** 是否为默认 Worker（不传 --worker 参数时使用） */
+  primary?: boolean;
+}
+
 export interface BccConfig {
   /** schema 版本 */
   version: '1';
@@ -98,11 +128,17 @@ export interface BccConfig {
   models: ModelInstanceConfig[];
 
   /**
-   * Agent 配置列表（可选）。
+   * Agent 配置列表（可选，旧版多 Agent 模式）。
    * 若为空，bcc-chat 使用默认的 ModelRouter 单对话模式。
-   * 若配置了多个 Agent，primary Agent 自动获得其他 Agent 作为委托工具（Orchestrator 模式）。
    */
   agents?: AgentConfig[];
+
+  /**
+   * Worker 配置列表（新 Org 架构）。
+   * 若配置了 workers，bcc-chat 优先使用 Worker 模式对话。
+   * 每个 Worker 绑定一个模型 + 一个身份 + 一组技能。
+   */
+  workers?: WorkerConfig[];
 
   defaults: {
     /** 是否启用会话持久化 */

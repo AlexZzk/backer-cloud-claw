@@ -4,6 +4,7 @@ import type { ModelAdapter } from '@bcc/model-core';
 import type { AgentRegistry } from '@bcc/agents';
 import { bold, cyan, dim, green } from './ansi.js';
 import { startRepl } from './repl.js';
+import type { WorkerRegistry } from './worker-session.js';
 
 export interface CliChannelOptions {
   /**
@@ -17,6 +18,12 @@ export interface CliChannelOptions {
    * 用于 /agents、/agent 命令列举和切换 Agent。
    */
   agentRegistry?: AgentRegistry | undefined;
+
+  /**
+   * Worker 注册表（新 Org 模式）。
+   * 用于 /workers、/worker 命令列举和切换 Worker。
+   */
+  workerRegistry?: WorkerRegistry | undefined;
 
   /**
    * 模型适配器或 ModelRouter（CliChannel 内部自动创建 ChatSession）。
@@ -113,7 +120,8 @@ export class CliChannel {
       session: this.session,
       banner,
       hint,
-      ...(this.options.agentRegistry !== undefined && { agentRegistry: this.options.agentRegistry }),
+      ...(this.options.agentRegistry  !== undefined && { agentRegistry:  this.options.agentRegistry }),
+      ...(this.options.workerRegistry !== undefined && { workerRegistry: this.options.workerRegistry }),
     });
   }
 
@@ -135,7 +143,11 @@ export class CliChannel {
   private buildHint(): string {
     const parts: string[] = [`  模型：${this.session.currentModel}`];
 
-    if (this.options.agentRegistry) {
+    if (this.options.workerRegistry) {
+      const reg = this.options.workerRegistry;
+      const current = this.session as import('./worker-session.js').WorkerSession;
+      parts.push(`  [Worker 模式 | 当前：${current.workerName ?? '?'} | 共 ${reg.size} 名员工]`);
+    } else if (this.options.agentRegistry) {
       const reg = this.options.agentRegistry;
       const primary = reg.getPrimary();
       const name = primary?.def.name ?? 'Agent';

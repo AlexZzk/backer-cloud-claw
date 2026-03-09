@@ -31,6 +31,7 @@
     "@bcc/foundation": "workspace:*",
     "@bcc/memory-fs": "workspace:*",
     "@bcc/model-core": "workspace:*",
+    "@bcc/org": "workspace:*",
     "@bcc/skills": "workspace:*"
   },
   "peerDependencies": {

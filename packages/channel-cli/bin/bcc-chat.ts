@@ -7,18 +7,32 @@
  *   2. 环境变量（ANTHROPIC_API_KEY、DASHSCOPE_API_KEY 等）
  *   3. 配置文件（~/.bcc/config.json，由 bcc-init 生成）
  *   4. 内置默认值
+ *
+ * 运行模式（优先级从高到低）：
+ *   1. Worker 模式：config.workers 有内容 → 使用 @bcc/org 的 Worker 架构
+ *   2. 多 Agent 模式：config.agents 有内容 → 使用 BccAgent Orchestrator
+ *   3. 普通模式：ModelRouter 单对话（默认）
  */
 import { ModelRouter } from '@bcc/model-core';
 import { FileMemoryStore } from '@bcc/memory-fs';
 import { CliChannel } from '../src/index.js';
-import { loadConfig, type ModelInstanceConfig, type ProviderType, type AgentConfig } from '../src/config.js';
+import {
+  loadConfig,
+  type ModelInstanceConfig,
+  type ProviderType,
+  type AgentConfig,
+  type WorkerConfig,
+} from '../src/config.js';
 import { BccAgent, AgentRegistry } from '@bcc/agents';
+import { Worker, Company } from '@bcc/org';
+import { WorkerSession, WorkerRegistry } from '../src/worker-session.js';
 
 // ─── CLI 参数解析 ─────────────────────────────────────────────────────────────
 
 interface CliArgs {
-  /** 指定主模型实例 ID（覆盖配置文件中的 primary） */
   model:       string | undefined;
+  /** Worker 模式下指定对话的 Worker ID */
+  worker:      string | undefined;
   sessionId:   string | undefined;
   system:      string | undefined;
   noMemory:    boolean;
@@ -30,7 +44,7 @@ interface CliArgs {
 
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
-    model: undefined, sessionId: undefined, system: undefined,
+    model: undefined, worker: undefined, sessionId: undefined, system: undefined,
     noMemory: false, sessionDir: undefined, maxMessages: undefined,
     debug: false, help: false,
   };
@@ -38,6 +52,7 @@ function parseArgs(argv: string[]): CliArgs {
     const a = argv[i]!;
     switch (a) {
       case '--model':        args.model      = argv[++i]; break;
+      case '--worker':       args.worker     = argv[++i]; break;
       case '--session':      args.sessionId  = argv[++i]; break;
       case '--system':       args.system     = argv[++i]; break;
       case '--no-memory':    args.noMemory   = true; break;
@@ -58,20 +73,26 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
   pnpm bcc-chat [选项]
 
 选项：
-  --model <id>          指定主模型实例 ID（在 /model 列表中选择）
+  --worker <id>         指定 Worker ID（Worker 模式）
+  --model <id>          指定主模型实例 ID（普通模式）
   --session <id>        会话 ID，用于持久化（默认：default）
-  --system <prompt>     系统提示词
+  --system <prompt>     系统提示词（普通模式）
   --no-memory           禁用持久化
   --session-dir <dir>   自定义会话存储目录
   --max-messages <n>    最大历史消息数
   --debug               输出详细错误信息（等同于 BCC_DEBUG=1）
   --help, -h            显示此帮助
 
+运行模式：
+  Worker 模式    config.workers 有配置时自动启用，--worker 选择员工
+  多 Agent 模式  config.agents  有配置时启用（旧版 Orchestrator）
+  普通模式       默认 ModelRouter 单对话
+
 配置：
   首次使用请运行 pnpm bcc-init 完成初始化。
   配置文件位置：~/.bcc/config.json
 
-环境变量（可覆盖单个实例的 API Key）：
+环境变量：
   ANTHROPIC_API_KEY     覆盖所有 claude 实例的 Key
   OPENAI_API_KEY        覆盖所有 openai 实例的 Key
   DASHSCOPE_API_KEY     覆盖所有 bailian 实例的 Key
@@ -81,13 +102,8 @@ bcc chat — backer-cloud-claw 命令行 AI 对话
 `);
 }
 
-// ─── 提供商预设（协议层派发依据）────────────────────────────────────────────
+// ─── 提供商预设 ───────────────────────────────────────────────────────────────
 
-/**
- * 每个提供商对应的底层协议。
- *   anthropic → @bcc/protocol-anthropic (AnthropicAdapter)
- *   openai    → @bcc/protocol-openai    (OpenAIAdapter)
- */
 const PROVIDER_PROTOCOL: Record<ProviderType, 'anthropic' | 'openai'> = {
   claude:   'anthropic',
   openai:   'openai',
@@ -96,16 +112,14 @@ const PROVIDER_PROTOCOL: Record<ProviderType, 'anthropic' | 'openai'> = {
   custom:   'openai',
 };
 
-/** 提供商默认 baseUrl（未填写 baseUrl 时使用）。空字符串表示使用 SDK 内置地址。 */
 const PROVIDER_DEFAULT_BASE_URL: Record<ProviderType, string> = {
-  claude:   '',  // Anthropic SDK 内置
+  claude:   '',
   openai:   'https://api.openai.com/v1',
   deepseek: 'https://api.deepseek.com/v1',
   bailian:  'https://dashscope.aliyuncs.com/compatible-mode/v1',
   custom:   '',
 };
 
-/** 提供商默认模型名 */
 const PROVIDER_DEFAULT_MODEL: Record<ProviderType, string> = {
   claude:   'claude-sonnet-4-5',
   openai:   'gpt-4o',
@@ -114,7 +128,6 @@ const PROVIDER_DEFAULT_MODEL: Record<ProviderType, string> = {
   custom:   '',
 };
 
-/** 覆盖 API Key 的环境变量名 */
 const PROVIDER_ENV_KEY: Partial<Record<ProviderType, string>> = {
   claude:   'ANTHROPIC_API_KEY',
   openai:   'OPENAI_API_KEY',
@@ -122,21 +135,18 @@ const PROVIDER_ENV_KEY: Partial<Record<ProviderType, string>> = {
   bailian:  'DASHSCOPE_API_KEY',
 };
 
-/** 已知支持工具调用的提供商（custom 由用户自行保证） */
 const PROVIDER_SUPPORT_TOOLS: Record<ProviderType, boolean> = {
   claude:   true,
   openai:   true,
   deepseek: true,
   bailian:  true,
-  custom:   false,  // 私有部署工具调用能力不确定，保守设为 false
+  custom:   false,
 };
 
-// ─── 从 ModelInstanceConfig 创建适配器 ──────────────────────────────────────
+// ─── 适配器工厂 ───────────────────────────────────────────────────────────────
 
 async function createAdapter(instance: ModelInstanceConfig) {
   const protocol = PROVIDER_PROTOCOL[instance.provider];
-
-  // 环境变量可覆盖 API Key
   const envKey = PROVIDER_ENV_KEY[instance.provider];
   const apiKey = (envKey && process.env[envKey]) || instance.apiKey;
 
@@ -150,19 +160,15 @@ async function createAdapter(instance: ModelInstanceConfig) {
     });
   }
 
-  // protocol === 'openai' — 通用 OpenAI 兼容协议
   const { OpenAIAdapter } = await import('@bcc/protocol-openai');
-
   const baseUrl = instance.baseUrl || PROVIDER_DEFAULT_BASE_URL[instance.provider];
   if (!baseUrl) {
     throw new Error(`实例 "${instance.id}"（${instance.provider}）缺少 baseUrl，请在配置中填写 API 地址。`);
   }
-
   const model = instance.model || PROVIDER_DEFAULT_MODEL[instance.provider];
   if (!model) {
     throw new Error(`实例 "${instance.id}"（${instance.provider}）缺少模型名称，请在配置中填写 model。`);
   }
-
   return new OpenAIAdapter({
     name:         instance.id,
     apiKey,
@@ -173,25 +179,20 @@ async function createAdapter(instance: ModelInstanceConfig) {
   });
 }
 
-// ─── 构建 ModelRouter ─────────────────────────────────────────────────────────
+// ─── 构建 ModelRouter（普通模式）────────────────────────────────────────────
 
 async function buildRouter(
   models: ModelInstanceConfig[],
   forceModelId: string | undefined,
 ): Promise<ModelRouter> {
   if (models.length === 0) {
-    console.error(`
-错误：配置中没有任何模型实例。
-  请先运行初始化向导：
-    pnpm bcc-init
-`);
+    console.error(`\n错误：配置中没有任何模型实例。\n  请先运行初始化向导：\n    pnpm bcc-init\n`);
     process.exit(1);
   }
 
   const router = new ModelRouter({ enableFailover: true });
   let registered = 0;
 
-  // 如果 CLI 指定了 --model，把它提到最前面并设为 primary
   const ordered = forceModelId
     ? [
         ...models.filter(m => m.id === forceModelId),
@@ -219,30 +220,15 @@ async function buildRouter(
   }
 
   if (registered === 0) {
-    console.error(`
-错误：所有模型实例均加载失败。
-  请检查配置或重新运行：
-    pnpm bcc-init
-`);
+    console.error(`\n错误：所有模型实例均加载失败。\n  请检查配置或重新运行：\n    pnpm bcc-init\n`);
     process.exit(1);
   }
 
   return router;
 }
 
-// ─── 构建 AgentRegistry ───────────────────────────────────────────────────────
+// ─── 构建 AgentRegistry（旧版多 Agent 模式）─────────────────────────────────
 
-/**
- * 根据 config.agents 构建 AgentRegistry。
- *
- * 构建顺序：
- *   1. 为每个 Agent 创建对应的模型适配器（引用 config.models）
- *   2. 实例化 BccAgent（使用 AgentEngine，含 tool-use loop）
- *   3. 将所有 Agent 注册到 AgentRegistry
- *   4. 为 primary Agent 注入其他所有 Agent 作为委托工具（Orchestrator 模式）
- *
- * @returns 若 agentDefs 为空，返回 null（使用普通 ModelRouter 模式）
- */
 async function buildAgentRegistry(
   agentDefs: AgentConfig[],
   modelInstances: ModelInstanceConfig[],
@@ -253,7 +239,6 @@ async function buildAgentRegistry(
   const registry = new AgentRegistry();
 
   for (const def of agentDefs) {
-    // 找到 Agent 指定的模型实例（或 primary 模型）
     const modelId = def.model;
     const modelInstance = modelId
       ? modelInstances.find(m => m.id === modelId)
@@ -280,7 +265,6 @@ async function buildAgentRegistry(
 
   if (registry.size === 0) return null;
 
-  // Orchestrator 模式：primary Agent 自动获得其他所有 Agent 作为委托工具
   const primary = registry.getPrimary();
   if (primary && registry.size > 1) {
     const subTools = registry.asTools(primary.def.id);
@@ -291,6 +275,96 @@ async function buildAgentRegistry(
   }
 
   return registry;
+}
+
+// ─── 构建 WorkerRegistry（新 Org 模式）──────────────────────────────────────
+
+async function buildWorkerRegistry(
+  workerDefs: WorkerConfig[],
+  modelInstances: ModelInstanceConfig[],
+): Promise<WorkerRegistry | null> {
+  if (workerDefs.length === 0) return null;
+
+  // Company 提供共享 tokenTracker + eventBus（为后续管理后台对接做准备）
+  const company = new Company({ name: '我的团队' });
+  const registry = new WorkerRegistry();
+
+  for (const def of workerDefs) {
+    const modelInstance = modelInstances.find(m => m.id === def.modelId)
+      ?? modelInstances.find(m => m.primary)
+      ?? modelInstances[0];
+
+    if (!modelInstance) {
+      console.warn(`  ⚠ Worker "${def.id}" 找不到模型实例 "${def.modelId}"，已跳过`);
+      continue;
+    }
+
+    try {
+      const adapter = await createAdapter(modelInstance);
+      const worker = await Worker.create({
+        profile: {
+          id:          def.id,
+          name:        def.name,
+          role:        def.id,
+          skills:      def.skills,
+          description: def.description,
+          modelId:     def.modelId,
+        },
+        engineOptions: {
+          model:  adapter,
+          system: def.role,  // role 字段作为 system prompt
+        },
+        tokenTracker: company.tokenTracker,
+        eventBus:     company.eventBus,
+      });
+
+      company.addWorker(worker);
+      registry.register(new WorkerSession(worker, company.tokenTracker));
+    } catch (err) {
+      console.warn(`  ⚠ Worker "${def.id}" 创建失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (registry.size === 0) return null;
+
+  console.log(`  👥 Worker 模式（${registry.size} 名员工）：`);
+  for (const session of registry.list()) {
+    const cfg = workerDefs.find(d => d.id === session.workerId);
+    const marker = cfg?.primary ? '★' : '○';
+    console.log(`     ${marker} ${session.workerName}（${session.workerId}）[${session.currentModel}]`);
+    if (session.workerSkills.length > 0) {
+      console.log(`       技能：${session.workerSkills.join('、')}`);
+    }
+  }
+  console.log();
+
+  return registry;
+}
+
+function resolveInitialWorkerSession(
+  registry: WorkerRegistry,
+  workerDefs: WorkerConfig[],
+  forceWorkerId: string | undefined,
+): WorkerSession {
+  if (forceWorkerId) {
+    const target = registry.find(forceWorkerId);
+    if (!target) {
+      const ids = registry.list().map(s => s.workerId).join('、');
+      console.error(`错误：找不到 Worker "${forceWorkerId}"，可用 ID：${ids}`);
+      process.exit(1);
+    }
+    return target;
+  }
+
+  const primaryDef = workerDefs.find(d => d.primary);
+  if (primaryDef) {
+    const primary = registry.find(primaryDef.id);
+    if (primary) return primary;
+  }
+
+  const first = registry.getPrimary();
+  if (!first) { console.error('错误：Worker 注册表为空。'); process.exit(1); }
+  return first;
 }
 
 // ─── 主入口 ───────────────────────────────────────────────────────────────────
@@ -306,11 +380,7 @@ async function main(): Promise<void> {
   const config = await loadConfig();
 
   if (!config) {
-    console.error(`
-错误：尚未找到配置文件。
-  请先运行初始化向导：
-    pnpm bcc-init
-`);
+    console.error(`\n错误：尚未找到配置文件。\n  请先运行初始化向导：\n    pnpm bcc-init\n`);
     process.exit(1);
   }
 
@@ -327,34 +397,41 @@ async function main(): Promise<void> {
       })
     : undefined;
 
-  // ── 多 Agent 模式 vs 普通模式 ────────────────────────────────────────────
+  // ── 模式 1：Worker 模式（优先）──────────────────────────────────────────
+  const workerDefs = config.workers ?? [];
+  if (workerDefs.length > 0) {
+    const workerRegistry = await buildWorkerRegistry(workerDefs, config.models);
+    if (workerRegistry) {
+      const initialSession = resolveInitialWorkerSession(workerRegistry, workerDefs, args.worker);
+      const cli = await CliChannel.create({ agent: initialSession, workerRegistry });
+      await cli.start();
+      return;
+    }
+  }
+
+  // ── 模式 2：多 Agent 模式（旧版 Orchestrator）──────────────────────────
   const agentDefs = config.agents ?? [];
   const agentRegistry = await buildAgentRegistry(agentDefs, config.models, memory);
 
-  let cli: CliChannel;
-
   if (agentRegistry) {
-    // 多 Agent 模式：primary Agent 作为主对话对象（已内置子 Agent 委托工具）
     if (system !== undefined) {
-      console.warn('  ⚠ --system 在多 Agent 模式下不生效（各 Agent 使用配置中各自的 system 提示词）');
+      console.warn('  ⚠ --system 在多 Agent 模式下不生效');
     }
     const primary = agentRegistry.getPrimary()!;
-    cli = await CliChannel.create({
-      agent:          primary,
-      agentRegistry,
-    });
-  } else {
-    // 普通模式：ModelRouter（故障转移）
-    const modelRouter = await buildRouter(config.models, args.model);
-    cli = await CliChannel.create({
-      model:          modelRouter,
-      ...(system      !== undefined && { system }),
-      ...(memory      !== undefined && { memory }),
-      sessionId,
-      ...(maxMessages > 0           && { maxMessages }),
-    });
+    const cli = await CliChannel.create({ agent: primary, agentRegistry });
+    await cli.start();
+    return;
   }
 
+  // ── 模式 3：普通模式（ModelRouter）────────────────────────────────────
+  const modelRouter = await buildRouter(config.models, args.model);
+  const cli = await CliChannel.create({
+    model:          modelRouter,
+    ...(system      !== undefined && { system }),
+    ...(memory      !== undefined && { memory }),
+    sessionId,
+    ...(maxMessages > 0           && { maxMessages }),
+  });
   await cli.start();
 }
 
