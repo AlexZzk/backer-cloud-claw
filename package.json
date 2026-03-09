@@ -9,8 +9,9 @@
     "test": "turbo run test",
     "lint": "turbo run lint",
     "clean": "turbo run clean",
-    "bcc-init": "pnpm --filter @bcc/channel-cli run init",
-    "bcc-chat": "turbo run build --filter=@bcc/channel-cli... --output-logs=errors-only && pnpm --filter @bcc/channel-cli run start"
+    "bcc-init":   "pnpm --filter @bcc/channel-cli run init",
+    "bcc-worker": "turbo run build --filter=@bcc/channel-cli... --output-logs=errors-only && pnpm --filter @bcc/channel-cli run worker",
+    "bcc-chat":   "turbo run build --filter=@bcc/channel-cli... --output-logs=errors-only && pnpm --filter @bcc/channel-cli run start"
   },
   "workspaces": [
     "packages/*",

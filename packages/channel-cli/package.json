@@ -12,16 +12,18 @@
     }
   },
   "bin": {
-    "bcc-chat":  "./dist/bin/bcc-chat.js",
-    "bcc-init":  "./dist/bin/bcc-init.js",
-    "bcc-skill": "./dist/bin/bcc-skill.js",
-    "bcc-agent": "./dist/bin/bcc-agent.js"
+    "bcc-chat":   "./dist/bin/bcc-chat.js",
+    "bcc-init":   "./dist/bin/bcc-init.js",
+    "bcc-skill":  "./dist/bin/bcc-skill.js",
+    "bcc-agent":  "./dist/bin/bcc-agent.js",
+    "bcc-worker": "./dist/bin/bcc-worker.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "tsx bin/bcc-chat.ts",
-    "init": "tsx bin/bcc-init.ts",
+    "start":  "tsx bin/bcc-chat.ts",
+    "init":   "tsx bin/bcc-init.ts",
+    "worker": "tsx bin/bcc-worker.ts",
     "test": "vitest run",
     "clean": "rm -rf dist"
   },
