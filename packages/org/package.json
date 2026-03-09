@@ -1,0 +1,27 @@
+{
+  "name": "@bcc/org",
+  "version": "0.1.0",
+  "description": "backer-cloud-claw 组织层：Worker（AI 员工）、Company（公司）、Thread、消息路由与 Token 追踪",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/foundation": "workspace:*",
+    "@bcc/agent-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "@types/node": "*"
+  }
+}

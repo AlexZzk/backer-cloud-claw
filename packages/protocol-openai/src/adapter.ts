@@ -102,13 +102,20 @@ export class OpenAIAdapter implements ModelAdapter {
         messages: openaiMessages,
         ...(openaiTools && { tools: openaiTools }),
         stream: true,
+        stream_options: { include_usage: true },
       });
 
       let fullText = '';
       // index → 累积的工具调用数据（OpenAI 流式分片按 index 归并）
       const toolCallAccum = new Map<number, { id: string; name: string; arguments: string }>();
+      let streamUsage: { prompt_tokens: number; completion_tokens: number } | undefined;
 
       for await (const chunk of stream) {
+        // OpenAI 在 stream_options.include_usage=true 时，最后一个 chunk 携带 usage
+        if (chunk.usage) {
+          streamUsage = chunk.usage;
+        }
+
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
 
@@ -160,7 +167,19 @@ export class OpenAIAdapter implements ModelAdapter {
             ? firstItem.text
             : content;
 
-      yield { type: 'done', message: { role: 'assistant', content: assistantContent } };
+      if (streamUsage) {
+        yield {
+          type: 'done',
+          message: { role: 'assistant', content: assistantContent },
+          tokenUsage: {
+            inputTokens: streamUsage.prompt_tokens,
+            outputTokens: streamUsage.completion_tokens,
+            totalTokens: streamUsage.prompt_tokens + streamUsage.completion_tokens,
+          },
+        };
+      } else {
+        yield { type: 'done', message: { role: 'assistant', content: assistantContent } };
+      }
     } catch (err) {
       throw new ModelError(
         `${this.id} stream failed: ${err instanceof Error ? err.message : String(err)}`,

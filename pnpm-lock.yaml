@@ -193,6 +193,22 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
+  packages/org:
+    dependencies:
+      '@bcc/agent-engine':
+        specifier: workspace:*
+        version: link:../agent-engine
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+
   packages/protocol-anthropic:
     dependencies:
       '@anthropic-ai/sdk':

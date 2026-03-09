@@ -92,7 +92,12 @@ export class AnthropicAdapter implements ModelAdapter {
           };
         }),
       };
-      yield { type: 'done', message: assistantMsg };
+      const tokenUsage = {
+        inputTokens: final.usage.input_tokens,
+        outputTokens: final.usage.output_tokens,
+        totalTokens: final.usage.input_tokens + final.usage.output_tokens,
+      };
+      yield { type: 'done', message: assistantMsg, tokenUsage };
     } catch (err) {
       throw new ModelError(
         `${this.id} stream failed: ${err instanceof Error ? err.message : String(err)}`,
