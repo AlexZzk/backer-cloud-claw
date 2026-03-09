@@ -31,6 +31,7 @@
     "@bcc/agents": "workspace:*",
     "@bcc/conversation": "workspace:*",
     "@bcc/foundation": "workspace:*",
+    "@bcc/memory-episodic": "workspace:*",
     "@bcc/memory-fs": "workspace:*",
     "@bcc/model-core": "workspace:*",
     "@bcc/org": "workspace:*",

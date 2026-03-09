@@ -1,0 +1,27 @@
+{
+  "name": "@bcc/memory-episodic",
+  "version": "0.1.0",
+  "description": "情节记忆存储：会话摘要生成与持久化，供 Worker 跨会话记忆注入",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/foundation": "workspace:*",
+    "@bcc/model-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "@types/node": "*"
+  }
+}

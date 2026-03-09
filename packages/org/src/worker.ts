@@ -126,6 +126,14 @@ export class Worker implements Participant {
     this.engine.registerTool(tool);
   }
 
+  /**
+   * 获取底层 AgentEngine 的完整对话历史（LLM 协议格式）。
+   * 包含从持久化存储恢复的历史，供 WorkerSession.getHistory() 和情节摘要使用。
+   */
+  getHistory() {
+    return this.engine.getHistory();
+  }
+
   describe(): string {
     const skillList = this.profile.skills.length > 0
       ? `技能：${this.profile.skills.join('、')}`

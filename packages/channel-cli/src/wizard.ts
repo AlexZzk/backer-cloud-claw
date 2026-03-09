@@ -102,6 +102,42 @@ export async function selectOne<T>(
   return choices[n - 1]!.value;
 }
 
+// ─── 多选菜单 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 显示带编号的多选菜单，用户输入逗号分隔的编号（如 "1,3,4"）。
+ *
+ * @param question      提示标题
+ * @param choices       选项列表
+ * @param currentValues 当前已选中的值（用于显示 ✓ 标记）
+ * @returns             用户选中的 value 数组
+ */
+export async function selectMultiple<T>(
+  question: string,
+  choices: Array<Choice<T>>,
+  currentValues: T[] = [],
+): Promise<T[]> {
+  console.log(`  ${question}`);
+  console.log('  （输入编号，多选用逗号分隔，如 "1,3"；直接回车跳过）');
+  for (let i = 0; i < choices.length; i++) {
+    const c = choices[i]!;
+    const checked = currentValues.includes(c.value) ? '✓' : ' ';
+    console.log(`  [${checked}] ${i + 1}) ${c.label}${c.description ? `  — ${c.description}` : ''}`);
+  }
+  const answer = await ask('\n  请输入编号（如 1,3）或直接回车: ');
+  if (!answer.trim()) return currentValues;
+
+  const selected: T[] = [];
+  for (const part of answer.split(',')) {
+    const n = parseInt(part.trim(), 10);
+    if (!isNaN(n) && n >= 1 && n <= choices.length) {
+      const val = choices[n - 1]!.value;
+      if (!selected.includes(val)) selected.push(val);
+    }
+  }
+  return selected;
+}
+
 // ─── 文本输入 ─────────────────────────────────────────────────────────────────
 
 /**

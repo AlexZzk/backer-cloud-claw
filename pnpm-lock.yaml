@@ -101,6 +101,9 @@ importers:
       '@bcc/foundation':
         specifier: workspace:*
         version: link:../foundation
+      '@bcc/memory-episodic':
+        specifier: workspace:*
+        version: link:../memory-episodic
       '@bcc/memory-fs':
         specifier: workspace:*
         version: link:../memory-fs
@@ -163,6 +166,22 @@ importers:
       vitest:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
+
+  packages/memory-episodic:
+    dependencies:
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+      '@bcc/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
 
   packages/memory-fs:
     dependencies:
