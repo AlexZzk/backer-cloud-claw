@@ -282,6 +282,7 @@ async function buildAgentRegistry(
 async function buildWorkerRegistry(
   workerDefs: WorkerConfig[],
   modelInstances: ModelInstanceConfig[],
+  memory: FileMemoryStore | undefined,
 ): Promise<WorkerRegistry | null> {
   if (workerDefs.length === 0) return null;
 
@@ -301,18 +302,30 @@ async function buildWorkerRegistry(
 
     try {
       const adapter = await createAdapter(modelInstance);
+
+      // 构建 system prompt：身份头部（名字+描述）+ 用户填写的角色设定
+      // 确保无论用户写了什么，模型都知道自己叫什么名字
+      const identityHeader = def.description
+        ? `你的名字是「${def.name}」。${def.description}`
+        : `你的名字是「${def.name}」。`;
+      const fullSystem = def.role
+        ? `${identityHeader}\n\n${def.role}`
+        : identityHeader;
+
       const worker = await Worker.create({
         profile: {
           id:          def.id,
           name:        def.name,
-          role:        def.id,
+          role:        def.description || def.name,  // 职位描述（非 system prompt）
           skills:      def.skills,
           description: def.description,
           modelId:     def.modelId,
         },
         engineOptions: {
           model:  adapter,
-          system: def.role,  // role 字段作为 system prompt
+          system: fullSystem,
+          // 每个 Worker 使用独立 sessionId，历史文件互相隔离
+          ...(memory !== undefined && { memory, sessionId: `worker-${def.id}` }),
         },
         tokenTracker: company.tokenTracker,
         eventBus:     company.eventBus,
@@ -400,7 +413,7 @@ async function main(): Promise<void> {
   // ── 模式 1：Worker 模式（优先）──────────────────────────────────────────
   const workerDefs = config.workers ?? [];
   if (workerDefs.length > 0) {
-    const workerRegistry = await buildWorkerRegistry(workerDefs, config.models);
+    const workerRegistry = await buildWorkerRegistry(workerDefs, config.models, memory);
     if (workerRegistry) {
       const initialSession = resolveInitialWorkerSession(workerRegistry, workerDefs, args.worker);
       const cli = await CliChannel.create({ agent: initialSession, workerRegistry });
