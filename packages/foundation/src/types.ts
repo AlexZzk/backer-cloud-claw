@@ -267,3 +267,44 @@ export type OrgEvent =
   | { type: 'worker:done'; workerId: string; threadId: string; tokenUsage: TokenUsage }
   | { type: 'thread:opened'; thread: OrgThread }
   | { type: 'thread:closed'; thread: OrgThread; totalTokens: number };
+
+// ─── 情节记忆（Episodic Memory）────────────────────────────────────────────────
+
+/**
+ * Episode：一次完整会话的摘要条目。
+ *
+ * 由 EpisodeGenerator 在会话结束后自动生成，
+ * 供下次会话开始时注入 Worker 的 system prompt，实现跨会话记忆。
+ */
+export interface Episode {
+  /** 条目唯一 ID */
+  id: string;
+  /** 所属 Worker ID */
+  workerId: string;
+  /** 来源会话 ID（对应 MemoryStore 的 sessionId） */
+  sessionId: string;
+  /** LLM 生成的自然语言摘要 */
+  summary: string;
+  /** 关键结论/决策列表（提取自对话） */
+  keyPoints: string[];
+  /** 本次会话的消息轮数（user + assistant 各算 1 轮） */
+  turnCount: number;
+  /** 生成时间（ms 时间戳） */
+  createdAt: number;
+}
+
+/**
+ * EpisodicStore：情节记忆存储后端接口。
+ *
+ * 设计原则：接口与实现分离，可插拔。
+ *   - 默认实现：FileEpisodicStore（@bcc/memory-episodic，存文件）
+ *   - 未来可替换为数据库实现，不改业务代码
+ */
+export interface EpisodicStore {
+  /** 追加一条新情节记忆 */
+  append(episode: Episode): Promise<void>;
+  /** 返回指定 Worker 最近 N 条记忆（按时间倒序） */
+  recent(workerId: string, limit: number): Promise<Episode[]>;
+  /** 清空指定 Worker 的全部情节记忆 */
+  clear(workerId: string): Promise<void>;
+}

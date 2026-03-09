@@ -15,6 +15,8 @@
  */
 import { ModelRouter } from '@bcc/model-core';
 import { FileMemoryStore } from '@bcc/memory-fs';
+import { FileEpisodicStore, EpisodeGenerator } from '@bcc/memory-episodic';
+import { getBuiltinTool } from '@bcc/skills';
 import { CliChannel } from '../src/index.js';
 import {
   loadConfig,
@@ -277,11 +279,64 @@ async function buildAgentRegistry(
   return registry;
 }
 
+// ─── 情节摘要辅助 ────────────────────────────────────────────────────────────
+
+/**
+ * 为情节摘要生成找一个可用的模型适配器。
+ * 优先使用当前活跃 WorkerSession 绑定的模型实例。
+ */
+async function getAdapterForSession(
+  session: WorkerSession,
+  modelInstances: ModelInstanceConfig[],
+) {
+  const modelId = session.currentModel;
+  const instance = modelInstances.find(m => m.id === modelId)
+    ?? modelInstances.find(m => m.primary)
+    ?? modelInstances[0];
+  if (!instance) return null;
+  try {
+    return await createAdapter(instance);
+  } catch {
+    return null;
+  }
+}
+
+// ─── 情节记忆注入 ─────────────────────────────────────────────────────────────
+
+/**
+ * 从 EpisodicStore 加载 Worker 最近 N 条情节摘要，格式化为 system prompt 片段。
+ * 若 store 为 undefined 或无记忆，返回空字符串。
+ */
+async function buildMemorySection(
+  store: FileEpisodicStore | undefined,
+  workerId: string,
+  limit = 5,
+): Promise<string> {
+  if (!store) return '';
+
+  const episodes = await store.recent(workerId, limit);
+  if (episodes.length === 0) return '';
+
+  const lines: string[] = ['## 过往记忆（按时间倒序）'];
+  for (const ep of episodes) {
+    const date = new Date(ep.createdAt).toLocaleDateString('zh-CN');
+    lines.push(`- [${date}] ${ep.summary}`);
+    if (ep.keyPoints.length > 0) {
+      for (const kp of ep.keyPoints) {
+        lines.push(`  • ${kp}`);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
 // ─── 构建 WorkerRegistry（新 Org 模式）──────────────────────────────────────
 
 async function buildWorkerRegistry(
   workerDefs: WorkerConfig[],
   modelInstances: ModelInstanceConfig[],
+  memory: FileMemoryStore | undefined,
+  episodicStore: FileEpisodicStore | undefined,
 ): Promise<WorkerRegistry | null> {
   if (workerDefs.length === 0) return null;
 
@@ -301,22 +356,49 @@ async function buildWorkerRegistry(
 
     try {
       const adapter = await createAdapter(modelInstance);
+
+      // 构建 system prompt：身份头部 + 情节记忆注入 + 用户角色设定
+      const identityHeader = def.description
+        ? `你的名字是「${def.name}」。${def.description}`
+        : `你的名字是「${def.name}」。`;
+
+      // 加载最近 5 条情节记忆，注入到 system prompt
+      const memorySection = await buildMemorySection(episodicStore, def.id);
+
+      const fullSystem = [
+        identityHeader,
+        def.role || '',
+        memorySection,
+      ].filter(Boolean).join('\n\n').trim();
+
       const worker = await Worker.create({
         profile: {
           id:          def.id,
           name:        def.name,
-          role:        def.id,
+          role:        def.description || def.name,  // 职位描述（非 system prompt）
           skills:      def.skills,
           description: def.description,
           modelId:     def.modelId,
         },
         engineOptions: {
           model:  adapter,
-          system: def.role,  // role 字段作为 system prompt
+          system: fullSystem,
+          // 每个 Worker 使用独立 sessionId，历史文件互相隔离
+          ...(memory !== undefined && { memory, sessionId: `worker-${def.id}` }),
         },
         tokenTracker: company.tokenTracker,
         eventBus:     company.eventBus,
       });
+
+      // 注册配置的工具
+      for (const toolId of def.tools ?? []) {
+        const tool = getBuiltinTool(toolId);
+        if (tool) {
+          worker.registerTool(tool);
+        } else {
+          console.warn(`  ⚠ Worker "${def.id}" 的工具 "${toolId}" 未找到，已跳过`);
+        }
+      }
 
       company.addWorker(worker);
       registry.register(new WorkerSession(worker, company.tokenTracker));
@@ -397,14 +479,36 @@ async function main(): Promise<void> {
       })
     : undefined;
 
+  // 情节记忆存储（与 WorkingMemory 存储目录并列，可独立配置）
+  const episodicStore = enableMem
+    ? new FileEpisodicStore({
+        ...(sessionDir ? { dir: sessionDir.replace(/sessions$/, 'episodes') } : {}),
+      })
+    : undefined;
+
   // ── 模式 1：Worker 模式（优先）──────────────────────────────────────────
   const workerDefs = config.workers ?? [];
   if (workerDefs.length > 0) {
-    const workerRegistry = await buildWorkerRegistry(workerDefs, config.models);
+    const workerRegistry = await buildWorkerRegistry(workerDefs, config.models, memory, episodicStore);
     if (workerRegistry) {
       const initialSession = resolveInitialWorkerSession(workerRegistry, workerDefs, args.worker);
       const cli = await CliChannel.create({ agent: initialSession, workerRegistry });
       await cli.start();
+
+      // 会话结束后，生成情节摘要（最多等 5 秒，超时静默忽略）
+      if (episodicStore) {
+        const modelAdapter = await getAdapterForSession(initialSession, config.models);
+        if (modelAdapter) {
+          const generator = new EpisodeGenerator(modelAdapter);
+          const summaryTasks = workerRegistry.list().map(s =>
+            s.summarize(episodicStore, generator, `worker-${s.workerId}`)
+          );
+          await Promise.race([
+            Promise.allSettled(summaryTasks),
+            new Promise(r => setTimeout(r, 5000)),
+          ]);
+        }
+      }
       return;
     }
   }

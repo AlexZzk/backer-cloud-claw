@@ -24,6 +24,7 @@ import {
 } from '../src/config.js';
 import {
   selectOne,
+  selectMultiple,
   askText,
   askConfirm,
   closeWizard,
@@ -32,6 +33,7 @@ import {
   warn,
   fail,
 } from '../src/wizard.js';
+import { BUILTIN_TOOL_LIST } from '@bcc/skills';
 
 const VERSION = '0.1.0';
 
@@ -131,6 +133,7 @@ async function cmdShow(id: string): Promise<void> {
   console.log(`  使用模型：  ${worker.modelId}`);
   console.log(`  描述：      ${worker.description || '（未填写）'}`);
   console.log(`  技能标签：  ${worker.skills.length > 0 ? worker.skills.join('、') : '（未填写）'}`);
+  console.log(`  可用工具：  ${worker.tools && worker.tools.length > 0 ? worker.tools.join('、') : '（无）'}`);
   console.log(`\n  System Prompt（角色设定）：`);
   console.log(worker.role.split('\n').map(l => '    ' + l).join('\n'));
   console.log();
@@ -205,6 +208,15 @@ async function cmdAdd(): Promise<void> {
     ? skillsInput.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
+  // ── 可执行工具 ──
+  console.log();
+  const toolChoices = BUILTIN_TOOL_LIST.map(t => ({
+    label: t.id,
+    value: t.id,
+    description: t.description,
+  }));
+  const tools = await selectMultiple('选择此员工可使用的工具（可跳过）', toolChoices);
+
   // ── 描述 ──
   console.log();
   const description = await askText(
@@ -229,6 +241,7 @@ async function cmdAdd(): Promise<void> {
   console.log(`  默认：      ${isPrimary ? '是（★）' : '否'}`);
   if (description) console.log(`  描述：      ${description}`);
   if (skills.length > 0) console.log(`  技能：      ${skills.join('、')}`);
+  if (tools.length > 0) console.log(`  工具：      ${tools.join('、')}`);
   console.log(`\n  System Prompt：`);
   console.log(role.split('\n').map(l => '    ' + l).join('\n'));
   console.log();
@@ -246,6 +259,7 @@ async function cmdAdd(): Promise<void> {
     name,
     role,
     skills,
+    ...(tools.length > 0 && { tools }),
     description: description || name,
     modelId,
     ...(isPrimary && { primary: true }),
@@ -316,6 +330,17 @@ async function cmdEdit(id: string): Promise<void> {
     ? skillsInput.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
+  // 可执行工具
+  console.log();
+  const toolChoices = BUILTIN_TOOL_LIST.map(t => ({
+    label: t.id,
+    value: t.id,
+    description: t.description,
+  }));
+  const currentTools = worker.tools ?? [];
+  console.log(`  当前工具：${currentTools.length > 0 ? currentTools.join('、') : '（无）'}`);
+  const tools = await selectMultiple('修改可使用的工具（直接回车保持当前）', toolChoices, currentTools);
+
   // 描述
   console.log();
   const description = (await askText(`描述（当前：${worker.description}）`, worker.description)) || worker.description;
@@ -324,7 +349,11 @@ async function cmdEdit(id: string): Promise<void> {
   const save = await askConfirm('保存更改？', true);
   if (!save) { warn('已取消，员工配置未修改'); closeWizard(); return; }
 
-  workers[idx] = { ...worker, name, modelId, role, skills, description };
+  // exactOptionalPropertyTypes: 条件展开避免 tools: undefined
+  const updated = { ...worker, name, modelId, role, skills, description };
+  if (tools.length > 0) updated.tools = tools;
+  else delete updated.tools;
+  workers[idx] = updated;
   await saveConfig(cfg);
   ok(`员工 "${id}" 已更新`);
   closeWizard();

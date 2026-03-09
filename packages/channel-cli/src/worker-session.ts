@@ -5,22 +5,20 @@
  * WorkerSession 负责：
  *   - 将 REPL 的字符串输入转为 OrgMessage
  *   - 将 Worker.receiveStream() 的事件流转为 AgentChunk 流
- *   - 维护对话历史（OrgMessage 格式，按需转为 Message 格式供 /history 查看）
- *   - 收集并暴露 TokenUsage（供 /workers 命令查询统计）
+ *   - 代理 Worker 的完整对话历史（含持久化恢复部分）
+ *   - 会话结束时生成情节记忆摘要（非阻塞，失败不影响主流程）
  */
 
 import { randomUUID } from 'node:crypto';
-import type { AgentChunk, AgentInterface, Message, TokenUsage } from '@bcc/foundation';
+import type { AgentChunk, AgentInterface, EpisodicStore, Message, TokenUsage } from '@bcc/foundation';
 import type { Worker } from '@bcc/org';
 import type { TokenTracker } from '@bcc/org';
+import type { EpisodeGenerator } from '@bcc/memory-episodic';
 
 export class WorkerSession implements AgentInterface {
   private worker: Worker;
   private tokenTracker: TokenTracker;
   readonly threadId: string;
-
-  /** 简化历史：[role, content] 对，供 getHistory / dumpHistory 使用 */
-  private simpleHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 
   /** 最近一次响应的 token 用量 */
   lastTokenUsage: TokenUsage | undefined;
@@ -41,22 +39,41 @@ export class WorkerSession implements AgentInterface {
     return [this.worker.profile.modelId];
   }
 
+  /**
+   * 返回底层 AgentEngine 的完整历史（含持久化恢复部分）。
+   * 不再维护独立的 simpleHistory，避免两份历史不同步。
+   */
   getHistory(): Message[] {
-    return this.simpleHistory.map(h => ({ role: h.role, content: h.content }));
+    return this.worker.getHistory();
   }
 
   clearHistory(): void {
-    this.simpleHistory = [];
+    // AgentEngine.clearHistory() 通过 Worker → Engine 调用
+    // 注意：clearHistory 不清除持久化文件，只清内存（与普通模式一致）
+    // 需要时用户可手动删除 ~/.bcc/sessions/worker-{id}.json
+    const history = this.worker.getHistory();
+    history.length = 0;
   }
 
   dumpHistory(): string {
-    return this.simpleHistory
-      .map(h => `[${h.role === 'user' ? '用户' : this.worker.profile.name}]\n${h.content}`)
+    return this.worker.getHistory()
+      .map(m => {
+        const role = m.role === 'user' ? '用户' : this.worker.profile.name;
+        const text = typeof m.content === 'string'
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content
+                .filter((c): c is { type: 'text'; text: string } => typeof c === 'object' && c.type === 'text')
+                .map(c => c.text)
+                .join('')
+            : '';
+        return `[${role}]\n${text}`;
+      })
+      .filter(s => s.split('\n')[1]?.trim())
       .join('\n\n');
   }
 
   async *stream(userInput: string): AsyncIterable<AgentChunk> {
-    this.simpleHistory.push({ role: 'user', content: userInput });
     this.lastTokenUsage = undefined;
 
     const message = {
@@ -72,9 +89,8 @@ export class WorkerSession implements AgentInterface {
       if (event.type === 'chunk') {
         yield { type: 'text', text: event.text };
       } else {
-        // done — 收集回复和 token 用量
+        // done
         const reply = event.reply;
-        this.simpleHistory.push({ role: 'assistant', content: reply.content });
         this.lastTokenUsage = reply.tokenUsage;
 
         if (reply.tokenUsage) {
@@ -83,6 +99,36 @@ export class WorkerSession implements AgentInterface {
           yield { type: 'done' };
         }
       }
+    }
+  }
+
+  // ─── 情节记忆：会话结束时生成摘要 ──────────────────────────────────────────
+
+  /**
+   * 生成并保存本次会话的情节摘要（应在会话结束时调用）。
+   *
+   * 该方法是非阻塞的：调用方不需要等待完成，失败也不会影响主流程。
+   * 设计为 async 以允许调用方 await（如有必要）。
+   *
+   * @param store     情节存储后端（FileEpisodicStore 或任意 EpisodicStore 实现）
+   * @param generator 摘要生成器（使用 LLM 生成自然语言摘要）
+   * @param sessionId 本次会话 ID（用于 Episode 归属，通常是 worker-{id}）
+   */
+  async summarize(
+    store: EpisodicStore,
+    generator: EpisodeGenerator,
+    sessionId: string,
+  ): Promise<void> {
+    const history = this.worker.getHistory();
+    if (history.length < 2) return;  // 内容不足，不值得摘要
+
+    try {
+      const episode = await generator.generate(this.worker.id, sessionId, history);
+      if (episode) {
+        await store.append(episode);
+      }
+    } catch {
+      // 摘要失败不抛出，不影响用户体验
     }
   }
 

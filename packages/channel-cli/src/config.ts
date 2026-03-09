@@ -107,7 +107,13 @@ export interface WorkerConfig {
    * 会作为 AgentEngine 的 system 参数注入。
    */
   role: string;
-  /** 技能标签（元数据），例如 ["编写代码", "代码审查"] */
+  /**
+   * 可执行工具 ID 列表（对应 @bcc/skills 的 BUILTIN_TOOLS）。
+   * 例如：["datetime", "file-read", "web-fetch"]
+   * 不填或空数组表示该 Worker 不使用任何工具（纯对话模式）。
+   */
+  tools?: string[];
+  /** 技能标签（元数据标签），例如 ["编写代码", "代码审查"] */
   skills: string[];
   /** 对其他 Worker 的能力自述（供 /workers 命令展示） */
   description: string;
