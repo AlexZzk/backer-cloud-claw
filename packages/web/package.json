@@ -1,0 +1,28 @@
+{
+  "name": "@bcc/web",
+  "version": "0.1.0",
+  "description": "backer-cloud-claw Web UI",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@arco-design/web-vue": "^2.55.3",
+    "@vueuse/core": "^10.9.0",
+    "echarts": "^5.5.0",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.21",
+    "vue-i18n": "^9.10.2",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "*",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "typescript": "*",
+    "vite": "^5.2.0",
+    "vue-tsc": "^2.0.6"
+  }
+}
