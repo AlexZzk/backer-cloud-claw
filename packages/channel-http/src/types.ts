@@ -22,9 +22,15 @@ export interface ApiWorker {
 
 // ─── Session ──────────────────────────────────────────────────────────────────
 
+/** 会话类型：chat = 用户↔Worker；dm = Worker↔Worker 直接消息 */
+export type SessionType = 'chat' | 'dm';
+
 export interface ApiSession {
   id: string;
+  type: SessionType;
   workerId: string;
+  /** DM 会话中接收方 Worker ID */
+  toWorkerId?: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -34,6 +40,8 @@ export interface ApiSession {
 export interface ApiMessage {
   id: string;
   role: 'user' | 'assistant';
+  /** DM 会话中标记发言 Worker ID */
+  speakerId?: string;
   content: string;
   timestamp: number;
   tokenUsage?: {
@@ -79,6 +87,7 @@ export interface WorkerTokenStats {
 
 export type SseEvent =
   | { event: 'chunk';       data: { text: string } }
+  | { event: 'speaker';     data: { workerId: string; workerName: string } }
   | { event: 'tool_call';   data: { tool: string; input: Record<string, unknown> } }
   | { event: 'tool_result'; data: { tool: string; result: string; isError: boolean } }
   | { event: 'done';        data: { tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number } } }

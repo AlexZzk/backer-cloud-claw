@@ -311,6 +311,12 @@ export class HttpServer {
       }
     }
 
+    // ── POST /api/dm-sessions  (创建 Worker↔Worker DM 会话)
+    if (method === 'POST' && path === '/api/dm-sessions') {
+      await this.handleCreateDmSession(req, res);
+      return;
+    }
+
     // ── POST /api/workers  (创建 Worker)
     if (method === 'POST' && path === '/api/workers') {
       await this.handleCreateWorker(req, res);
@@ -445,20 +451,24 @@ export class HttpServer {
       'Connection':    'keep-alive',
     });
 
-    // 记录用户消息
-    const userMsg = {
-      id:        randomUUID(),
-      role:      'user' as const,
-      content,
-      timestamp: Date.now(),
-    };
-    entry.messages.push(userMsg);
-    if (entry.messages.length === 1) {
-      entry.title = content.slice(0, 30);
+    if (entry.type === 'dm') {
+      await this.handleDmMessage(res, entry, content);
+    } else {
+      await this.handleChatMessage(res, entry, content);
     }
+  }
+
+  /** 普通 chat 会话：用户 → Worker */
+  private async handleChatMessage(
+    res: ServerResponse,
+    entry: import('./session-store.js').SessionEntry,
+    content: string,
+  ) {
+    // 记录用户消息
+    entry.messages.push({ id: randomUUID(), role: 'user', content, timestamp: Date.now() });
+    if (entry.messages.length === 1) entry.title = content.slice(0, 30);
     entry.updatedAt = Date.now();
 
-    // 流式处理 Agent 回复
     let assistantText = '';
     let tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
 
@@ -466,10 +476,7 @@ export class HttpServer {
       for await (const chunk of entry.agent.stream(content)) {
         switch (chunk.type) {
           case 'text':
-            if (chunk.text) {
-              assistantText += chunk.text;
-              writeSse(res, { event: 'chunk', data: { text: chunk.text } });
-            }
+            if (chunk.text) { assistantText += chunk.text; writeSse(res, { event: 'chunk', data: { text: chunk.text } }); }
             break;
           case 'tool_call':
             writeSse(res, { event: 'tool_call', data: { tool: chunk.tool, input: chunk.input } });
@@ -478,47 +485,155 @@ export class HttpServer {
             writeSse(res, { event: 'tool_result', data: { tool: chunk.tool, result: chunk.result, isError: chunk.isError } });
             break;
           case 'done':
-            if (chunk.tokenUsage) {
-              tokenUsage = chunk.tokenUsage;
-            }
+            if (chunk.tokenUsage) tokenUsage = chunk.tokenUsage;
             break;
         }
       }
     } catch (err) {
       writeSse(res, { event: 'error', data: { message: err instanceof Error ? err.message : String(err) } });
-      res.end();
-      return;
+      res.end(); return;
     }
 
-    // 记录 assistant 消息
     if (assistantText) {
       entry.messages.push({
-        id:        randomUUID(),
-        role:      'assistant',
-        content:   assistantText,
-        timestamp: Date.now(),
+        id: randomUUID(), role: 'assistant', content: assistantText, timestamp: Date.now(),
         ...(tokenUsage && { tokenUsage: { inputTokens: tokenUsage.inputTokens, outputTokens: tokenUsage.outputTokens } }),
       });
       entry.updatedAt = Date.now();
     }
 
-    // 更新 token 统计
-    if (tokenUsage) {
-      const workerCfg = (this.config.workers ?? []).find(w => w.id === entry.workerId);
-      const workerName = workerCfg?.name ?? entry.workerId;
-      const acc = this.tokenAcc.get(entry.workerId) ?? {
-        workerId: entry.workerId, workerName,
-        inputTokens: 0, outputTokens: 0, totalTokens: 0, callCount: 0,
-      };
-      acc.inputTokens  += tokenUsage.inputTokens;
-      acc.outputTokens += tokenUsage.outputTokens;
-      acc.totalTokens  += tokenUsage.totalTokens;
-      acc.callCount    += 1;
-      this.tokenAcc.set(entry.workerId, acc);
-    }
-
+    this.accumulateTokens(entry.workerId, tokenUsage);
     writeSse(res, { event: 'done', data: tokenUsage ? { tokenUsage } : {} });
     res.end();
+  }
+
+  /** DM 会话：fromWorker → toWorker（两轮 LLM 调用） */
+  private async handleDmMessage(
+    res: ServerResponse,
+    entry: import('./session-store.js').SessionEntry,
+    content: string,
+  ) {
+    const fromWorkerCfg = (this.config.workers ?? []).find(w => w.id === entry.workerId);
+    const toWorkerCfg   = (this.config.workers ?? []).find(w => w.id === entry.toWorkerId);
+    const fromName = fromWorkerCfg?.name ?? entry.workerId;
+    const toName   = toWorkerCfg?.name   ?? (entry.toWorkerId ?? 'Worker B');
+
+    // 记录用户指令（可选：仅在首条消息时更新标题）
+    if (entry.messages.length === 0) {
+      entry.title = `${fromName} → ${toName}`;
+    }
+    entry.messages.push({ id: randomUUID(), role: 'user', content, timestamp: Date.now() });
+    entry.updatedAt = Date.now();
+
+    // ── 第一轮：fromWorker 生成消息 ────────────────────────────────────────
+    writeSse(res, { event: 'speaker', data: { workerId: entry.workerId, workerName: fromName } });
+
+    let fromText = '';
+    try {
+      for await (const chunk of entry.agent.stream(content)) {
+        if (chunk.type === 'text' && chunk.text) {
+          fromText += chunk.text;
+          writeSse(res, { event: 'chunk', data: { text: chunk.text } });
+        }
+        if (chunk.type === 'tool_call') writeSse(res, { event: 'tool_call', data: { tool: chunk.tool, input: chunk.input } });
+        if (chunk.type === 'tool_result') writeSse(res, { event: 'tool_result', data: { tool: chunk.tool, result: chunk.result, isError: chunk.isError } });
+      }
+    } catch (err) {
+      writeSse(res, { event: 'error', data: { message: err instanceof Error ? err.message : String(err) } });
+      res.end(); return;
+    }
+
+    if (fromText) {
+      entry.messages.push({ id: randomUUID(), role: 'assistant', speakerId: entry.workerId, content: fromText, timestamp: Date.now() });
+      entry.updatedAt = Date.now();
+    }
+
+    // ── 第二轮：toWorker 回复 ──────────────────────────────────────────────
+    if (!entry.toAgent || !fromText) {
+      writeSse(res, { event: 'done', data: {} });
+      res.end(); return;
+    }
+
+    writeSse(res, { event: 'speaker', data: { workerId: entry.toWorkerId!, workerName: toName } });
+
+    // 构建发给 toWorker 的提示（带发送方身份）
+    const promptForTo = `[来自 ${fromName} 的消息]\n${fromText}`;
+    let toText = '';
+    try {
+      for await (const chunk of entry.toAgent.stream(promptForTo)) {
+        if (chunk.type === 'text' && chunk.text) {
+          toText += chunk.text;
+          writeSse(res, { event: 'chunk', data: { text: chunk.text } });
+        }
+        if (chunk.type === 'tool_call') writeSse(res, { event: 'tool_call', data: { tool: chunk.tool, input: chunk.input } });
+        if (chunk.type === 'tool_result') writeSse(res, { event: 'tool_result', data: { tool: chunk.tool, result: chunk.result, isError: chunk.isError } });
+      }
+    } catch (err) {
+      writeSse(res, { event: 'error', data: { message: err instanceof Error ? err.message : String(err) } });
+      res.end(); return;
+    }
+
+    if (toText) {
+      entry.messages.push({ id: randomUUID(), role: 'assistant', speakerId: entry.toWorkerId!, content: toText, timestamp: Date.now() });
+      entry.updatedAt = Date.now();
+    }
+
+    writeSse(res, { event: 'done', data: {} });
+    res.end();
+  }
+
+  private accumulateTokens(
+    workerId: string,
+    tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined,
+  ) {
+    if (!tokenUsage) return;
+    const workerCfg = (this.config.workers ?? []).find(w => w.id === workerId);
+    const workerName = workerCfg?.name ?? workerId;
+    const acc = this.tokenAcc.get(workerId) ?? {
+      workerId, workerName, inputTokens: 0, outputTokens: 0, totalTokens: 0, callCount: 0,
+    };
+    acc.inputTokens  += tokenUsage.inputTokens;
+    acc.outputTokens += tokenUsage.outputTokens;
+    acc.totalTokens  += tokenUsage.totalTokens;
+    acc.callCount    += 1;
+    this.tokenAcc.set(workerId, acc);
+  }
+
+  // ── DM 会话 ──────────────────────────────────────────────────────────────────
+
+  private async handleCreateDmSession(req: IncomingMessage, res: ServerResponse) {
+    let body: { fromWorkerId?: string; toWorkerId?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { fromWorkerId, toWorkerId } = body;
+    if (!fromWorkerId) { badRequest(res, '"fromWorkerId" is required'); return; }
+    if (!toWorkerId)   { badRequest(res, '"toWorkerId" is required'); return; }
+    if (fromWorkerId === toWorkerId) { badRequest(res, 'fromWorkerId and toWorkerId must be different'); return; }
+
+    const workers = this.config.workers ?? [];
+    const fromCfg = workers.find(w => w.id === fromWorkerId);
+    const toCfg   = workers.find(w => w.id === toWorkerId);
+    if (!fromCfg || !toCfg) { notFound(res); return; }
+
+    // 如果会话已存在则直接返回（幂等）
+    const existing = this.store.findDm(fromWorkerId, toWorkerId);
+    if (existing) {
+      json(res, 200, this.store.toApiSession(existing));
+      return;
+    }
+
+    try {
+      const fromAgent = await this.buildAgentForWorker(fromCfg);
+      const toAgent   = await this.buildAgentForWorker(toCfg);
+      const entry = this.store.createDm(fromWorkerId, toWorkerId, fromAgent, toAgent);
+      json(res, 201, this.store.toApiSession(entry));
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : String(err));
+    }
   }
 
   // ── Model CRUD ───────────────────────────────────────────────────────────────

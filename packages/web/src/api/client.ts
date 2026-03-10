@@ -54,9 +54,14 @@ export interface ApiWorker {
   status: 'online' | 'idle' | 'offline';
 }
 
+export type SessionType = 'chat' | 'dm';
+
 export interface ApiSession {
   id: string;
+  type: SessionType;
   workerId: string;
+  /** DM 会话中接收方 Worker ID */
+  toWorkerId?: string;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -66,6 +71,8 @@ export interface ApiSession {
 export interface ApiMessage {
   id: string;
   role: 'user' | 'assistant';
+  /** DM 会话中标记发言 Worker ID */
+  speakerId?: string;
   content: string;
   timestamp: number;
   tokenUsage?: { inputTokens: number; outputTokens: number };
@@ -128,14 +135,20 @@ export const sessionsApi = {
   delete:       (sessionId: string)              => del(`/sessions/${sessionId}`),
 };
 
+export const dmApi = {
+  create: (fromWorkerId: string, toWorkerId: string) =>
+    post<ApiSession>('/dm-sessions', { fromWorkerId, toWorkerId }),
+};
+
 // ─── SSE 流式发送消息 ─────────────────────────────────────────────────────────
 
 export interface StreamCallbacks {
-  onChunk:      (text: string) => void;
-  onToolCall?:  (tool: string, input: Record<string, unknown>) => void;
+  onChunk:       (text: string) => void;
+  onSpeaker?:    (workerId: string, workerName: string) => void;
+  onToolCall?:   (tool: string, input: Record<string, unknown>) => void;
   onToolResult?: (tool: string, result: string, isError: boolean) => void;
-  onDone:       (tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number }) => void;
-  onError:      (message: string) => void;
+  onDone:        (tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number }) => void;
+  onError:       (message: string) => void;
 }
 
 export async function sendMessageStream(
@@ -176,6 +189,9 @@ export async function sendMessageStream(
           switch (currentEvent) {
             case 'chunk':
               callbacks.onChunk((data['text'] as string) ?? '');
+              break;
+            case 'speaker':
+              callbacks.onSpeaker?.(data['workerId'] as string, data['workerName'] as string);
               break;
             case 'tool_call':
               callbacks.onToolCall?.(data['tool'] as string, data['input'] as Record<string, unknown>);
