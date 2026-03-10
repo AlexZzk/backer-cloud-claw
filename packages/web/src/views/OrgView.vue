@@ -9,7 +9,7 @@
         </a-button>
       </div>
 
-      <div class="company-info">
+      <div class="company-info" @click="selectedDeptId = null; selectedEmployeeId = null" style="cursor:pointer">
         <div class="company-logo">🏢</div>
         <div>
           <div class="company-name">{{ company.name }}</div>
@@ -38,7 +38,16 @@
 
     <!-- Main content -->
     <div class="org-main">
-      <!-- View toggle -->
+      <!-- Breadcrumb -->
+      <div class="main-breadcrumb" v-if="selectedDeptId">
+        <span class="bc-link" @click="selectedDeptId = null; selectedEmployeeId = null">
+          <icon-left />{{ company.name }}
+        </span>
+        <icon-right class="bc-sep" />
+        <span class="bc-current">{{ selectedDept?.name }}</span>
+      </div>
+
+      <!-- View header -->
       <div class="view-header">
         <div>
           <h2 v-if="selectedDept">{{ selectedDept.name }}</h2>
@@ -72,19 +81,15 @@
           <div class="emp-role">{{ emp.role }}</div>
           <div class="emp-email">{{ emp.email }}</div>
           <div class="emp-dept-tag">
-            <a-tag size="small" color="arcoblue">
-              {{ getDeptName(emp.departmentId) }}
-            </a-tag>
+            <a-tag size="small" color="arcoblue">{{ getDeptName(emp.departmentId) }}</a-tag>
           </div>
           <div v-if="emp.workerId" class="emp-worker-badge">
-            <a-tag size="small" color="green">
-              🤖 {{ getWorkerName(emp.workerId) }}
-            </a-tag>
+            <a-tag size="small" color="green">🤖 {{ getWorkerName(emp.workerId) }}</a-tag>
           </div>
         </div>
       </div>
 
-      <!-- Employee list -->
+      <!-- Employee table -->
       <a-table
         v-else
         :data="displayEmployees"
@@ -119,24 +124,70 @@
         </template>
       </a-table>
 
-      <!-- Org chart overview (when no dept selected) -->
+      <!-- Org chart (only when no dept selected) — inline expandable tree -->
       <div v-if="!selectedDeptId" class="org-overview">
-        <h3 style="margin-bottom: 16px;">{{ t('org.orgChart') }}</h3>
-        <div class="org-chart">
-          <div class="oc-company">
-            <div class="oc-node company-node">
-              <span>🏢</span>
+        <h3 class="overview-title">{{ t('org.orgChart') }}</h3>
+        <div class="org-tree">
+          <!-- Company root -->
+          <div class="ot-root">
+            <div class="ot-node root-node">
+              <span class="ot-avatar">🏢</span>
               <strong>{{ company.name }}</strong>
+              <span class="ot-meta">{{ company.departments.length }} 个部门</span>
             </div>
-            <div class="oc-children">
-              <div v-for="dept in company.departments" :key="dept.id" class="oc-dept">
-                <div class="oc-connector"></div>
-                <div class="oc-node dept-node" @click="openDeptDrawer(dept.id)">
-                  <icon-team />
-                  <span>{{ dept.name }}</span>
-                  <small>{{ dept.members.length }}人</small>
-                </div>
+          </div>
+
+          <!-- Department branches -->
+          <div class="ot-children">
+            <div
+              v-for="(dept, dIdx) in company.departments"
+              :key="dept.id"
+              class="ot-branch"
+              :class="{ 'ot-last': dIdx === company.departments.length - 1 }"
+            >
+              <!-- Dept node -->
+              <div
+                class="ot-node dept-node"
+                :class="{ expanded: expandedDepts.has(dept.id) }"
+                @click="toggleDept(dept.id)"
+              >
+                <span class="ot-expand">{{ expandedDepts.has(dept.id) ? '▾' : '▸' }}</span>
+                <icon-team class="ot-icon" />
+                <span class="ot-name">{{ dept.name }}</span>
+                <span class="ot-meta">{{ dept.members.length }} 人</span>
+                <a-button
+                  type="text"
+                  size="mini"
+                  class="dept-nav-btn"
+                  @click.stop="selectedDeptId = dept.id"
+                >
+                  <template #icon><icon-right /></template>
+                </a-button>
               </div>
+
+              <!-- Member sub-tree (inline, no drawer) -->
+              <transition name="tree-slide">
+                <div v-if="expandedDepts.has(dept.id)" class="ot-children member-children">
+                  <div
+                    v-for="(emp, eIdx) in dept.members"
+                    :key="emp.id"
+                    class="ot-branch"
+                    :class="{ 'ot-last': eIdx === dept.members.length - 1 }"
+                  >
+                    <div
+                      class="ot-node member-node"
+                      @click="selectedEmployeeId = emp.id"
+                    >
+                      <span class="ot-avatar">{{ emp.avatar }}</span>
+                      <span class="ot-name">{{ emp.name }}</span>
+                      <span class="ot-role">· {{ emp.role }}</span>
+                      <a-tag v-if="emp.workerId" color="green" size="small">
+                        🤖 {{ getWorkerName(emp.workerId) }}
+                      </a-tag>
+                    </div>
+                  </div>
+                </div>
+              </transition>
             </div>
           </div>
         </div>
@@ -157,58 +208,12 @@
         <h2>{{ selectedEmployee.name }}</h2>
         <p class="empd-role">{{ selectedEmployee.role }}</p>
         <a-divider />
-        <div class="empd-row">
-          <icon-email />
-          <span>{{ selectedEmployee.email }}</span>
-        </div>
-        <div class="empd-row">
-          <icon-team />
-          <span>{{ getDeptName(selectedEmployee.departmentId) }}</span>
-        </div>
+        <div class="empd-row"><icon-email /><span>{{ selectedEmployee.email }}</span></div>
+        <div class="empd-row"><icon-team /><span>{{ getDeptName(selectedEmployee.departmentId) }}</span></div>
         <div v-if="selectedEmployee.workerId" class="empd-row">
           <span>🤖</span>
           <a-tag color="green">{{ getWorkerName(selectedEmployee.workerId) }}</a-tag>
         </div>
-      </div>
-    </a-drawer>
-
-    <!-- Department detail drawer (triggered by org chart click) -->
-    <a-drawer
-      v-if="drawerDept"
-      :visible="showDeptDrawer"
-      :title="drawerDept.name"
-      :width="360"
-      @cancel="showDeptDrawer = false"
-      :footer="false"
-    >
-      <div class="dept-detail">
-        <p class="dept-detail-desc">{{ drawerDept.description }}</p>
-        <a-divider />
-        <h4 style="margin-bottom: 12px;">{{ t('org.members') }}（{{ drawerDept.members.length }}）</h4>
-        <div class="dept-member-list">
-          <div
-            v-for="emp in drawerDept.members"
-            :key="emp.id"
-            class="dept-member-item"
-          >
-            <span class="dm-avatar">{{ emp.avatar }}</span>
-            <div class="dm-info">
-              <div class="dm-name">{{ emp.name }}</div>
-              <div class="dm-role">{{ emp.role }}</div>
-            </div>
-            <a-tag v-if="emp.workerId" color="green" size="small">
-              🤖 {{ getWorkerName(emp.workerId) }}
-            </a-tag>
-          </div>
-        </div>
-        <a-divider />
-        <a-button
-          type="primary"
-          long
-          @click="selectedDeptId = drawerDept!.id; showDeptDrawer = false"
-        >
-          查看完整部门详情
-        </a-button>
       </div>
     </a-drawer>
 
@@ -280,16 +285,13 @@ const viewMode = ref<'grid' | 'list'>('grid');
 const showCreateDept = ref(false);
 const showAddEmployee = ref(false);
 
-// Org chart department drawer
-const showDeptDrawer = ref(false);
-const drawerDeptId = ref<string | null>(null);
-const drawerDept = computed(() =>
-  drawerDeptId.value ? company.departments.find(d => d.id === drawerDeptId.value) ?? null : null
-);
+// Org chart inline expansion state
+const expandedDepts = ref<Set<string>>(new Set());
 
-function openDeptDrawer(deptId: string) {
-  drawerDeptId.value = deptId;
-  showDeptDrawer.value = true;
+function toggleDept(deptId: string) {
+  const s = new Set(expandedDepts.value);
+  if (s.has(deptId)) { s.delete(deptId); } else { s.add(deptId); }
+  expandedDepts.value = s;
 }
 
 const newDept = reactive({ name: '', description: '' });
@@ -392,21 +394,22 @@ function handleAddEmployee() {
   align-items: center;
   gap: 10px;
   padding: 8px 16px 12px;
+  border-radius: 8px;
+  margin: 0 8px;
+  transition: background 0.12s;
 }
+.company-info:hover { background: rgba(22,93,255,0.05); }
 
-.company-logo {
-  font-size: 32px;
-  flex-shrink: 0;
-}
+.company-logo { font-size: 30px; flex-shrink: 0; }
 
 .company-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .company-desc {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
   margin-top: 2px;
 }
@@ -454,15 +457,43 @@ function handleAddEmployee() {
 .org-main {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 0 24px 24px;
   background: var(--bg-card);
 }
 
+/* Breadcrumb */
+.main-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 0 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.bc-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #165dff;
+  cursor: pointer;
+  font-weight: 500;
+}
+.bc-link:hover { text-decoration: underline; }
+
+.bc-sep { font-size: 14px; color: var(--text-tertiary); }
+
+.bc-current {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* View header */
 .view-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 20px;
+  padding: 16px 0 12px;
 }
 
 .view-header h2 {
@@ -514,99 +545,169 @@ function handleAddEmployee() {
 .emp-avatar { font-size: 40px; margin-bottom: 10px; }
 .emp-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .emp-role { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
-.emp-email { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.emp-email {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .emp-dept-tag { margin-top: 8px; }
 .emp-worker-badge { margin-top: 6px; }
+.no-worker { color: var(--text-tertiary); }
 
-/* ─── Org Chart ──────────────────────────────────────────────────────── */
+/* ─── Org Tree ───────────────────────────────────────────────────────── */
 
 .org-overview {
-  margin-top: 32px;
+  margin-top: 28px;
   padding-top: 20px;
   border-top: 1px solid var(--border-color);
 }
 
-.org-chart {
-  overflow-x: auto;
-  padding: 20px 0;
-}
-
-.oc-company {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0;
-}
-
-.oc-node {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 16px 20px;
-  border-radius: 14px;
-  border: 2px solid var(--border-color);
-  background: var(--bg-base);
-  text-align: center;
-  font-size: 13px;
-  min-width: 120px;
-}
-
-.oc-node.company-node {
-  background: linear-gradient(135deg, rgba(22, 93, 255, 0.1), rgba(114, 46, 209, 0.1));
-  border-color: #165dff;
+.overview-title {
   font-size: 15px;
-  padding: 20px 28px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 20px;
 }
 
-.oc-node.company-node span { font-size: 28px; }
+.org-tree {
+  font-size: 14px;
+}
 
-.oc-node.dept-node {
+/* Root node */
+.ot-root {
+  margin-bottom: 4px;
+}
+
+.ot-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
   cursor: pointer;
   transition: all 0.15s;
+  user-select: none;
 }
 
-.oc-node.dept-node:hover {
-  border-color: #165dff;
-  box-shadow: var(--shadow-sm);
+.root-node {
+  cursor: default;
+  background: linear-gradient(135deg, rgba(22,93,255,0.06), rgba(114,46,209,0.06));
+  border-color: rgba(22,93,255,0.2);
+  font-size: 15px;
 }
 
-.oc-node small {
-  font-size: 11px;
-  color: var(--text-tertiary);
+.root-node .ot-avatar { font-size: 22px; }
+
+/* Children container — draws the left vertical line */
+.ot-children {
+  margin-left: 24px;
+  border-left: 1.5px solid var(--border-color);
+  padding-left: 0;
 }
 
-.oc-children {
-  display: flex;
-  gap: 20px;
+.member-children {
+  border-left-color: rgba(22,93,255,0.2);
+}
+
+/* Branch row — draws the horizontal connector */
+.ot-branch {
   position: relative;
-  padding-top: 0;
+  padding: 4px 0 4px 20px;
 }
 
-.oc-children::before {
+.ot-branch::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: calc(100% - 80px);
-  height: 2px;
+  left: 0;
+  top: 20px;
+  width: 20px;
+  height: 1.5px;
   background: var(--border-color);
 }
 
-.oc-dept {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+.member-children > .ot-branch::before {
+  background: rgba(22,93,255,0.2);
 }
 
-.oc-connector {
-  width: 2px;
-  height: 24px;
-  background: var(--border-color);
+/* Dept node */
+.dept-node {
+  color: var(--text-primary);
+  gap: 7px;
+}
+.dept-node:hover {
+  background: rgba(22,93,255,0.06);
+  border-color: #165dff;
+}
+.dept-node.expanded {
+  background: rgba(22,93,255,0.08);
+  border-color: rgba(22,93,255,0.4);
+  color: #165dff;
 }
 
-/* ─── Employee Detail ────────────────────────────────────────────────── */
+.ot-expand {
+  font-size: 12px;
+  width: 14px;
+  text-align: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.ot-icon { font-size: 15px; color: inherit; }
+
+.ot-name {
+  font-weight: 500;
+}
+
+.ot-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-left: 4px;
+}
+
+.dept-nav-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+  margin-left: 4px;
+}
+.dept-node:hover .dept-nav-btn { opacity: 1; }
+
+/* Member node */
+.member-node {
+  border-color: rgba(22,93,255,0.1);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  gap: 8px;
+}
+.member-node:hover {
+  background: rgba(22,93,255,0.04);
+  border-color: rgba(22,93,255,0.2);
+  color: var(--text-primary);
+}
+
+.ot-avatar { font-size: 18px; }
+.ot-role { font-size: 12px; color: var(--text-tertiary); }
+
+/* Tree expand animation */
+.tree-slide-enter-active {
+  transition: all 0.2s ease;
+  overflow: hidden;
+}
+.tree-slide-leave-active {
+  transition: all 0.15s ease;
+  overflow: hidden;
+}
+.tree-slide-enter-from,
+.tree-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+/* ─── Employee Drawer ────────────────────────────────────────────────── */
 
 .emp-detail {
   display: flex;
@@ -616,10 +717,7 @@ function handleAddEmployee() {
   gap: 8px;
 }
 
-.empd-avatar {
-  font-size: 60px;
-  margin-bottom: 8px;
-}
+.empd-avatar { font-size: 60px; margin-bottom: 8px; }
 
 .emp-detail h2 {
   font-size: 20px;
@@ -627,10 +725,7 @@ function handleAddEmployee() {
   color: var(--text-primary);
 }
 
-.empd-role {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
+.empd-role { color: var(--text-secondary); font-size: 14px; }
 
 .empd-row {
   display: flex;
@@ -640,53 +735,5 @@ function handleAddEmployee() {
   color: var(--text-secondary);
   width: 100%;
   padding: 6px 0;
-}
-
-.no-worker {
-  color: var(--text-tertiary);
-}
-
-/* ─── Department Drawer ──────────────────────────────────────────────── */
-
-.dept-detail {
-  padding: 4px 0;
-}
-
-.dept-detail-desc {
-  font-size: 14px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-}
-
-.dept-member-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.dept-member-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg-base);
-  border-radius: 10px;
-  border: 1px solid var(--border-color);
-}
-
-.dm-avatar { font-size: 24px; flex-shrink: 0; }
-
-.dm-info { flex: 1; min-width: 0; }
-
-.dm-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.dm-role {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 2px;
 }
 </style>

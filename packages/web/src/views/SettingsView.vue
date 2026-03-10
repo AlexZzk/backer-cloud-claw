@@ -21,6 +21,7 @@
 
     <!-- Settings main -->
     <div class="settings-main">
+
       <!-- Profile -->
       <div v-if="activeSection === 'profile'" class="settings-section">
         <h2>{{ t('settings.profile') }}</h2>
@@ -39,47 +40,90 @@
         </a-form>
       </div>
 
-      <!-- API Keys -->
-      <div v-if="activeSection === 'apikeys'" class="settings-section">
-        <h2>{{ t('settings.apiKeys') }}</h2>
-        <p class="section-desc">{{ t('settings.keyMasked') }}</p>
-
-        <div class="api-key-list">
-          <div class="api-key-item" v-for="key in apiKeys" :key="key.id">
-            <div class="aki-header">
-              <span class="aki-provider">{{ key.icon }} {{ key.name }}</span>
-              <a-tag :color="key.configured ? 'green' : 'gray'" size="small">
-                {{ key.configured ? t('common.enable') : '未配置' }}
-              </a-tag>
-            </div>
-            <div class="aki-input">
-              <a-input-password
-                v-model="key.value"
-                :placeholder="key.configured ? '••••••••••••••••' : t('settings.keyPlaceholder')"
-                allow-clear
-              />
-            </div>
-            <a-button
-              type="primary"
-              size="small"
-              @click="saveApiKey(key)"
-            >{{ t('common.save') }}</a-button>
+      <!-- Model Management -->
+      <div v-if="activeSection === 'modelmgmt'" class="settings-section">
+        <div class="section-header-row">
+          <div>
+            <h2>{{ t('settings.modelMgmt') }}</h2>
+            <p class="section-desc">{{ t('settings.modelMgmtDesc') }}</p>
           </div>
+          <a-button type="primary" @click="openAddModal">
+            + {{ t('settings.addModel') }}
+          </a-button>
         </div>
 
-        <a-alert
-          type="info"
-          style="margin-top: 20px; max-width: 560px;"
-        >
-          <template #message>
-            <span v-if="appStore.locale === 'zh-CN'">
-              API Key 保存在本地，不会上传至服务器。请勿分享给他人。
-            </span>
-            <span v-else>
-              API Keys are stored locally and never sent to any server. Do not share them.
-            </span>
-          </template>
-        </a-alert>
+        <div class="model-list">
+          <div
+            v-for="model in modelsStore.models"
+            :key="model.id"
+            class="model-card"
+            :class="{ 'is-default': model.isDefault }"
+          >
+            <div class="mc-top">
+              <div class="mc-name-row">
+                <span class="mc-name">{{ model.displayName }}</span>
+                <a-tag v-if="model.isDefault" color="arcoblue" size="small">
+                  {{ t('settings.defaultBadge') }}
+                </a-tag>
+              </div>
+              <div class="mc-meta">
+                <span class="mc-model-id">{{ model.modelId }}</span>
+              </div>
+            </div>
+
+            <div class="mc-middle">
+              <div class="mc-badge-row">
+                <a-tag
+                  :color="protocolColor(model.protocol)"
+                  size="small"
+                  class="mc-protocol-tag"
+                >
+                  {{ protocolLabel(model.protocol) }}
+                </a-tag>
+                <span class="mc-base-url" v-if="model.baseUrl">{{ model.baseUrl }}</span>
+              </div>
+              <div class="mc-key-row">
+                <span class="mc-key-label">{{ t('settings.apiKey') }}:</span>
+                <span v-if="model.apiKey" class="mc-key-val configured">
+                  {{ maskKey(model.apiKey) }}
+                </span>
+                <span v-else class="mc-key-val unconfigured">
+                  {{ t('settings.apiKeyEmpty') }}
+                </span>
+              </div>
+            </div>
+
+            <div class="mc-actions">
+              <a-button
+                v-if="!model.isDefault"
+                size="small"
+                type="outline"
+                @click="modelsStore.setDefault(model.id)"
+              >
+                {{ t('settings.setDefault') }}
+              </a-button>
+              <a-button size="small" @click="openEditModal(model)">
+                {{ t('common.edit') }}
+              </a-button>
+              <a-button
+                size="small"
+                status="danger"
+                type="outline"
+                :disabled="model.isDefault"
+                @click="confirmDeleteModel(model.id)"
+              >
+                {{ t('common.delete') }}
+              </a-button>
+            </div>
+          </div>
+
+          <div v-if="modelsStore.models.length === 0" class="no-models">
+            <p>{{ t('common.noData') }}</p>
+            <a-button type="primary" @click="openAddModal">
+              + {{ t('settings.addModel') }}
+            </a-button>
+          </div>
+        </div>
       </div>
 
       <!-- Appearance -->
@@ -133,62 +177,12 @@
         </div>
       </div>
 
-      <!-- Model Config -->
-      <div v-if="activeSection === 'models'" class="settings-section">
-        <h2>{{ t('settings.modelConfig') }}</h2>
-        <p class="section-desc">{{ t('settings.modelConfigDesc') }}</p>
-        <a-form layout="vertical" style="max-width: 560px;">
-          <a-form-item :label="t('settings.defaultModel')">
-            <a-select v-model="modelForm.defaultModel">
-              <a-option
-                v-for="m in workersStore.AVAILABLE_MODELS"
-                :key="m.id"
-                :value="m.id"
-              >{{ m.label }}</a-option>
-            </a-select>
-          </a-form-item>
-
-          <a-form-item :label="t('settings.temperature')">
-            <div class="slider-row">
-              <a-slider
-                v-model="modelForm.temperature"
-                :min="0" :max="2" :step="0.1"
-                style="flex: 1"
-              />
-              <span class="slider-val">{{ modelForm.temperature }}</span>
-            </div>
-            <div class="form-hint">{{ t('settings.temperatureHint') }}</div>
-          </a-form-item>
-
-          <a-form-item :label="t('settings.maxTokens')">
-            <a-input-number
-              v-model="modelForm.maxTokens"
-              :min="256" :max="200000" :step="256"
-              style="width: 200px"
-            />
-            <div class="form-hint">{{ t('settings.maxTokensHint') }}</div>
-          </a-form-item>
-
-          <a-form-item :label="t('settings.systemPrompt')">
-            <a-textarea
-              v-model="modelForm.systemPrompt"
-              :placeholder="t('settings.systemPromptPlaceholder')"
-              :auto-size="{ minRows: 3, maxRows: 6 }"
-            />
-            <div class="form-hint">{{ t('settings.systemPromptHint') }}</div>
-          </a-form-item>
-
-          <a-button type="primary" @click="saveModels">{{ t('common.save') }}</a-button>
-        </a-form>
-      </div>
-
       <!-- Storage Config -->
       <div v-if="activeSection === 'storage'" class="settings-section">
         <h2>{{ t('settings.storageConfig') }}</h2>
         <p class="section-desc">{{ t('settings.storageConfigDesc') }}</p>
 
         <a-form layout="vertical" style="max-width: 560px;">
-          <!-- Memory store -->
           <a-form-item :label="t('settings.memoryStore')">
             <a-radio-group v-model="storageForm.memoryType" direction="vertical">
               <a-radio value="file">
@@ -227,7 +221,6 @@
 
           <a-divider />
 
-          <!-- Episode config -->
           <a-form-item :label="t('settings.episodicMemory')">
             <a-switch v-model="storageForm.episodicEnabled" />
             <div class="form-hint">{{ t('settings.episodicMemoryHint') }}</div>
@@ -296,6 +289,64 @@
         </div>
       </div>
     </div>
+
+    <!-- Add / Edit Model Modal -->
+    <a-modal
+      v-model:visible="modalVisible"
+      :title="editingModel ? t('settings.editModel') : t('settings.addModel')"
+      :width="520"
+      @ok="submitModelForm"
+      @cancel="closeModal"
+    >
+      <a-form :model="modelForm" layout="vertical">
+        <a-form-item :label="t('settings.displayName')" required>
+          <a-input
+            v-model="modelForm.displayName"
+            :placeholder="t('settings.displayNamePlaceholder')"
+          />
+        </a-form-item>
+
+        <a-form-item :label="t('settings.modelId')" required>
+          <a-input
+            v-model="modelForm.modelId"
+            :placeholder="t('settings.modelIdPlaceholder')"
+          />
+        </a-form-item>
+
+        <a-form-item :label="t('settings.protocol')" required>
+          <a-select v-model="modelForm.protocol">
+            <a-option value="anthropic">{{ t('settings.protocolAnthropic') }}</a-option>
+            <a-option value="openai">{{ t('settings.protocolOpenAI') }}</a-option>
+            <a-option value="openai-compatible">{{ t('settings.protocolOpenAICompat') }}</a-option>
+          </a-select>
+        </a-form-item>
+
+        <a-form-item :label="t('settings.apiKey')">
+          <a-input-password
+            v-model="modelForm.apiKey"
+            :placeholder="editingModel && editingModel.apiKey
+              ? maskKey(editingModel.apiKey)
+              : t('settings.apiKeyPlaceholder')"
+            allow-clear
+          />
+          <div class="form-hint" v-if="editingModel && editingModel.apiKey">
+            {{ t('settings.apiKeyMasked') }} — {{ t('common.edit') }}{{ appStore.locale === 'zh-CN' ? '时留空保持不变' : ': leave blank to keep current' }}
+          </div>
+        </a-form-item>
+
+        <a-form-item
+          :label="t('settings.baseUrl')"
+          v-if="modelForm.protocol === 'openai-compatible'"
+        >
+          <a-input
+            v-model="modelForm.baseUrl"
+            :placeholder="t('settings.baseUrlPlaceholder')"
+            allow-clear
+          />
+          <div class="form-hint">{{ t('settings.baseUrlHint') }}</div>
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -305,47 +356,151 @@ import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useAppStore } from '@/stores/app';
 import { useAuthStore } from '@/stores/auth';
-import { useWorkersStore } from '@/stores/workers';
+import { useModelsStore, type ConfiguredModel, type ModelProtocol } from '@/stores/models';
 import { Message, Modal } from '@arco-design/web-vue';
 
 const { t } = useI18n();
 const router = useRouter();
 const appStore = useAppStore();
 const authStore = useAuthStore();
-const workersStore = useWorkersStore();
+const modelsStore = useModelsStore();
 
 const activeSection = ref('profile');
 
 const sections = computed(() => [
   { id: 'profile',    icon: '👤', label: t('settings.profile') },
-  { id: 'apikeys',    icon: '🔑', label: t('settings.apiKeys') },
+  { id: 'modelmgmt',  icon: '🤖', label: t('settings.modelMgmt') },
   { id: 'appearance', icon: '🎨', label: t('settings.appearance') },
-  { id: 'models',     icon: '🤖', label: t('settings.modelConfig') },
   { id: 'storage',    icon: '💾', label: t('settings.storageConfig') },
   { id: 'about',      icon: 'ℹ️',  label: t('settings.about') },
 ]);
+
+// ─── Profile ────────────────────────────────────────────────────────────────
 
 const profileForm = reactive({
   name: authStore.user?.name || '',
   email: authStore.user?.email || '',
 });
 
-const apiKeys = reactive([
-  { id: 'anthropic', name: 'Anthropic', icon: '🟠', configured: true, value: '' },
-  { id: 'openai',    name: 'OpenAI',    icon: '🟢', configured: false, value: '' },
-]);
+function saveProfile() {
+  Message.success(t('settings.saveSuccess'));
+}
+
+// ─── Appearance ─────────────────────────────────────────────────────────────
 
 const themes = [
   { value: 'light', label: t('settings.themeLight') },
   { value: 'dark',  label: t('settings.themeDark') },
 ];
 
+// ─── Model Management ────────────────────────────────────────────────────────
+
+const modalVisible = ref(false);
+const editingModel = ref<ConfiguredModel | null>(null);
+
 const modelForm = reactive({
-  defaultModel: 'claude-sonnet-4-6',
-  temperature: 0.7,
-  maxTokens: 8192,
-  systemPrompt: '',
+  displayName: '',
+  modelId: '',
+  protocol: 'anthropic' as ModelProtocol,
+  apiKey: '',
+  baseUrl: '',
 });
+
+function protocolLabel(protocol: ModelProtocol): string {
+  const map: Record<ModelProtocol, string> = {
+    anthropic: 'Anthropic',
+    openai: 'OpenAI',
+    'openai-compatible': 'OpenAI Compat',
+  };
+  return map[protocol];
+}
+
+function protocolColor(protocol: ModelProtocol): string {
+  const map: Record<ModelProtocol, string> = {
+    anthropic: 'orangered',
+    openai: 'green',
+    'openai-compatible': 'purple',
+  };
+  return map[protocol];
+}
+
+function maskKey(key: string): string {
+  if (!key || key.length < 8) return '••••••••';
+  return key.slice(0, 6) + '••••••••' + key.slice(-4);
+}
+
+function openAddModal() {
+  editingModel.value = null;
+  modelForm.displayName = '';
+  modelForm.modelId = '';
+  modelForm.protocol = 'anthropic';
+  modelForm.apiKey = '';
+  modelForm.baseUrl = '';
+  modalVisible.value = true;
+}
+
+function openEditModal(model: ConfiguredModel) {
+  editingModel.value = model;
+  modelForm.displayName = model.displayName;
+  modelForm.modelId = model.modelId;
+  modelForm.protocol = model.protocol;
+  modelForm.apiKey = '';  // Don't pre-fill for security
+  modelForm.baseUrl = model.baseUrl ?? '';
+  modalVisible.value = true;
+}
+
+function closeModal() {
+  modalVisible.value = false;
+  editingModel.value = null;
+}
+
+function submitModelForm() {
+  if (!modelForm.displayName.trim() || !modelForm.modelId.trim()) {
+    Message.warning(appStore.locale === 'zh-CN' ? '请填写必填项' : 'Please fill in required fields');
+    return;
+  }
+
+  if (editingModel.value) {
+    const updates: Partial<Omit<ConfiguredModel, 'id'>> = {
+      displayName: modelForm.displayName,
+      modelId: modelForm.modelId,
+      protocol: modelForm.protocol,
+    };
+    if (modelForm.apiKey.trim()) {
+      updates.apiKey = modelForm.apiKey.trim();
+    }
+    if (modelForm.protocol === 'openai-compatible') {
+      updates.baseUrl = modelForm.baseUrl || undefined;
+    } else {
+      updates.baseUrl = undefined;
+    }
+    modelsStore.updateModel(editingModel.value.id, updates);
+  } else {
+    modelsStore.addModel({
+      displayName: modelForm.displayName,
+      modelId: modelForm.modelId,
+      protocol: modelForm.protocol,
+      apiKey: modelForm.apiKey.trim(),
+      baseUrl: modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl || undefined) : undefined,
+    });
+  }
+
+  Message.success(t('settings.saveSuccess'));
+  closeModal();
+}
+
+function confirmDeleteModel(id: string) {
+  Modal.confirm({
+    title: t('settings.deleteModel'),
+    content: t('settings.confirmDeleteModel'),
+    onOk() {
+      modelsStore.deleteModel(id);
+      Message.success(t('common.success'));
+    },
+  });
+}
+
+// ─── Storage ─────────────────────────────────────────────────────────────────
 
 const storageForm = reactive({
   memoryType: 'file' as 'file' | 'database',
@@ -356,31 +511,16 @@ const storageForm = reactive({
   sessionDir: '~/.bcc/sessions/',
 });
 
-function saveProfile() {
-  Message.success(t('settings.saveSuccess'));
-}
-
-function saveApiKey(key: typeof apiKeys[0]) {
-  if (key.value) {
-    key.configured = true;
-    key.value = '';
-  }
-  Message.success(t('settings.saveSuccess'));
-}
-
-function saveModels() {
-  Message.success(t('settings.saveSuccess'));
-}
-
 function saveStorage() {
   Message.success(t('settings.saveSuccess'));
 }
+
+// ─── About ────────────────────────────────────────────────────────────────────
 
 function confirmClearData() {
   Modal.confirm({
     title: t('settings.clearAllData'),
     content: t('settings.clearDataWarning'),
-
     onOk() {
       localStorage.clear();
       Message.success(t('common.success'));
@@ -464,13 +604,24 @@ function handleLogout() {
   font-size: 20px;
   font-weight: 700;
   color: var(--text-primary);
-  margin-bottom: 20px;
+  margin-bottom: 8px;
 }
 
 .section-desc {
   font-size: 13px;
   color: var(--text-secondary);
   margin-bottom: 20px;
+}
+
+.section-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.section-header-row h2 {
+  margin-bottom: 4px;
 }
 
 /* Profile */
@@ -492,34 +643,106 @@ function handleLogout() {
   font-size: 40px;
 }
 
-/* API Keys */
-.api-key-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  max-width: 560px;
-}
+/* ─── Model Management ───────────────────────────────────────────────── */
 
-.api-key-item {
-  background: var(--bg-base);
-  border-radius: 14px;
-  padding: 18px 20px;
-  border: 1px solid var(--border-color);
+.model-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-width: 640px;
 }
 
-.aki-header {
+.model-card {
+  background: var(--bg-base);
+  border: 1.5px solid var(--border-color);
+  border-radius: 14px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: border-color 0.15s;
+}
+
+.model-card.is-default {
+  border-color: #165dff;
+  background: rgba(22, 93, 255, 0.03);
+}
+
+.mc-name-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
 }
 
-.aki-provider {
-  font-size: 14px;
+.mc-name {
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.mc-meta {
+  margin-top: 2px;
+}
+
+.mc-model-id {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.mc-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mc-protocol-tag {
+  font-size: 11px;
+}
+
+.mc-base-url {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+}
+
+.mc-key-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.mc-key-label {
+  color: var(--text-secondary);
+}
+
+.mc-key-val.configured {
+  color: var(--text-primary);
+  font-family: monospace;
+  letter-spacing: 0.5px;
+}
+
+.mc-key-val.unconfigured {
+  color: #f53f3f;
+}
+
+.mc-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.no-models {
+  text-align: center;
+  padding: 48px 0;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
 }
 
 /* Appearance */
@@ -697,21 +920,7 @@ function handleLogout() {
   color: var(--text-secondary);
 }
 
-/* ─── Model / Storage form helpers ──────────────────────────────────── */
-
-.slider-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.slider-val {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  min-width: 32px;
-  text-align: right;
-}
+/* ─── Form helpers ───────────────────────────────────────────────────── */
 
 .form-hint {
   font-size: 12px;
