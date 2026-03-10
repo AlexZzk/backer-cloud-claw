@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { workersApi, type ApiWorker } from '@/api/client';
+import { workersApi, type ApiWorker, type ApiWorkerInput } from '@/api/client';
 
 export type { ApiWorker as MockWorker };
 
@@ -13,7 +13,6 @@ export const useWorkersStore = defineStore('workers', () => {
     try {
       workers.value = await workersApi.list();
     } catch {
-      // 后端不可用时保持空列表
       workers.value = [];
     } finally {
       loading.value = false;
@@ -24,13 +23,28 @@ export const useWorkersStore = defineStore('workers', () => {
     return workers.value.find(w => w.id === id);
   }
 
-  const AVAILABLE_MODELS = [
-    { id: 'claude-opus-4-6',   label: 'Claude Opus 4.6 (最强)' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (推荐)' },
-    { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5 (快速)' },
-    { id: 'gpt-4o',            label: 'GPT-4o' },
-    { id: 'gpt-4o-mini',       label: 'GPT-4o Mini' },
-  ];
+  async function createWorker(data: ApiWorkerInput): Promise<ApiWorker> {
+    const created = await workersApi.create(data);
+    workers.value.push(created);
+    return created;
+  }
+
+  async function updateWorker(id: string, data: Partial<ApiWorkerInput>): Promise<ApiWorker> {
+    const updated = await workersApi.update(id, data);
+    const idx = workers.value.findIndex(w => w.id === id);
+    if (idx >= 0) workers.value[idx] = updated;
+    // 若变更了 primary，同步清除其他 worker 的标记
+    if (updated.isPrimary) {
+      workers.value.forEach(w => { if (w.id !== id) w.isPrimary = false; });
+    }
+    return updated;
+  }
+
+  async function deleteWorker(id: string): Promise<void> {
+    await workersApi.delete(id);
+    const idx = workers.value.findIndex(w => w.id === id);
+    if (idx >= 0) workers.value.splice(idx, 1);
+  }
 
   const AVAILABLE_TOOLS = [
     { id: 'datetime',   label: '获取当前时间' },
@@ -43,6 +57,7 @@ export const useWorkersStore = defineStore('workers', () => {
   return {
     workers, loading,
     fetchWorkers, getWorker,
-    AVAILABLE_MODELS, AVAILABLE_TOOLS,
+    createWorker, updateWorker, deleteWorker,
+    AVAILABLE_TOOLS,
   };
 });

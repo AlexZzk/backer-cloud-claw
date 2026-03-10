@@ -244,11 +244,11 @@ const workerTableData = computed(() =>
   workersStore.workers.map(w => ({
     id: w.id,
     name: w.name,
-    avatar: w.avatar,
-    input: Math.round(w.totalTokens * 0.35),
-    output: Math.round(w.totalTokens * 0.65),
-    total: w.totalTokens,
-    sessions: w.totalSessions,
+    avatar: '🤖',
+    input: 0,
+    output: 0,
+    total: 0,
+    sessions: 0,
   }))
 );
 

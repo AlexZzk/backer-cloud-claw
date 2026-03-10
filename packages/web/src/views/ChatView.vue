@@ -23,7 +23,7 @@
           @click="chatStore.selectWorker(item.worker.id)"
         >
           <div class="contact-avatar" :class="{ secretary: item.worker.isPrimary }">
-            {{ item.worker.avatar }}
+            🤖
             <span class="status-dot" :class="item.worker.status"></span>
           </div>
           <div class="contact-info">
@@ -46,7 +46,7 @@
         <!-- Header -->
         <div class="chat-header">
           <div class="chat-header-left">
-            <span class="worker-avatar-lg">{{ activeWorker.avatar }}</span>
+            <span class="worker-avatar-lg">🤖</span>
             <div>
               <div class="worker-name-row">
                 <span class="worker-name">{{ activeWorker.name }}</span>
@@ -101,7 +101,7 @@
         <div class="messages-area" ref="messagesArea">
           <!-- Empty state -->
           <div v-if="!chatStore.activeSession || chatStore.activeSession.messages.length === 0" class="chat-empty">
-            <div class="empty-avatar">{{ activeWorker.avatar }}</div>
+            <div class="empty-avatar">🤖</div>
             <h3>{{ activeWorker.name }}</h3>
             <p>{{ activeWorker.description }}</p>
             <div class="suggestion-chips">
@@ -124,7 +124,7 @@
               :class="msg.role"
             >
               <div v-if="msg.role === 'assistant'" class="msg-avatar">
-                {{ activeWorker.avatar }}
+                🤖
               </div>
               <div class="message-bubble" :class="msg.role">
                 <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
@@ -142,7 +142,7 @@
 
           <!-- Thinking -->
           <div v-if="chatStore.isThinking" class="message-wrapper assistant">
-            <div class="msg-avatar">{{ activeWorker.avatar }}</div>
+            <div class="msg-avatar">🤖</div>
             <div class="message-bubble assistant thinking">
               <span class="dot"></span><span class="dot"></span><span class="dot"></span>
             </div>
@@ -203,7 +203,7 @@
           class="worker-pick-item"
           @click="startNewWorkerChat(worker.id)"
         >
-          <span class="pick-avatar">{{ worker.avatar }}</span>
+          <span class="pick-avatar">🤖</span>
           <div class="pick-info">
             <div class="pick-name">
               {{ worker.name }}

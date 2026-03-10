@@ -25,6 +25,16 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function put<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`PUT ${path} → ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
 async function del(path: string): Promise<void> {
   const res = await fetch(`${BASE}${path}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 204) throw new Error(`DELETE ${path} → ${res.status}`);
@@ -90,8 +100,23 @@ export interface TokenStats {
 
 // ─── Worker API ───────────────────────────────────────────────────────────────
 
+export interface ApiWorkerInput {
+  id: string;
+  name: string;
+  description: string;
+  role: string;
+  modelId: string;
+  skills: string[];
+  tools: string[];
+  isPrimary?: boolean;
+}
+
 export const workersApi = {
-  list: () => get<ApiWorker[]>('/workers'),
+  list:   ()                                    => get<ApiWorker[]>('/workers'),
+  create: (data: ApiWorkerInput)                => post<ApiWorker>('/workers', { ...data, primary: data.isPrimary }),
+  update: (id: string, data: Partial<ApiWorkerInput>) =>
+    put<ApiWorker>(`/workers/${id}`, { ...data, primary: data.isPrimary }),
+  delete: (id: string)                          => del(`/workers/${id}`),
 };
 
 // ─── Session API ──────────────────────────────────────────────────────────────

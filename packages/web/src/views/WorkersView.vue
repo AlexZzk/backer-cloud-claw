@@ -21,7 +21,7 @@
           :class="{ active: selectedId === w.id }"
           @click="selectedId = w.id"
         >
-          <span class="wl-avatar">{{ w.avatar }}</span>
+          <span class="wl-avatar">{{ workerAvatar(w) }}</span>
           <div class="wl-info">
             <div class="wl-name">{{ w.name }}</div>
             <div class="wl-model">{{ w.modelId }}</div>
@@ -37,7 +37,7 @@
         <!-- Worker detail card -->
         <div class="worker-detail">
           <div class="detail-header">
-            <div class="detail-avatar">{{ selectedWorker.avatar }}</div>
+            <div class="detail-avatar">{{ workerAvatar(selectedWorker) }}</div>
             <div class="detail-info">
               <h2>{{ selectedWorker.name }}</h2>
               <p>{{ selectedWorker.description }}</p>
@@ -175,28 +175,50 @@
   <a-modal
     v-model:visible="showModal"
     :title="editingWorker ? t('workers.editWorker') : t('workers.createWorker')"
-    width="560px"
-    @ok="handleSave"
-    @cancel="showModal = false"
+    width="580px"
     :ok-text="t('common.save')"
     :cancel-text="t('common.cancel')"
+    :ok-loading="saving"
+    @ok="handleSave"
+    @cancel="showModal = false"
   >
     <a-form :model="form" layout="vertical">
       <a-row :gutter="16">
         <a-col :span="12">
           <a-form-item :label="t('workers.workerName')" required>
-            <a-input v-model="form.name" :placeholder="t('workers.namePlaceholder')" />
+            <a-input
+              v-model="form.name"
+              :placeholder="t('workers.namePlaceholder')"
+              @input="onNameInput(form.name)"
+            />
           </a-form-item>
         </a-col>
         <a-col :span="12">
+          <a-form-item label="Worker ID" required>
+            <a-input
+              v-model="form.id"
+              placeholder="如：pm、coder（字母/数字/连字符）"
+              :disabled="!!editingWorker"
+            />
+          </a-form-item>
+        </a-col>
+      </a-row>
+
+      <a-row :gutter="16">
+        <a-col :span="16">
           <a-form-item :label="t('workers.workerModel')" required>
             <a-select v-model="form.modelId" :placeholder="t('workers.modelPlaceholder')">
               <a-option
-                v-for="m in workersStore.AVAILABLE_MODELS"
+                v-for="m in modelsStore.models"
                 :key="m.id"
                 :value="m.id"
-              >{{ m.label }}</a-option>
+              >{{ m.displayName }}</a-option>
             </a-select>
+          </a-form-item>
+        </a-col>
+        <a-col :span="8">
+          <a-form-item label=" " style="padding-top: 8px">
+            <a-checkbox v-model="form.isPrimary">设为主 Worker</a-checkbox>
           </a-form-item>
         </a-col>
       </a-row>
@@ -247,6 +269,7 @@ import { ref, computed, reactive } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useWorkersStore } from '@/stores/workers';
+import { useModelsStore } from '@/stores/models';
 import { useChatStore } from '@/stores/chat';
 import { Modal, Message } from '@arco-design/web-vue';
 import type { MockWorker } from '@/stores/workers';
@@ -254,22 +277,26 @@ import type { MockWorker } from '@/stores/workers';
 const { t } = useI18n();
 const router = useRouter();
 const workersStore = useWorkersStore();
+const modelsStore = useModelsStore();
 const chatStore = useChatStore();
 
 const searchText = ref('');
 const selectedId = ref<string | null>(null);
 const showModal = ref(false);
+const saving = ref(false);
 const editingWorker = ref<MockWorker | null>(null);
 
 const avatarOptions = ['🤖', '🔬', '💻', '✍️', '📊', '🎯', '🚀', '💡', '🧠', '🎨', '📋', '🔭'];
 
 const form = reactive({
+  id: '',
   name: '',
   description: '',
-  modelId: 'claude-sonnet-4-6',
+  modelId: '',
   role: '',
   skills: [] as string[],
   tools: [] as string[],
+  isPrimary: false,
   avatar: '🤖',
 });
 
@@ -285,21 +312,28 @@ const filteredWorkers = computed(() => {
   );
 });
 
+// 默认使用第一个模型实例 ID
+const defaultModelId = computed(() => modelsStore.models[0]?.id ?? '');
+
+function workerAvatar(_worker: MockWorker) {
+  // ApiWorker 暂无 avatar 字段，使用固定 emoji
+  return '🤖';
+}
+
 function statusColor(status: string) {
   return { online: 'green', idle: 'orange', offline: 'gray' }[status] || 'gray';
 }
 
-function formatNumber(n: number) {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return String(n);
+function slugify(name: string) {
+  return name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 20);
 }
 
 function openCreate() {
   editingWorker.value = null;
   Object.assign(form, {
-    name: '', description: '', modelId: 'claude-sonnet-4-6',
-    role: '', skills: [], tools: [], avatar: '🤖',
+    id: '', name: '', description: '',
+    modelId: defaultModelId.value,
+    role: '', skills: [], tools: [], isPrimary: false, avatar: '🤖',
   });
   showModal.value = true;
 }
@@ -307,25 +341,72 @@ function openCreate() {
 function openEdit(worker: MockWorker) {
   editingWorker.value = worker;
   Object.assign(form, {
+    id: worker.id,
     name: worker.name,
     description: worker.description,
     modelId: worker.modelId,
     role: worker.role,
     skills: [...worker.skills],
     tools: [...worker.tools],
+    isPrimary: worker.isPrimary,
     avatar: '🤖',
   });
   showModal.value = true;
 }
 
-function handleSave() {
+// 当 name 变化时自动填充 id（仅新建且 id 为空时）
+function onNameInput(val: string) {
+  if (!editingWorker.value && !form.id) {
+    form.id = slugify(val);
+  }
+}
+
+async function handleSave() {
   if (!form.name.trim()) {
-    Message.error(t('workers.workerName') + ' ' + t('common.noData'));
+    Message.error('请输入 Worker 名称');
     return;
   }
-  // Worker 配置由后端 config.json 管理，前端仅提示需重启服务
-  Message.info('Worker 配置请在 ~/.bcc/config.json 中修改后重启服务生效');
-  showModal.value = false;
+  if (!editingWorker.value && !form.id.trim()) {
+    Message.error('请输入 Worker ID');
+    return;
+  }
+  if (!form.modelId) {
+    Message.error('请选择模型');
+    return;
+  }
+
+  saving.value = true;
+  try {
+    if (editingWorker.value) {
+      await workersStore.updateWorker(editingWorker.value.id, {
+        name:        form.name.trim(),
+        description: form.description.trim(),
+        modelId:     form.modelId,
+        role:        form.role.trim(),
+        skills:      form.skills,
+        tools:       form.tools,
+        isPrimary:   form.isPrimary,
+      });
+      Message.success('Worker 已更新');
+    } else {
+      await workersStore.createWorker({
+        id:          form.id.trim(),
+        name:        form.name.trim(),
+        description: form.description.trim(),
+        modelId:     form.modelId,
+        role:        form.role.trim(),
+        skills:      form.skills,
+        tools:       form.tools,
+        isPrimary:   form.isPrimary,
+      });
+      Message.success('Worker 已创建');
+    }
+    showModal.value = false;
+  } catch (err) {
+    Message.error(err instanceof Error ? err.message : '操作失败，请重试');
+  } finally {
+    saving.value = false;
+  }
 }
 
 function startChat(workerId: string) {
@@ -333,12 +414,19 @@ function startChat(workerId: string) {
   router.push('/chat');
 }
 
-function confirmDelete(_id: string) {
+function confirmDelete(id: string) {
+  const worker = workersStore.getWorker(id);
   Modal.confirm({
     title: t('workers.confirmDelete'),
-    content: 'Worker 配置请在 ~/.bcc/config.json 中删除后重启服务生效',
-    onOk() {
-      Message.info('请手动编辑配置文件后重启服务');
+    content: `确定要删除员工「${worker?.name ?? id}」吗？此操作不可撤销。`,
+    async onOk() {
+      try {
+        await workersStore.deleteWorker(id);
+        if (selectedId.value === id) selectedId.value = null;
+        Message.success('Worker 已删除');
+      } catch (err) {
+        Message.error(err instanceof Error ? err.message : '删除失败');
+      }
     },
   });
 }

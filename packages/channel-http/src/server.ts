@@ -29,6 +29,7 @@ import type {
   ModelInstanceConfig,
   WorkerConfig,
 } from './config-loader.js';
+import { saveConfig } from './config-loader.js';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -281,6 +282,30 @@ export class HttpServer {
       }
     }
 
+    // ── POST /api/workers  (创建 Worker)
+    if (method === 'POST' && path === '/api/workers') {
+      await this.handleCreateWorker(req, res);
+      return;
+    }
+
+    // ── PUT /api/workers/:workerId  (更新 Worker)
+    {
+      const m = matchRoute('/api/workers/:workerId', path);
+      if (m && method === 'PUT') {
+        await this.handleUpdateWorker(req, res, m.params['workerId']!);
+        return;
+      }
+    }
+
+    // ── DELETE /api/workers/:workerId
+    {
+      const m = matchRoute('/api/workers/:workerId', path);
+      if (m && method === 'DELETE') {
+        await this.handleDeleteWorker(res, m.params['workerId']!);
+        return;
+      }
+    }
+
     notFound(res);
   }
 
@@ -452,6 +477,145 @@ export class HttpServer {
     }
 
     writeSse(res, { event: 'done', data: tokenUsage ? { tokenUsage } : {} });
+    res.end();
+  }
+
+  // ── Worker CRUD ──────────────────────────────────────────────────────────────
+
+  private async handleCreateWorker(req: IncomingMessage, res: ServerResponse) {
+    let body: Partial<WorkerConfig>;
+    try {
+      body = JSON.parse(await readBody(req)) as Partial<WorkerConfig>;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { id, name, modelId, role, description, skills, tools, primary } = body;
+    if (!id?.trim())      { badRequest(res, '"id" is required'); return; }
+    if (!name?.trim())    { badRequest(res, '"name" is required'); return; }
+    if (!modelId?.trim()) { badRequest(res, '"modelId" is required'); return; }
+
+    // ID 格式校验（只允许字母、数字、连字符、下划线）
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+      badRequest(res, '"id" must contain only letters, numbers, hyphens, or underscores'); return;
+    }
+
+    const workers = this.config.workers ?? [];
+    if (workers.some(w => w.id === id)) {
+      json(res, 409, { error: `Worker with id "${id}" already exists` }); return;
+    }
+
+    const newWorker: WorkerConfig = {
+      id: id.trim(),
+      name: name.trim(),
+      modelId: modelId.trim(),
+      role: role?.trim() ?? '',
+      description: description?.trim() ?? '',
+      skills: skills ?? [],
+      tools: tools ?? [],
+      primary: primary ?? false,
+    };
+
+    // 若设为主 Worker，取消其他 primary 标记
+    if (newWorker.primary) {
+      workers.forEach(w => { w.primary = false; });
+    }
+
+    workers.push(newWorker);
+    this.config.workers = workers;
+
+    try {
+      await saveConfig(this.config);
+    } catch (err) {
+      serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
+    }
+
+    const apiWorker: ApiWorker = {
+      id:          newWorker.id,
+      name:        newWorker.name,
+      description: newWorker.description,
+      skills:      newWorker.skills,
+      modelId:     newWorker.modelId,
+      role:        newWorker.role,
+      tools:       newWorker.tools ?? [],
+      isPrimary:   newWorker.primary ?? false,
+      status:      'online',
+    };
+    json(res, 201, apiWorker);
+  }
+
+  private async handleUpdateWorker(req: IncomingMessage, res: ServerResponse, workerId: string) {
+    const workers = this.config.workers ?? [];
+    const idx = workers.findIndex(w => w.id === workerId);
+    if (idx < 0) { notFound(res); return; }
+
+    let body: Partial<WorkerConfig>;
+    try {
+      body = JSON.parse(await readBody(req)) as Partial<WorkerConfig>;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const existing = workers[idx]!;
+    const updated: WorkerConfig = {
+      id:          workerId,
+      name:        body.name?.trim()        ?? existing.name,
+      modelId:     body.modelId?.trim()     ?? existing.modelId,
+      role:        body.role?.trim()        ?? existing.role,
+      description: body.description?.trim() ?? existing.description,
+      skills:      body.skills              ?? existing.skills,
+      tools:       body.tools               ?? existing.tools ?? [],
+      primary:     body.primary             ?? existing.primary ?? false,
+    };
+
+    if (updated.primary) {
+      workers.forEach(w => { w.primary = false; });
+    }
+    workers[idx] = updated;
+    this.config.workers = workers;
+
+    try {
+      await saveConfig(this.config);
+    } catch (err) {
+      serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
+    }
+
+    const apiWorker: ApiWorker = {
+      id:          updated.id,
+      name:        updated.name,
+      description: updated.description,
+      skills:      updated.skills,
+      modelId:     updated.modelId,
+      role:        updated.role,
+      tools:       updated.tools ?? [],
+      isPrimary:   updated.primary ?? false,
+      status:      'online',
+    };
+    json(res, 200, apiWorker);
+  }
+
+  private async handleDeleteWorker(res: ServerResponse, workerId: string) {
+    const workers = this.config.workers ?? [];
+    const idx = workers.findIndex(w => w.id === workerId);
+    if (idx < 0) { notFound(res); return; }
+
+    const wasPrimary = workers[idx]!.primary ?? false;
+    workers.splice(idx, 1);
+
+    // 若删除的是主 Worker，把第一个升为主
+    if (wasPrimary && workers.length > 0) {
+      workers[0]!.primary = true;
+    }
+    this.config.workers = workers;
+
+    try {
+      await saveConfig(this.config);
+    } catch (err) {
+      serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
+    }
+
+    cors(res);
+    res.writeHead(204);
     res.end();
   }
 
