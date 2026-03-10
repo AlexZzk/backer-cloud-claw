@@ -15,6 +15,16 @@
       </div>
 
       <div class="contact-list">
+        <!-- Onboarding hint when no workers -->
+        <div v-if="!workersStore.loading && !hasWorkers" class="contact-empty">
+          <div style="font-size: 28px; margin-bottom: 8px;">🤖</div>
+          <div style="font-size: 12px; color: var(--text-secondary); text-align: center; line-height: 1.6;">
+            还没有 AI 员工<br>请先在「设置」中配置模型
+          </div>
+          <a-button size="mini" type="primary" style="margin-top: 12px" @click="router.push('/settings')">
+            去配置
+          </a-button>
+        </div>
         <div
           v-for="item in filteredContacts"
           :key="item.worker.id"
@@ -180,12 +190,60 @@
 
       <!-- No worker selected -->
       <div v-else class="no-conv">
-        <div class="no-conv-icon">💬</div>
-        <h2>{{ t('chat.noConversations') }}</h2>
-        <p>{{ t('chat.startChat') }}</p>
-        <a-button type="primary" size="large" @click="chatStore.selectWorker('w-secretary')">
-          {{ t('chat.openSecretaryChat') }}
-        </a-button>
+        <template v-if="hasWorkers">
+          <div class="no-conv-icon">💬</div>
+          <h2>{{ t('chat.noConversations') }}</h2>
+          <p>{{ t('chat.startChat') }}</p>
+          <a-button
+            v-if="primaryWorker"
+            type="primary"
+            size="large"
+            @click="chatStore.selectWorker(primaryWorker.id)"
+          >
+            与「{{ primaryWorker.name }}」开始对话
+          </a-button>
+          <a-button v-else type="primary" size="large" @click="showWorkerPicker = true">
+            {{ t('chat.selectWorker') }}
+          </a-button>
+        </template>
+
+        <!-- Onboarding: no workers configured yet -->
+        <template v-else>
+          <div class="no-conv-icon">🚀</div>
+          <h2>开始前先配置 AI 助理</h2>
+          <p style="max-width: 360px; text-align: center; color: var(--text-secondary);">
+            还没有配置任何 AI Worker。请先添加模型，再创建一个 AI 员工（助理）。
+          </p>
+          <div class="onboarding-steps">
+            <div class="ob-step" :class="{ done: hasModels }">
+              <span class="ob-num">{{ hasModels ? '✓' : '1' }}</span>
+              <div class="ob-info">
+                <div class="ob-title">配置 AI 模型</div>
+                <div class="ob-desc">在设置中添加 API Key 和模型实例</div>
+              </div>
+              <a-button
+                v-if="!hasModels"
+                type="primary"
+                size="small"
+                @click="router.push('/settings')"
+              >去设置</a-button>
+            </div>
+            <div class="ob-step" :class="{ done: hasWorkers }">
+              <span class="ob-num">2</span>
+              <div class="ob-info">
+                <div class="ob-title">创建 AI 员工（助理）</div>
+                <div class="ob-desc">在员工页面新建一个 Worker 并设为主助理</div>
+              </div>
+              <a-button
+                v-if="hasModels"
+                type="primary"
+                size="small"
+                @click="router.push('/workers')"
+              >去创建</a-button>
+              <a-button v-else size="small" disabled>去创建</a-button>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -223,14 +281,18 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import { useChatStore } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
 import { useWorkersStore } from '@/stores/workers';
+import { useModelsStore } from '@/stores/models';
 
 const { t } = useI18n();
+const router = useRouter();
 const chatStore = useChatStore();
 const authStore = useAuthStore();
 const workersStore = useWorkersStore();
+const modelsStore = useModelsStore();
 
 const inputText = ref('');
 const searchText = ref('');
@@ -239,6 +301,11 @@ const inputFocused = ref(false);
 const messagesArea = ref<HTMLElement>();
 
 const allWorkers = computed(() => workersStore.workers);
+const hasWorkers = computed(() => workersStore.workers.length > 0);
+const hasModels = computed(() => modelsStore.models.length > 0);
+const primaryWorker = computed(() =>
+  workersStore.workers.find(w => w.isPrimary) ?? workersStore.workers[0] ?? null
+);
 
 const activeWorker = computed(() =>
   chatStore.activeWorkerId
@@ -274,14 +341,23 @@ function formatTime(ts: number) {
 }
 
 function getSuggestions(workerId: string): string[] {
-  const map: Record<string, string[]> = {
-    'w-secretary': ['今天有什么工作安排？', '帮我起草一封邮件', '提醒我下午开会'],
-    'w-research':  ['搜索最新的 AI 研究进展', '分析这篇论文的主要观点', '帮我整理技术资料'],
-    'w-code':      ['帮我优化这段代码', '解释这个错误信息', '写一个 TypeScript 工具函数'],
-    'w-writer':    ['写一篇产品介绍文章', '帮我优化这段文案', '翻译成英文'],
-    'w-data':      ['分析这组数据的趋势', '生成数据可视化方案', '计算统计指标'],
-  };
-  return map[workerId] ?? ['你好，请问有什么可以帮你？'];
+  const worker = workersStore.getWorker(workerId);
+  const role = (worker?.role ?? '').toLowerCase();
+  const name = (worker?.name ?? '').toLowerCase();
+  // 根据 role/name 的关键词推断建议词
+  if (role.includes('代码') || role.includes('程序') || name.includes('coder') || name.includes('code')) {
+    return ['帮我优化这段代码', '解释这个错误信息', '写一个工具函数'];
+  }
+  if (role.includes('写作') || role.includes('文案') || name.includes('writer')) {
+    return ['写一篇产品介绍文章', '帮我优化这段文案', '翻译成英文'];
+  }
+  if (role.includes('数据') || role.includes('分析') || name.includes('data')) {
+    return ['分析这组数据的趋势', '生成数据可视化方案', '计算统计指标'];
+  }
+  if (role.includes('研究') || role.includes('调研') || name.includes('research')) {
+    return ['搜索最新的 AI 研究进展', '分析这篇文章的主要观点', '帮我整理技术资料'];
+  }
+  return ['你好，有什么可以帮你？', '介绍一下你自己', '我们开始工作吧'];
 }
 
 function renderMarkdown(text: string): string {
@@ -774,6 +850,72 @@ watch(() => chatStore.activeSession?.messages.length, async () => {
   font-size: 20px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+/* Onboarding steps */
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 380px;
+  margin-top: 8px;
+}
+
+.ob-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1.5px solid var(--border-color);
+  background: var(--bg-base);
+}
+
+.ob-step.done {
+  border-color: #00b42a;
+  background: rgba(0, 180, 42, 0.04);
+}
+
+.ob-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(22, 93, 255, 0.1);
+  color: #165dff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ob-step.done .ob-num {
+  background: rgba(0, 180, 42, 0.12);
+  color: #00b42a;
+}
+
+.ob-info { flex: 1; }
+
+.ob-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ob-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+/* Contact list empty state */
+.contact-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 16px;
 }
 
 /* ─── Worker Picker ──────────────────────────────────────────────────── */

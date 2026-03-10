@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { modelsApi, type ApiModel } from '@/api/client';
+import { modelsApi, type ApiModel, type ApiModelInput } from '@/api/client';
 
 export type ModelProtocol = 'anthropic' | 'openai' | 'openai-compatible';
 
@@ -10,25 +10,32 @@ export interface ConfiguredModel {
   displayName: string;
   modelId: string;
   protocol: ModelProtocol;
-  apiKey: string;
+  apiKey: string;   // 后端不返回明文 key，始终为空字符串
   baseUrl?: string;
   isDefault: boolean;
 }
 
+const PROTOCOL_MAP: Record<string, ModelProtocol> = {
+  claude:   'anthropic',
+  openai:   'openai',
+  deepseek: 'openai-compatible',
+  bailian:  'openai-compatible',
+  custom:   'openai-compatible',
+};
+
+const PROVIDER_MAP: Record<ModelProtocol, string> = {
+  anthropic:          'claude',
+  openai:             'openai',
+  'openai-compatible': 'custom',
+};
+
 function apiModelToConfigured(m: ApiModel): ConfiguredModel {
-  const protocolMap: Record<string, ModelProtocol> = {
-    claude:   'anthropic',
-    openai:   'openai',
-    deepseek: 'openai-compatible',
-    bailian:  'openai-compatible',
-    custom:   'openai-compatible',
-  };
   return {
     id:          m.id,
     displayName: `${m.id}${m.model ? ` (${m.model})` : ''}`,
     modelId:     m.model ?? m.id,
-    protocol:    protocolMap[m.id] ?? 'openai',
-    apiKey:      '',  // 后端不返回明文 key
+    protocol:    PROTOCOL_MAP[m.provider] ?? 'openai',
+    apiKey:      '',
     ...(m.baseUrl && { baseUrl: m.baseUrl }),
     isDefault:   m.isPrimary,
   };
@@ -54,25 +61,49 @@ export const useModelsStore = defineStore('models', () => {
     }
   }
 
-  // 本地 CRUD（修改后需重启服务端才持久化，后续可扩展 PATCH /api/config）
-  function addModel(data: Omit<ConfiguredModel, 'id' | 'isDefault'>): ConfiguredModel {
-    const model: ConfiguredModel = {
-      ...data,
-      id: `m-${Date.now()}`,
-      isDefault: models.value.length === 0,
+  async function addModel(data: {
+    id: string;
+    modelId: string;
+    protocol: ModelProtocol;
+    apiKey: string;
+    baseUrl?: string;
+  }): Promise<ConfiguredModel> {
+    const input: ApiModelInput = {
+      id:       data.id,
+      provider: PROVIDER_MAP[data.protocol],
+      apiKey:   data.apiKey,
+      model:    data.modelId || undefined,
+      baseUrl:  data.baseUrl || undefined,
+      isPrimary: models.value.length === 0, // 第一个模型自动设为默认
     };
-    models.value.push(model);
-    return model;
+    const created = await modelsApi.create(input);
+    const cm = apiModelToConfigured(created);
+    if (cm.isDefault) models.value.forEach(m => { m.isDefault = false; });
+    models.value.push(cm);
+    return cm;
   }
 
-  function updateModel(id: string, data: Partial<Omit<ConfiguredModel, 'id'>>) {
+  async function updateModel(id: string, data: {
+    modelId?: string;
+    protocol?: ModelProtocol;
+    apiKey?: string;
+    baseUrl?: string;
+  }): Promise<ConfiguredModel> {
+    const input: Partial<ApiModelInput> = {};
+    if (data.protocol !== undefined) input.provider = PROVIDER_MAP[data.protocol];
+    if (data.modelId  !== undefined) input.model    = data.modelId  || undefined;
+    if (data.apiKey   !== undefined) input.apiKey   = data.apiKey;   // 空 = 不修改
+    if (data.baseUrl  !== undefined) input.baseUrl  = data.baseUrl  || undefined;
+
+    const updated = await modelsApi.update(id, input);
+    const cm = apiModelToConfigured(updated);
     const idx = models.value.findIndex(m => m.id === id);
-    if (idx >= 0) {
-      models.value[idx] = { ...models.value[idx]!, ...data };
-    }
+    if (idx >= 0) models.value[idx] = cm;
+    return cm;
   }
 
-  function deleteModel(id: string) {
+  async function deleteModel(id: string): Promise<void> {
+    await modelsApi.delete(id);
     const idx = models.value.findIndex(m => m.id === id);
     if (idx < 0) return;
     const wasDefault = models.value[idx]!.isDefault;
@@ -82,7 +113,8 @@ export const useModelsStore = defineStore('models', () => {
     }
   }
 
-  function setDefault(id: string) {
+  async function setDefault(id: string): Promise<void> {
+    await modelsApi.update(id, { isPrimary: true });
     models.value.forEach(m => { m.isDefault = m.id === id; });
   }
 

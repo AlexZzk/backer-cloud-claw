@@ -201,8 +201,21 @@ export async function sendMessageStream(
 
 // ─── Models API ───────────────────────────────────────────────────────────────
 
+export interface ApiModelInput {
+  id: string;
+  provider: string;   // claude | openai | deepseek | bailian | custom
+  apiKey?: string;    // 更新时留空表示不修改
+  model?: string;
+  baseUrl?: string;
+  isPrimary?: boolean;
+  isFallback?: boolean;
+}
+
 export const modelsApi = {
-  list: () => get<ApiModel[]>('/models'),
+  list:   ()                                             => get<ApiModel[]>('/models'),
+  create: (data: ApiModelInput)                          => post<ApiModel>('/models', data),
+  update: (id: string, data: Partial<ApiModelInput>)     => put<ApiModel>(`/models/${id}`, data),
+  delete: (id: string)                                   => del(`/models/${id}`),
 };
 
 // ─── Analytics API ────────────────────────────────────────────────────────────
