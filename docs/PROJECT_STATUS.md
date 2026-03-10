@@ -1,7 +1,8 @@
 # backer-cloud-claw 项目状态归档
 
-> 归档日期：2026-03-09
-> 当前分支：`claude/review-project-docs-B5jK0`
+> 归档日期：2026-03-10
+> 当前版本：**v0.3.0**
+> 当前分支：`claude/review-requirements-5chc6`
 
 ---
 
@@ -21,22 +22,25 @@ backer-cloud-claw SDK（本仓库）
 
 ---
 
-## 二、当前包结构
+## 二、当前包结构（v0.3.0，共 14 个包）
 
 ```
 packages/
   foundation/          @bcc/foundation        基础类型、错误、日志、MemoryStore 接口
-                                               + OrgMessage / OrgThread / Participant / TokenUsage / OrgEvent
-  model-core/          @bcc/model-core         ModelAdapter 接口、ModelRouter（故障转移）
-  protocol-anthropic/  @bcc/protocol-anthropic   Claude 原生协议适配器（含 token 提取）
-  protocol-openai/     @bcc/protocol-openai    OpenAI 兼容协议适配器（含 DeepSeek/百炼，含 token 提取）
+                                               + OrgMessage / OrgThread / Participant / TokenUsage / OrgEvent / Tool
+  model-core/          @bcc/model-core         ModelAdapter 接口、ModelRouter（故障转移）、RoutableModel 接口
+  protocol-anthropic/  @bcc/protocol-anthropic   Claude 原生协议适配器（含 token 提取、工具调用）
+  protocol-openai/     @bcc/protocol-openai    OpenAI 兼容协议适配器（DeepSeek/百炼，含 token 提取、工具调用）
   conversation/        @bcc/conversation       ChatSession 多轮对话管理
   memory-fs/           @bcc/memory-fs          文件系统会话持久化
+  memory-episodic/     @bcc/memory-episodic    情节记忆（摘要存储，占位包）
   agent-engine/        @bcc/agent-engine       工具调用循环引擎（含跨迭代 token 累加）
   agents/              @bcc/agents             BccAgent、AgentRegistry、NamedAgent 接口
   org/                 @bcc/org                Worker/Company/Thread/Mailbox/Router/TokenTracker
   skills/              @bcc/skills             技能模板（builtin/user/project 三层）
-  channel-cli/         @bcc/channel-cli        CLI 交互渠道（REPL + 5 个管理工具）
+  channel-cli/         @bcc/channel-cli        CLI 交互渠道（REPL + Worker 管理工具 + call_worker 委托）
+  channel-http/        @bcc/channel-http       HTTP/SSE API 服务器（REST + 实时流，供 Web 前端使用）
+  web/                 @bcc/web                Vue 3 + Pinia Web 管理前端（Vite 构建）
 ```
 
 依赖层级（从底到顶，仅单向依赖）：
@@ -48,15 +52,19 @@ foundation
        ├─ protocol-openai
        └─ conversation / agent-engine / memory-fs
             ├─ agents
-            ├─ org  ←─ 新增（依赖 foundation + agent-engine）
-            └─ channel-cli（集成层）
+            ├─ org  ← 依赖 foundation + agent-engine
+            ├─ skills
+            ├─ channel-cli（CLI 集成层）
+            └─ channel-http（HTTP 集成层）← v0.3.0 新增
+                   ↑ 供给
+              web（Vue 前端，通过 /api 代理消费）
 ```
 
 ---
 
 ## 三、已完成工作
 
-### 3.1 P0 Bug 修复
+### 3.1 P0 Bug 修复（v0.2.0）
 
 #### Bug-1：OpenAI 适配器完全不支持工具调用
 **文件**：`packages/protocol-openai/src/adapter.ts`
@@ -77,42 +85,26 @@ foundation
 #### Bug-3：模块未找到崩溃（ERR_MODULE_NOT_FOUND）
 **文件**：根目录 `package.json`
 
-- `tsx` 直接运行 `.ts` 入口，但 workspace 依赖包需要编译后的 `dist/`
-- 修复：`bcc-chat` / `bcc-worker` 脚本改为先 `turbo run build --filter=@bcc/channel-cli...` 再启动
+- 修复：`bcc-chat` / `bcc-worker` 脚本改为先 `turbo run build` 再启动
 
 #### Bug-4：配置读取丢弃 workers/agents 字段
 **文件**：`packages/channel-cli/src/config.ts`
 
 - `migrateFromLegacy()` 新格式分支返回时未透传 `agents` / `workers` 字段
-- 导致 `bcc-worker add` 写入成功，但 `bcc-chat` 仍以普通模式启动
 - 修复：`LegacyConfig` 接口添加 `agents?`/`workers?`，新格式分支用条件展开透传
 
 ---
 
-### 3.2 P1 架构重构
+### 3.2 P1 架构重构（v0.2.0）
 
-#### 删除 foundation 死代码
-- 删除 `foundation/src/config.ts`（`BccConfig` 从未被任何包引用）
-
-#### `Tool` 类型提升到基础层
-- `Tool` 接口移入 `@bcc/foundation/src/types.ts`，消除 `@bcc/agents` 对 `@bcc/agent-engine` 的间接依赖
-
-#### 用 `RoutableModel` 接口消除 `instanceof ModelRouter`
-- 新增 `RoutableModel` 接口和 `isRoutableModel()` 鸭子类型守卫
-- `ChatSession` 和 `AgentEngine` 对任意路由实现保持开放
-
-#### `AgentRegistry` 解耦 `BccAgent`
-- 新增 `NamedAgent` 接口（`AgentInterface` + `def` + `asTool()` + `registerTool()`）
-- `AgentRegistry` 全面改用 `NamedAgent`，移除对 `BccAgent` 具体类的依赖
-
-#### 多 Agent 模式 CLI 参数透传
-- `FileMemoryStore` 创建时传入 `maxMessages`，历史修剪对全模式生效
+- **`Tool` 类型提升到基础层**：移入 `@bcc/foundation/src/types.ts`，消除跨包循环依赖
+- **`RoutableModel` 接口**：消除 `instanceof ModelRouter` 检查，对任意路由实现保持开放
+- **`AgentRegistry` 解耦 `BccAgent`**：新增 `NamedAgent` 接口，Registry 全面改用接口而非具体类
+- **删除 foundation 死代码**：删除从未被引用的 `foundation/src/config.ts`
 
 ---
 
-### 3.3 Worker 架构（新增 @bcc/org 包）
-
-#### 核心概念实现
+### 3.3 Worker 架构（@bcc/org 包，v0.2.0）
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
@@ -123,19 +115,13 @@ foundation
 | `TokenUsage` | `foundation/src/types.ts` | token 消耗（inputTokens/outputTokens/totalTokens） |
 | `OrgEvent` | `foundation/src/types.ts` | 可观测事件（消息/状态/token 事件） |
 | `Worker` | `org/src/worker.ts` | 员工实现，静态 `Worker.create()` 工厂方法 |
-| `Company` | `org/src/company.ts` | 组织容器，共享 TokenTracker + EventBus |
+| `Company` | `org/src/company.ts` | 组织容器，共享 TokenTracker + EventBus；`send()` 支持 `from` 参数 |
 | `TokenTracker` | `org/src/token-tracker.ts` | 按 Worker 分类统计 token，支持全量/按 ID 查询 |
 | `Mailbox` | `org/src/mailbox.ts` | 异步 FIFO 消息队列，单次处理保证 |
 | `Router` | `org/src/router.ts` | 按 Participant ID 路由 OrgMessage |
 | `ThreadManager` | `org/src/thread.ts` | Thread 生命周期管理 |
 
-#### Worker 配置集成
-
-- `WorkerConfig` 接口加入 `config.ts`（id/name/role/skills/description/modelId/primary）
-- `BccConfig.workers` 字段可选，兼容无 Worker 的旧配置
-- `WorkerSession` 适配器：包装 `@bcc/org Worker`，实现 `AgentInterface`，REPL 无感知切换
-
-#### 全链路 Token 追踪
+全链路 Token 追踪：
 
 ```
 API 响应
@@ -148,9 +134,7 @@ API 响应
 
 ---
 
-### 3.4 Worker CLI 工具（bcc-worker）
-
-完整的交互式 Worker 管理工具，与 `bcc-agent` 风格一致：
+### 3.4 Worker CLI 工具（bcc-worker，v0.2.0）
 
 ```bash
 pnpm bcc-worker list              # 列出所有 Worker + 统计
@@ -163,15 +147,88 @@ pnpm bcc-worker set-primary <id>  # 设置默认 Worker
 
 ---
 
-### 3.5 REPL 多模式支持
+### 3.5 REPL 多模式支持（v0.2.0）
 
-三模式优先级系统（高 → 低）：
+三模式优先级（高 → 低）：
 
 1. **Worker 模式**：`config.workers` 非空时自动启用，每个 Worker 独立 TokenTracker
 2. **多 Agent 模式**：`config.agents` 非空时启用（旧版兼容保留）
 3. **普通模式**：ModelRouter + ChatSession（默认回退）
 
-新增会话命令：`/workers`（列出+统计）、`/worker <id>`（切换）、`/worker <id> <msg>`（单次委托）
+会话命令：`/workers`（列出+统计）、`/worker <id>`（切换）、`/worker <id> <msg>`（单次委托）
+
+---
+
+### 3.6 Worker 间真实通信（call_worker 工具，v0.3.0）
+
+**问题**：REPL 的 `/worker <id> <msg>` 只是切换视角，不会真正路由消息给另一个 Worker 的 LLM。
+
+**解决方案**：在所有 Worker 构建完成后，动态为每个 Worker 注入 `call_worker` 工具，工具闭包持有 `Company` 引用，LLM 调用该工具时通过 `Company.send()` 真实路由给目标 Worker。
+
+**相关修改**：
+
+- `packages/channel-cli/bin/bcc-chat.ts`：新增 `createDelegateTool()` 函数，多 Worker 场景自动注入
+- `packages/org/src/company.ts`：`send()` 方法新增可选 `from` 参数，正确记录发送方身份
+
+**效果**：Worker A 的 LLM 可以通过工具调用把子任务委托给 Worker B，B 的 LLM 处理后将结果作为工具返回值返回给 A，A 继续回答用户。
+
+---
+
+### 3.7 HTTP API 层（@bcc/channel-http，v0.3.0）
+
+全新包，使用 Node.js 内置 `http` 模块，**零额外运行时依赖**。
+
+**API 端点：**
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/health` | 健康检查 |
+| GET | `/api/workers` | 获取所有 Worker 列表 |
+| GET | `/api/models` | 获取所有模型实例 |
+| GET | `/api/config` | 获取当前配置摘要 |
+| GET | `/api/analytics/tokens` | Token 消耗统计 |
+| POST | `/api/workers/:id/sessions` | 为 Worker 创建新会话 |
+| GET | `/api/workers/:id/sessions` | 列出 Worker 的所有会话 |
+| GET | `/api/sessions/:id` | 获取会话详情 + 消息列表 |
+| DELETE | `/api/sessions/:id` | 删除会话 |
+| POST | `/api/sessions/:id/messages` | 发消息（**SSE 流式响应**） |
+
+**SSE 事件格式：**
+
+```
+event: chunk
+data: {"text": "正在生成..."}
+
+event: tool_call
+data: {"tool": "calculator", "input": {"expression": "2+2"}}
+
+event: tool_result
+data: {"tool": "calculator", "result": "4", "isError": false}
+
+event: done
+data: {"tokenUsage": {"inputTokens": 100, "outputTokens": 50, "totalTokens": 150}}
+```
+
+**会话隔离**：HTTP 每个 `POST /api/workers/:id/sessions` 创建一个独立的 `AgentEngine` 实例（有别于 CLI 共享历史的模式），会话历史互不影响。
+
+---
+
+### 3.8 Web 管理前端（@bcc/web，v0.3.0）
+
+Vue 3 + Pinia + Vite，所有 Mock 数据已替换为真实 HTTP API 调用。
+
+**主要视图：**
+
+- `ChatView.vue`：对话界面，支持 Worker 切换、SSE 流式消息接收
+- `WorkersView.vue`：Worker 管理页，展示来自 API 的实际 Worker 信息
+
+**关键变更（Mock → 真实 API）：**
+
+- `stores/workers.ts`：`fetchWorkers()` 调用 `GET /api/workers`
+- `stores/models.ts`：`fetchModels()` 调用 `GET /api/models`
+- `stores/chat.ts`：`sendMessage()` 通过 SSE 流接收 AI 回复，`newSession()` 调用 `POST /api/workers/:id/sessions`
+- `api/client.ts`：封装所有 `fetch()` 调用和 SSE 解析逻辑
+- `vite.config.ts`：开发时 `/api` → `http://localhost:3000` 代理
 
 ---
 
@@ -184,7 +241,7 @@ pnpm bcc-worker set-primary <id>  # 设置默认 Worker
 | 提供商预设表重复 | `bcc-chat.ts` + `bcc-init.ts` | 各维护一份，应提取到 `channel-cli/src/providers.ts` |
 | `dumpHistory()` 重复 | `ChatSession` + `AgentEngine` | 实现相同，可提取到 foundation 工具函数 |
 | `complete()` 模板重复 | Anthropic + OpenAI 两个适配器 | stream-to-string 收集逻辑相同，可提取为辅助函数 |
-| `createAdapter()` 工厂在 CLI bin | `bcc-chat.ts` | 无法被其他渠道复用，应提取到 `channel-cli/src/` |
+| `createAdapter()` 工厂在 CLI bin | `bcc-chat.ts` | 无法被其他渠道复用，已在 `channel-http/server.ts` 复制一份，应提取到共享包 |
 
 ### P3 轻微问题（低优先级）
 
@@ -193,9 +250,16 @@ pnpm bcc-worker set-primary <id>  # 设置默认 Worker
 | `getPrimary()` 调用 `list()` 两次 | `agents/src/registry.ts:62` | 微小性能，一行可修 |
 | ModelRouter 空时返回魔法字符串 `'none'` | `model-core/src/router.ts:67` | 边界情况，应抛出明确错误 |
 
-### 中期：情节记忆（@bcc/memory-episodic）
+### 中期：Worker 配置热更新（PATCH /api/config）
 
-当前 `FileMemoryStore` 是工作记忆（暴力回放所有历史），缺少会话结束后的自动摘要：
+当前 HTTP API 中 Worker 配置变更（WorkersView.vue 的保存/删除）仅显示提示，不实际写入配置文件。需要：
+
+- 实现 `PATCH /api/config` 端点，支持增量更新 `workers` 字段
+- 实现重载逻辑：更新后重新构建受影响的 Worker 实例
+
+### 中期：情节记忆（@bcc/memory-episodic 完整实现）
+
+当前 `FileMemoryStore` 是工作记忆（暴力回放所有历史），`memory-episodic` 包为占位状态：
 
 - 会话结束后调用 LLM 生成结构化摘要（时间 + 参与者 + 关键决策 + 摘要文本）
 - 下次对话时检索相关历史摘要注入 context
@@ -205,15 +269,6 @@ pnpm bcc-worker set-primary <id>  # 设置默认 Worker
 
 - 接入飞书 Bot API，Worker 可通过飞书群接收消息、回复消息
 - 实现 `Participant` 接口，对接现有 Company/Worker 架构
-- 配合管理后台，可视化展示多 Worker 在飞书群中协作
-
-### 长期：管理后台 / 可视化 UI
-
-- 独立 Web 应用或桌面 App
-- 可视化创建/编辑 Worker，查看 token 消耗仪表板
-- 实时展示多 Worker 协作消息流（"看到员工在群里沟通工作"）
-- Worker 下线/重启、工作流暂停/恢复等管理操作
-- 技术基础：`OrgEvent` 事件总线（已实现），管理服务器订阅 Company.onEvent() 推送 WebSocket
 
 ### 长期：工作流引擎（workflow.ts）
 
@@ -225,15 +280,12 @@ pnpm bcc-worker set-primary <id>  # 设置默认 Worker
 
 - 本地向量嵌入或调用 Embedding API
 - 提供 `search(query, topK)` 接口，按相关性检索历史片段
-- 与情节记忆配合，构建完整三层记忆体系
 
 ---
 
 ## 五、产品愿景与核心概念
 
 ### 5.1 核心隐喻：公司与员工
-
-目标系统的核心是**公司与员工**的组织协作模型：
 
 | 概念 | 含义 |
 |---|---|
@@ -246,22 +298,27 @@ pnpm bcc-worker set-primary <id>  # 设置默认 Worker
 ### 5.2 架构关键设计决策
 
 1. **消息传递，而非工具调用**
-   Worker 之间的通信是双向消息（有 inbox/outbox），不是函数调用返回字符串。
+   Worker 之间的通信基于 `OrgMessage`（有 from/to/threadId），不是函数调用返回字符串。
+   `call_worker` 工具是 LLM 层面的触发入口，底层仍通过 `Company.send()` 路由真实消息。
 
 2. **递归组合（Composite Pattern）**
    Company 和 Worker 共享同一个 `Participant` 接口。Company 可以是更大 Company 的 Worker。
 
 3. **Token 按模型独立计算**
-   每个 Provider 从 API 原始响应提取 token 数（不估算），精确反映各模型实际消耗。未来可在 `WorkerConfig` 中加入 `pricePerMillionTokens` 实现费用估算。
+   每个 Provider 从 API 原始响应提取 token 数（不估算），精确反映各模型实际消耗。
 
 4. **适配器模式兼容旧 REPL**
    `WorkerSession` 包装 `Worker`，实现 `AgentInterface`，REPL 代码无需修改即可支持 Worker 模式。
+
+5. **HTTP 与 CLI 会话隔离策略不同**
+   CLI：单个 AgentEngine，跨消息共享历史。
+   HTTP：每个 Web Session 创建独立 AgentEngine，互不影响。
 
 ### 5.3 记忆体系（规划）
 
 ```
 工作记忆（Working Memory）        ← 已有 FileMemoryStore（暴力回放，待优化）
-情节记忆（Episodic Memory）       ← 未实现：会话结束后 LLM 自动摘要
+情节记忆（Episodic Memory）       ← 包已创建（占位），待实现 LLM 自动摘要
 语义记忆（Semantic Memory）       ← 未实现：向量检索历史相关片段
 ```
 
@@ -273,32 +330,25 @@ pnpm bcc-worker set-primary <id>  # 设置默认 Worker
        ↓ 路由到
   产品经理 Worker（PM）
     LLM 分析 → 输出需求文档
-       ↓ PM.send(to: PjM, content: 需求文档)
+       ↓ call_worker(PjM, 需求文档)  ← v0.3.0 实现
   项目经理 Worker（PjM）
     LLM 分析可行性 → 拆解任务
-       ├─ PjM.send(to: Arch, content: 技术要求)
-       └─ PjM.send(to: PM, content: "预计3周，可行")
+       ├─ call_worker(Arch, 技术要求)
+       └─ 返回："预计3周，可行"
   架构师 Worker（Arch）
     LLM 设计架构 → 输出接口文档
-       ├─ Arch.send(to: BE, content: 接口文档)
-       └─ Arch.send(to: UI, content: 设计稿需求)
 ```
 
 ---
 
-## 六、代码迁移策略
+## 六、版本记录
 
-现有代码不需要大规模重写，而是**向上扩展**：
-
-| 现有代码 | 新角色 | 迁移策略 |
-|---|---|---|
-| `AgentEngine` | Worker 的「大脑」 | 保持不变，作为 Worker 内部实现 |
-| `BccAgent` | 过渡期兼容层 | 新增 `Worker` 类复用 AgentEngine，`BccAgent` 保留向后兼容 |
-| `AgentRegistry` | Company 的成员表 | Company 内部复用 AgentRegistry，扩展递归能力 |
-| `FileMemoryStore` | 工作记忆实现 | 保持不变，`memory-episodic` 在其上层封装 |
-| `CliChannel` | 第一个 Channel 实现 | 已对接新 Worker 接口（v0.2.0 完成） |
-| `NamedAgent` 接口 | 过渡期统一接口 | 新 `Participant` 接口稳定后，`NamedAgent` 可作为其子集 |
+| 版本 | 日期 | 主要内容 |
+|------|------|---------|
+| v0.1.0 | 2026-03-08 | 基础对话（Claude + DeepSeek）、多模型路由、会话持久化、CLI 工具 |
+| v0.2.0 | 2026-03-09 | Worker 架构（@bcc/org）、bcc-worker CLI、REPL 多模式、Bug 修复、架构重构 |
+| v0.3.0 | 2026-03-10 | HTTP API（@bcc/channel-http）、Web 前端真实接口对接、Worker 间真实通信（call_worker） |
 
 ---
 
-*本文档记录截止 2026-03-09，后续重大架构决策请同步更新此文件。*
+*本文档记录截止 2026-03-10，后续重大架构决策请同步更新此文件。*
