@@ -12,5 +12,12 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    proxy: {
+      // 开发时将 /api 请求转发到 bcc-server（pnpm bcc-server）
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+    },
   },
 });

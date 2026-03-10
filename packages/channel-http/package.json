@@ -1,0 +1,46 @@
+{
+  "name": "@bcc/channel-http",
+  "version": "0.2.0",
+  "description": "HTTP/SSE API 渠道 — 为 Web 前端提供 REST + 流式接口",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "bcc-server": "./dist/bin/bcc-server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "tsx bin/bcc-server.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/agent-engine": "workspace:*",
+    "@bcc/foundation": "workspace:*",
+    "@bcc/memory-fs": "workspace:*",
+    "@bcc/model-core": "workspace:*",
+    "@bcc/org": "workspace:*",
+    "@bcc/skills": "workspace:*"
+  },
+  "peerDependencies": {
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@bcc/protocol-anthropic": { "optional": true },
+    "@bcc/protocol-openai": { "optional": true }
+  },
+  "devDependencies": {
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*",
+    "@types/node": "*",
+    "tsx": "*",
+    "typescript": "*"
+  }
+}

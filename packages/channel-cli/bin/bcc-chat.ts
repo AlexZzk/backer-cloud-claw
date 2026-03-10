@@ -13,6 +13,7 @@
  *   2. 多 Agent 模式：config.agents 有内容 → 使用 BccAgent Orchestrator
  *   3. 普通模式：ModelRouter 单对话（默认）
  */
+import { randomUUID } from 'node:crypto';
 import { ModelRouter } from '@bcc/model-core';
 import { FileMemoryStore } from '@bcc/memory-fs';
 import { FileEpisodicStore, EpisodeGenerator } from '@bcc/memory-episodic';
@@ -27,6 +28,7 @@ import {
 } from '../src/config.js';
 import { BccAgent, AgentRegistry } from '@bcc/agents';
 import { Worker, Company } from '@bcc/org';
+import type { Tool } from '@bcc/foundation';
 import { WorkerSession, WorkerRegistry } from '../src/worker-session.js';
 
 // ─── CLI 参数解析 ─────────────────────────────────────────────────────────────
@@ -330,19 +332,73 @@ async function buildMemorySection(
   return lines.join('\n');
 }
 
+// ─── 跨 Worker 委托工具 ──────────────────────────────────────────────────────
+
+/**
+ * 为 Worker 创建「委托给同事」工具。
+ * Worker A 可在 LLM 工具调用时将子任务路由给 Worker B，
+ * 结果以字符串形式返回给 A 的模型上下文。
+ */
+function createDelegateTool(fromWorker: Worker, targets: Worker[], company: Company): Tool {
+  const targetDesc = targets
+    .map(w => `  - ${w.profile.id}（${w.profile.name}）：${w.profile.description}`)
+    .join('\n');
+
+  return {
+    definition: {
+      name: 'call_worker',
+      description: `将子任务委托给团队中的其他成员，获取他们的专业回复后继续处理。\n可委托的成员：\n${targetDesc}`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worker_id: {
+            type: 'string',
+            description: '目标员工的 ID',
+            enum: targets.map(w => w.profile.id),
+          },
+          message: {
+            type: 'string',
+            description: '发给目标员工的任务描述或问题',
+          },
+        },
+        required: ['worker_id', 'message'],
+      },
+    },
+    handler: async (input) => {
+      const { worker_id, message } = input as { worker_id: string; message: string };
+      const thread = company.openThread(`${fromWorker.profile.id} → ${worker_id}`, [fromWorker.profile.id, worker_id]);
+      try {
+        const replies = await company.send(worker_id, message, thread.id, fromWorker.profile.id);
+        company.closeThread(thread.id);
+        if (replies.length === 0) return `（${worker_id} 未返回任何内容）`;
+        return replies.map(r => r.content).join('\n');
+      } catch (err) {
+        company.closeThread(thread.id);
+        throw err;
+      }
+    },
+  };
+}
+
 // ─── 构建 WorkerRegistry（新 Org 模式）──────────────────────────────────────
+
+interface WorkerBuildResult {
+  registry: WorkerRegistry;
+  company: Company;
+}
 
 async function buildWorkerRegistry(
   workerDefs: WorkerConfig[],
   modelInstances: ModelInstanceConfig[],
   memory: FileMemoryStore | undefined,
   episodicStore: FileEpisodicStore | undefined,
-): Promise<WorkerRegistry | null> {
+): Promise<WorkerBuildResult | null> {
   if (workerDefs.length === 0) return null;
 
   // Company 提供共享 tokenTracker + eventBus（为后续管理后台对接做准备）
   const company = new Company({ name: '我的团队' });
   const registry = new WorkerRegistry();
+  const allWorkers: Worker[] = [];
 
   for (const def of workerDefs) {
     const modelInstance = modelInstances.find(m => m.id === def.modelId)
@@ -401,6 +457,7 @@ async function buildWorkerRegistry(
       }
 
       company.addWorker(worker);
+      allWorkers.push(worker);
       registry.register(new WorkerSession(worker, company.tokenTracker));
     } catch (err) {
       console.warn(`  ⚠ Worker "${def.id}" 创建失败：${err instanceof Error ? err.message : String(err)}`);
@@ -408,6 +465,15 @@ async function buildWorkerRegistry(
   }
 
   if (registry.size === 0) return null;
+
+  // ── 注入跨 Worker 委托工具（多于 1 名 Worker 时） ──────────────────────────
+  if (allWorkers.length > 1) {
+    for (const worker of allWorkers) {
+      const others = allWorkers.filter(w => w.profile.id !== worker.profile.id);
+      worker.registerTool(createDelegateTool(worker, others, company));
+    }
+    console.log(`  🔗 已为所有员工注入「call_worker」委托工具（Worker 间可直接传递任务）`);
+  }
 
   console.log(`  👥 Worker 模式（${registry.size} 名员工）：`);
   for (const session of registry.list()) {
@@ -420,7 +486,7 @@ async function buildWorkerRegistry(
   }
   console.log();
 
-  return registry;
+  return { registry, company };
 }
 
 function resolveInitialWorkerSession(
@@ -489,8 +555,9 @@ async function main(): Promise<void> {
   // ── 模式 1：Worker 模式（优先）──────────────────────────────────────────
   const workerDefs = config.workers ?? [];
   if (workerDefs.length > 0) {
-    const workerRegistry = await buildWorkerRegistry(workerDefs, config.models, memory, episodicStore);
-    if (workerRegistry) {
+    const buildResult = await buildWorkerRegistry(workerDefs, config.models, memory, episodicStore);
+    if (buildResult) {
+      const { registry: workerRegistry } = buildResult;
       const initialSession = resolveInitialWorkerSession(workerRegistry, workerDefs, args.worker);
       const cli = await CliChannel.create({ agent: initialSession, workerRegistry });
       await cli.start();

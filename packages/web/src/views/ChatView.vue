@@ -22,14 +22,14 @@
           :class="{ active: chatStore.activeWorkerId === item.worker.id }"
           @click="chatStore.selectWorker(item.worker.id)"
         >
-          <div class="contact-avatar" :class="{ secretary: item.worker.isSecretary }">
+          <div class="contact-avatar" :class="{ secretary: item.worker.isPrimary }">
             {{ item.worker.avatar }}
             <span class="status-dot" :class="item.worker.status"></span>
           </div>
           <div class="contact-info">
             <div class="contact-name-row">
               <span class="contact-name">{{ item.worker.name }}</span>
-              <span v-if="item.worker.isSecretary" class="secretary-badge">助理</span>
+              <span v-if="item.worker.isPrimary" class="secretary-badge">主要</span>
               <span class="contact-time">{{ item.updatedAt ? formatTime(item.updatedAt) : '' }}</span>
             </div>
             <div class="contact-last">
@@ -50,7 +50,7 @@
             <div>
               <div class="worker-name-row">
                 <span class="worker-name">{{ activeWorker.name }}</span>
-                <a-tag v-if="activeWorker.isSecretary" color="arcoblue" size="small">默认助理</a-tag>
+                <a-tag v-if="activeWorker.isPrimary" color="arcoblue" size="small">默认助理</a-tag>
                 <a-tag :color="statusColor(activeWorker.status)" size="small">
                   {{ t(`workers.${activeWorker.status}`) }}
                 </a-tag>
@@ -207,7 +207,7 @@
           <div class="pick-info">
             <div class="pick-name">
               {{ worker.name }}
-              <a-tag v-if="worker.isSecretary" color="arcoblue" size="small">默认助理</a-tag>
+              <a-tag v-if="worker.isPrimary" color="arcoblue" size="small">默认助理</a-tag>
             </div>
             <div class="pick-desc">{{ worker.description }}</div>
           </div>
@@ -225,11 +225,12 @@ import { ref, computed, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useChatStore } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
-import { MOCK_WORKERS } from '@/mock/data';
+import { useWorkersStore } from '@/stores/workers';
 
 const { t } = useI18n();
 const chatStore = useChatStore();
 const authStore = useAuthStore();
+const workersStore = useWorkersStore();
 
 const inputText = ref('');
 const searchText = ref('');
@@ -237,11 +238,11 @@ const showWorkerPicker = ref(false);
 const inputFocused = ref(false);
 const messagesArea = ref<HTMLElement>();
 
-const allWorkers = MOCK_WORKERS;
+const allWorkers = computed(() => workersStore.workers);
 
 const activeWorker = computed(() =>
   chatStore.activeWorkerId
-    ? MOCK_WORKERS.find(w => w.id === chatStore.activeWorkerId) ?? null
+    ? workersStore.getWorker(chatStore.activeWorkerId) ?? null
     : null
 );
 
@@ -302,7 +303,7 @@ async function handleSend() {
   if (!inputText.value.trim() || chatStore.isThinking) return;
   // If no active session, create one first
   if (!chatStore.activeSessionId && chatStore.activeWorkerId) {
-    chatStore.newSession(chatStore.activeWorkerId);
+    await chatStore.newSession(chatStore.activeWorkerId);
   }
   const text = inputText.value;
   inputText.value = '';
@@ -311,9 +312,9 @@ async function handleSend() {
   scrollToBottom();
 }
 
-function handleNewSession() {
+async function handleNewSession() {
   if (!chatStore.activeWorkerId) return;
-  chatStore.newSession(chatStore.activeWorkerId);
+  await chatStore.newSession(chatStore.activeWorkerId);
 }
 
 function scrollToBottom() {
