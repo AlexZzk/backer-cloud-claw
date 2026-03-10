@@ -1,13 +1,15 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { sessionsApi, sendMessageStream, type ApiSession, type ApiMessage } from '@/api/client';
+import { sessionsApi, dmApi, sendMessageStream, type ApiSession, type ApiMessage, type SessionType } from '@/api/client';
 import { useWorkersStore } from './workers';
 
 export type { ApiMessage as MockMessage };
 
 export interface ChatSession {
   id: string;
+  type: SessionType;
   workerId: string;
+  toWorkerId?: string;    // 仅 DM 会话有
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -27,11 +29,12 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value.find(s => s.id === activeSessionId.value) ?? null
   );
 
+  /** 用户↔Worker 会话列表（按 worker 分组，供联系人栏展示） */
   const contactList = computed(() => {
     const workersStore = useWorkersStore();
     return workersStore.workers.map(worker => {
       const workerSessions = sessions.value
-        .filter(s => s.workerId === worker.id)
+        .filter(s => s.type === 'chat' && s.workerId === worker.id)
         .sort((a, b) => b.updatedAt - a.updatedAt);
       const latest = workerSessions[0];
       const lastMsg = latest?.messages[latest.messages.length - 1];
@@ -49,11 +52,18 @@ export const useChatStore = defineStore('chat', () => {
     });
   });
 
+  /** Worker↔Worker DM 会话列表（供 DM 区域展示） */
+  const dmList = computed(() =>
+    sessions.value
+      .filter(s => s.type === 'dm')
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  );
+
   // ─── Actions ────────────────────────────────────────────────────────────
 
   function getWorkerSessions(workerId: string): ChatSession[] {
     return sessions.value
-      .filter(s => s.workerId === workerId)
+      .filter(s => s.type === 'chat' && s.workerId === workerId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -73,17 +83,38 @@ export const useChatStore = defineStore('chat', () => {
     loading.value = true;
     try {
       const apiSession = await sessionsApi.create(workerId);
-      const session: ChatSession = {
-        id: apiSession.id,
-        workerId: apiSession.workerId,
-        title: apiSession.title,
-        createdAt: apiSession.createdAt,
-        updatedAt: apiSession.updatedAt,
-        messages: [],
-      };
+      const session = fromApiSession(apiSession);
       sessions.value.unshift(session);
       activeWorkerId.value = workerId;
       activeSessionId.value = session.id;
+      return session;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  /** 创建或打开两个 Worker 之间的 DM 会话 */
+  async function newDmSession(fromWorkerId: string, toWorkerId: string): Promise<ChatSession> {
+    // 先检查本地是否已有
+    const existing = sessions.value.find(
+      s => s.type === 'dm' && (
+        (s.workerId === fromWorkerId && s.toWorkerId === toWorkerId) ||
+        (s.workerId === toWorkerId   && s.toWorkerId === fromWorkerId)
+      ),
+    );
+    if (existing) {
+      activeSessionId.value = existing.id;
+      activeWorkerId.value = existing.workerId;
+      return existing;
+    }
+
+    loading.value = true;
+    try {
+      const apiSession = await dmApi.create(fromWorkerId, toWorkerId);
+      const session = fromApiSession(apiSession);
+      sessions.value.unshift(session);
+      activeSessionId.value = session.id;
+      activeWorkerId.value = session.workerId;
       return session;
     } finally {
       loading.value = false;
@@ -96,9 +127,7 @@ export const useChatStore = defineStore('chat', () => {
     const workerId = sessions.value[idx]!.workerId;
     try {
       await sessionsApi.delete(sessionId);
-    } catch {
-      // 忽略后端错误，本地直接删除
-    }
+    } catch { /* 忽略后端错误，本地直接删除 */ }
     sessions.value.splice(idx, 1);
     if (activeSessionId.value === sessionId) {
       const remaining = getWorkerSessions(workerId);
@@ -110,6 +139,7 @@ export const useChatStore = defineStore('chat', () => {
     if (!activeSession.value || !content.trim()) return;
 
     const session = activeSession.value;
+    const isDm = session.type === 'dm';
 
     // 用户消息立即追加（乐观更新）
     const userMsg: ApiMessage = {
@@ -126,35 +156,70 @@ export const useChatStore = defineStore('chat', () => {
 
     isThinking.value = true;
 
-    // assistant 占位消息（流式追加内容）
-    const assistantMsg: ApiMessage = {
-      id: `m-${Date.now() + 1}`,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-    };
-    session.messages.push(assistantMsg);
+    if (isDm) {
+      // DM 会话：等待 speaker 事件逐条追加两个 worker 的消息
+      let currentSpeakerId: string | null = null;
+      let currentMsg: ApiMessage | null = null;
 
-    try {
-      await sendMessageStream(session.id, content.trim(), {
-        onChunk: (text) => {
-          assistantMsg.content += text;
-        },
-        onDone: (tokenUsage) => {
-          if (tokenUsage) {
-            assistantMsg.tokenUsage = {
-              inputTokens:  tokenUsage.inputTokens,
-              outputTokens: tokenUsage.outputTokens,
+      try {
+        await sendMessageStream(session.id, content.trim(), {
+          onSpeaker: (workerId) => {
+            // 开始新的发言者，创建新消息占位
+            currentSpeakerId = workerId;
+            currentMsg = {
+              id: `m-${Date.now()}-${workerId}`,
+              role: 'assistant',
+              speakerId: workerId,
+              content: '',
+              timestamp: Date.now(),
             };
-          }
-          session.updatedAt = Date.now();
-        },
-        onError: (message) => {
-          assistantMsg.content = `⚠ 错误：${message}`;
-        },
-      });
-    } finally {
-      isThinking.value = false;
+            session.messages.push(currentMsg);
+          },
+          onChunk: (text) => {
+            if (currentMsg) currentMsg.content += text;
+          },
+          onDone: () => {
+            session.updatedAt = Date.now();
+          },
+          onError: (message) => {
+            if (currentMsg) currentMsg.content = `⚠ 错误：${message}`;
+          },
+        });
+      } finally {
+        isThinking.value = false;
+        void currentSpeakerId; // suppress unused warning
+      }
+    } else {
+      // Chat 会话：单个 assistant 消息流式追加
+      const assistantMsg: ApiMessage = {
+        id: `m-${Date.now() + 1}`,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+      };
+      session.messages.push(assistantMsg);
+
+      try {
+        await sendMessageStream(session.id, content.trim(), {
+          onChunk: (text) => {
+            assistantMsg.content += text;
+          },
+          onDone: (tokenUsage) => {
+            if (tokenUsage) {
+              assistantMsg.tokenUsage = {
+                inputTokens:  tokenUsage.inputTokens,
+                outputTokens: tokenUsage.outputTokens,
+              };
+            }
+            session.updatedAt = Date.now();
+          },
+          onError: (message) => {
+            assistantMsg.content = `⚠ 错误：${message}`;
+          },
+        });
+      } finally {
+        isThinking.value = false;
+      }
     }
   }
 
@@ -169,8 +234,23 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     sessions, activeWorkerId, activeSessionId, activeSession,
-    isThinking, loading, contactList,
+    isThinking, loading, contactList, dmList,
     getWorkerSessions, selectWorker, selectSession,
-    newSession, deleteSession, sendMessage, clearSession, openWorkerChat,
+    newSession, newDmSession, deleteSession, sendMessage, clearSession, openWorkerChat,
   };
 });
+
+// ─── 工具 ────────────────────────────────────────────────────────────────────
+
+function fromApiSession(s: ApiSession): ChatSession {
+  return {
+    id:          s.id,
+    type:        s.type,
+    workerId:    s.workerId,
+    toWorkerId:  s.toWorkerId,
+    title:       s.title,
+    createdAt:   s.createdAt,
+    updatedAt:   s.updatedAt,
+    messages:    [],
+  };
+}

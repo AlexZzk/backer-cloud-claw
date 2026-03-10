@@ -1,48 +1,99 @@
 /**
  * SessionStore：管理 HTTP 服务器内的活跃对话会话。
  *
- * 每个会话 = 一个独立的 AgentEngine 实例（与 Worker Config 绑定）。
+ * 支持两种会话类型：
+ *   chat — 用户与单个 Worker 的对话
+ *   dm   — 两个 Worker 之间的直接消息（DM）会话
+ *
  * 会话在内存中维护，服务重启后清空（不持久化）。
  */
 
 import { randomUUID } from 'node:crypto';
 import type { AgentInterface } from '@bcc/foundation';
-import type { ApiMessage, ApiSession } from './types.js';
+import type { ApiMessage, ApiSession, SessionType } from './types.js';
 
 export interface SessionEntry {
   id: string;
-  workerId: string;
+  type: SessionType;
+  workerId: string;          // chat: worker ID；dm: 发起方 worker ID
+  toWorkerId?: string;       // dm: 接收方 worker ID
   title: string;
   createdAt: number;
   updatedAt: number;
-  agent: AgentInterface;
+  agent: AgentInterface;     // chat: 唯一 agent；dm: 发起方 agent
+  toAgent?: AgentInterface;  // dm: 接收方 agent
   messages: ApiMessage[];
 }
 
 export class SessionStore {
   private sessions = new Map<string, SessionEntry>();
 
+  // ── 创建 chat 会话（用户↔Worker）────────────────────────────────────────────
+
   create(workerId: string, agent: AgentInterface): SessionEntry {
     const entry: SessionEntry = {
-      id: randomUUID(),
+      id:        randomUUID(),
+      type:      'chat',
       workerId,
-      title: '新会话',
+      title:     '新会话',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       agent,
-      messages: [],
+      messages:  [],
     };
     this.sessions.set(entry.id, entry);
     return entry;
   }
 
+  // ── 创建 DM 会话（Worker↔Worker）────────────────────────────────────────────
+
+  createDm(
+    fromWorkerId: string,
+    toWorkerId: string,
+    fromAgent: AgentInterface,
+    toAgent: AgentInterface,
+  ): SessionEntry {
+    const entry: SessionEntry = {
+      id:          randomUUID(),
+      type:        'dm',
+      workerId:    fromWorkerId,
+      toWorkerId,
+      title:       '员工对话',
+      createdAt:   Date.now(),
+      updatedAt:   Date.now(),
+      agent:       fromAgent,
+      toAgent,
+      messages:    [],
+    };
+    this.sessions.set(entry.id, entry);
+    return entry;
+  }
+
+  /** 查找两个 Worker 之间已有的 DM 会话（双向匹配） */
+  findDm(workerIdA: string, workerIdB: string): SessionEntry | undefined {
+    for (const s of this.sessions.values()) {
+      if (s.type !== 'dm') continue;
+      const match =
+        (s.workerId === workerIdA && s.toWorkerId === workerIdB) ||
+        (s.workerId === workerIdB && s.toWorkerId === workerIdA);
+      if (match) return s;
+    }
+    return undefined;
+  }
+
+  // ── 查询 ─────────────────────────────────────────────────────────────────────
+
   get(id: string): SessionEntry | undefined {
     return this.sessions.get(id);
   }
 
+  /** 返回某 Worker 参与的所有会话（包括 DM 中的发起方和接收方） */
   listByWorker(workerId: string): SessionEntry[] {
     return [...this.sessions.values()]
-      .filter(s => s.workerId === workerId)
+      .filter(s =>
+        s.workerId === workerId ||
+        (s.type === 'dm' && s.toWorkerId === workerId),
+      )
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -54,13 +105,17 @@ export class SessionStore {
     return this.sessions.delete(id);
   }
 
+  // ── 序列化 ───────────────────────────────────────────────────────────────────
+
   toApiSession(entry: SessionEntry): ApiSession {
     return {
-      id: entry.id,
-      workerId: entry.workerId,
-      title: entry.title,
-      createdAt: entry.createdAt,
-      updatedAt: entry.updatedAt,
+      id:           entry.id,
+      type:         entry.type,
+      workerId:     entry.workerId,
+      ...(entry.toWorkerId && { toWorkerId: entry.toWorkerId }),
+      title:        entry.title,
+      createdAt:    entry.createdAt,
+      updatedAt:    entry.updatedAt,
       messageCount: entry.messages.length,
     };
   }

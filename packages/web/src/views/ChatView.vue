@@ -25,11 +25,14 @@
             去配置
           </a-button>
         </div>
+
+        <!-- 与我对话（用户↔Worker） -->
+        <div class="contact-section-title" v-if="hasWorkers">与我对话</div>
         <div
           v-for="item in filteredContacts"
           :key="item.worker.id"
           class="contact-item"
-          :class="{ active: chatStore.activeWorkerId === item.worker.id }"
+          :class="{ active: chatStore.activeSessionId && chatStore.activeWorkerId === item.worker.id && activeSessionType === 'chat' }"
           @click="chatStore.selectWorker(item.worker.id)"
         >
           <div class="contact-avatar" :class="{ secretary: item.worker.isPrimary }">
@@ -47,6 +50,47 @@
             </div>
           </div>
         </div>
+
+        <!-- 员工间对话（Worker↔Worker DM） -->
+        <div class="contact-section-title dm-section" v-if="hasWorkers">
+          员工间对话
+          <a-button
+            size="mini"
+            type="text"
+            shape="circle"
+            title="发起员工间对话"
+            @click.stop="showDmPicker = true"
+          >
+            <template #icon><icon-plus /></template>
+          </a-button>
+        </div>
+        <div
+          v-for="dm in chatStore.dmList"
+          :key="dm.id"
+          class="contact-item dm-item"
+          :class="{ active: chatStore.activeSessionId === dm.id }"
+          @click="openDmSession(dm.id)"
+        >
+          <div class="dm-avatars">
+            <span class="dm-av">🤖</span>
+            <span class="dm-av">🤖</span>
+          </div>
+          <div class="contact-info">
+            <div class="contact-name-row">
+              <span class="contact-name">{{ getDmTitle(dm) }}</span>
+              <span class="contact-time">{{ dm.updatedAt ? formatTime(dm.updatedAt) : '' }}</span>
+            </div>
+            <div class="contact-last">
+              {{ getDmLastMessage(dm) }}
+            </div>
+          </div>
+        </div>
+        <div
+          v-if="hasWorkers && chatStore.dmList.length === 0 && !workersStore.loading"
+          class="dm-empty-hint"
+        >
+          <span>点击 + 发起员工间对话</span>
+        </div>
       </div>
     </div>
 
@@ -56,20 +100,38 @@
         <!-- Header -->
         <div class="chat-header">
           <div class="chat-header-left">
-            <span class="worker-avatar-lg">🤖</span>
-            <div>
-              <div class="worker-name-row">
-                <span class="worker-name">{{ activeWorker.name }}</span>
-                <a-tag v-if="activeWorker.isPrimary" color="arcoblue" size="small">默认助理</a-tag>
-                <a-tag :color="statusColor(activeWorker.status)" size="small">
-                  {{ t(`workers.${activeWorker.status}`) }}
-                </a-tag>
+            <!-- DM session header -->
+            <template v-if="activeSessionType === 'dm'">
+              <div class="dm-header-avatars">
+                <span class="worker-avatar-lg">🤖</span>
+                <span class="worker-avatar-lg dm-avatar-2">🤖</span>
               </div>
-              <div class="worker-model">{{ activeWorker.modelId }}</div>
-            </div>
+              <div>
+                <div class="worker-name-row">
+                  <span class="worker-name">{{ activeWorker.name }}</span>
+                  <span style="color: var(--text-tertiary); font-size: 14px;">↔</span>
+                  <span class="worker-name">{{ activeDmToWorker?.name ?? '?' }}</span>
+                </div>
+                <div class="worker-model">员工间对话</div>
+              </div>
+            </template>
+            <!-- Regular chat session header -->
+            <template v-else>
+              <span class="worker-avatar-lg">🤖</span>
+              <div>
+                <div class="worker-name-row">
+                  <span class="worker-name">{{ activeWorker.name }}</span>
+                  <a-tag v-if="activeWorker.isPrimary" color="arcoblue" size="small">默认助理</a-tag>
+                  <a-tag :color="statusColor(activeWorker.status)" size="small">
+                    {{ t(`workers.${activeWorker.status}`) }}
+                  </a-tag>
+                </div>
+                <div class="worker-model">{{ activeWorker.modelId }}</div>
+              </div>
+            </template>
           </div>
           <div class="chat-header-right">
-            <a-button type="primary" size="small" @click="handleNewSession">
+            <a-button v-if="activeSessionType === 'chat'" type="primary" size="small" @click="handleNewSession">
               <template #icon><icon-plus /></template>
               {{ t('chat.newSession') }}
             </a-button>
@@ -86,8 +148,8 @@
           </div>
         </div>
 
-        <!-- Session tabs (shown when worker has multiple sessions) -->
-        <div class="session-tabs" v-if="workerSessions.length > 0">
+        <!-- Session tabs (shown for chat sessions with multiple tabs) -->
+        <div class="session-tabs" v-if="activeSessionType === 'chat' && workerSessions.length > 0">
           <div class="sessions-scroll">
             <div
               v-for="sess in workerSessions"
@@ -133,10 +195,13 @@
               class="message-wrapper"
               :class="msg.role"
             >
-              <div v-if="msg.role === 'assistant'" class="msg-avatar">
+              <div v-if="msg.role === 'assistant'" class="msg-avatar" :title="getDmSpeakerName(msg.speakerId)">
                 🤖
               </div>
               <div class="message-bubble" :class="msg.role">
+                <div v-if="activeSessionType === 'dm' && msg.role === 'assistant' && msg.speakerId" class="dm-speaker-label">
+                  {{ getDmSpeakerName(msg.speakerId) }}
+                </div>
                 <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
                 <div class="message-footer" v-if="msg.tokenUsage">
                   <span class="token-info">
@@ -247,6 +312,36 @@
       </div>
     </div>
 
+    <!-- DM picker modal (for starting worker↔worker DM) -->
+    <a-modal
+      v-model:visible="showDmPicker"
+      title="发起员工间对话"
+      width="480px"
+      @ok="createDmSession"
+      :ok-loading="dmCreating"
+      :ok-button-props="{ disabled: !dmFromWorkerId || !dmToWorkerId || dmFromWorkerId === dmToWorkerId }"
+    >
+      <div style="display: flex; flex-direction: column; gap: 16px; padding: 8px 0;">
+        <div>
+          <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">发起方员工</div>
+          <a-select v-model="dmFromWorkerId" placeholder="选择发起方" style="width: 100%;">
+            <a-option v-for="w in allWorkers" :key="w.id" :value="w.id">🤖 {{ w.name }}</a-option>
+          </a-select>
+        </div>
+        <div>
+          <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">接收方员工</div>
+          <a-select v-model="dmToWorkerId" placeholder="选择接收方" style="width: 100%;">
+            <a-option v-for="w in allWorkers" :key="w.id" :value="w.id" :disabled="w.id === dmFromWorkerId">🤖 {{ w.name }}</a-option>
+          </a-select>
+        </div>
+        <div v-if="dmFromWorkerId && dmToWorkerId && dmFromWorkerId !== dmToWorkerId" class="dm-preview">
+          <span>🤖 {{ allWorkers.find(w => w.id === dmFromWorkerId)?.name }}</span>
+          <span style="color: var(--text-tertiary);">↔</span>
+          <span>🤖 {{ allWorkers.find(w => w.id === dmToWorkerId)?.name }}</span>
+        </div>
+      </div>
+    </a-modal>
+
     <!-- Worker picker modal (for starting new worker chat) -->
     <a-modal
       v-model:visible="showWorkerPicker"
@@ -282,7 +377,7 @@
 import { ref, computed, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { useChatStore } from '@/stores/chat';
+import { useChatStore, type ChatSession } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
 import { useWorkersStore } from '@/stores/workers';
 import { useModelsStore } from '@/stores/models';
@@ -300,6 +395,11 @@ const showWorkerPicker = ref(false);
 const inputFocused = ref(false);
 const messagesArea = ref<HTMLElement>();
 
+const showDmPicker = ref(false);
+const dmFromWorkerId = ref('');
+const dmToWorkerId = ref('');
+const dmCreating = ref(false);
+
 const allWorkers = computed(() => workersStore.workers);
 const hasWorkers = computed(() => workersStore.workers.length > 0);
 const hasModels = computed(() => modelsStore.models.length > 0);
@@ -307,11 +407,20 @@ const primaryWorker = computed(() =>
   workersStore.workers.find(w => w.isPrimary) ?? workersStore.workers[0] ?? null
 );
 
+const activeSessionType = computed(() => chatStore.activeSession?.type ?? 'chat');
+
 const activeWorker = computed(() =>
   chatStore.activeWorkerId
     ? workersStore.getWorker(chatStore.activeWorkerId) ?? null
     : null
 );
+
+const activeDmToWorker = computed(() => {
+  const s = chatStore.activeSession;
+  return s?.type === 'dm' && s.toWorkerId
+    ? workersStore.getWorker(s.toWorkerId) ?? null
+    : null;
+});
 
 const workerSessions = computed(() =>
   chatStore.activeWorkerId
@@ -417,6 +526,40 @@ function handleExport() {
 function startNewWorkerChat(workerId: string) {
   chatStore.selectWorker(workerId);
   showWorkerPicker.value = false;
+}
+
+function openDmSession(id: string) {
+  chatStore.selectSession(id);
+}
+
+function getDmTitle(dm: ChatSession): string {
+  const from = workersStore.getWorker(dm.workerId);
+  const to = dm.toWorkerId ? workersStore.getWorker(dm.toWorkerId) : null;
+  return `${from?.name ?? dm.workerId} ↔ ${to?.name ?? dm.toWorkerId ?? '?'}`;
+}
+
+function getDmLastMessage(dm: ChatSession): string {
+  const last = dm.messages[dm.messages.length - 1];
+  if (!last) return '点击查看对话';
+  return last.content.slice(0, 40) || '...';
+}
+
+function getDmSpeakerName(speakerId: string | undefined): string {
+  if (!speakerId) return '员工';
+  return workersStore.getWorker(speakerId)?.name ?? speakerId;
+}
+
+async function createDmSession() {
+  if (!dmFromWorkerId.value || !dmToWorkerId.value || dmFromWorkerId.value === dmToWorkerId.value) return;
+  dmCreating.value = true;
+  try {
+    await chatStore.newDmSession(dmFromWorkerId.value, dmToWorkerId.value);
+    showDmPicker.value = false;
+    dmFromWorkerId.value = '';
+    dmToWorkerId.value = '';
+  } finally {
+    dmCreating.value = false;
+  }
 }
 
 watch(() => chatStore.activeSession?.messages.length, async () => {
@@ -956,5 +1099,99 @@ watch(() => chatStore.activeSession?.messages.length, async () => {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 2px;
+}
+
+/* ─── Contact Section Title ──────────────────────────────────────────── */
+
+.contact-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 10px 10px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dm-section { margin-top: 4px; }
+
+/* ─── DM Contact Items ───────────────────────────────────────────────── */
+
+.dm-item .dm-avatars {
+  width: 40px;
+  height: 40px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.dm-av {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 26px;
+  text-align: center;
+}
+
+.dm-av:first-child { top: 0; left: 0; }
+.dm-av:last-child  { bottom: 0; right: 0; }
+
+.dm-empty-hint {
+  padding: 10px 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* ─── DM Header ──────────────────────────────────────────────────────── */
+
+.dm-header-avatars {
+  display: flex;
+  position: relative;
+  width: 56px;
+  height: 42px;
+  flex-shrink: 0;
+}
+
+.dm-avatar-2 {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  font-size: 20px;
+  width: 32px;
+  height: 32px;
+}
+
+/* ─── DM Speaker Label ───────────────────────────────────────────────── */
+
+.dm-speaker-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+/* ─── DM Picker Preview ──────────────────────────────────────────────── */
+
+.dm-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  padding: 10px 16px;
+  background: var(--bg-base);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
 }
 </style>
