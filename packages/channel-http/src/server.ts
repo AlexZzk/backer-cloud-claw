@@ -5,17 +5,22 @@
  * 为 Web 前端（packages/web）提供 REST + SSE 接口。
  *
  * 路由表：
- *   GET  /api/health
- *   GET  /api/workers
- *   GET  /api/models
- *   GET  /api/config
- *   PATCH /api/config
- *   POST  /api/workers/:id/sessions        创建会话
- *   GET   /api/workers/:id/sessions        列出会话
- *   GET   /api/sessions/:id               获取会话+消息
- *   DELETE /api/sessions/:id              删除会话
- *   POST  /api/sessions/:id/messages      发消息（SSE 流）
- *   GET   /api/analytics/tokens           token 统计
+ *   GET    /api/health
+ *   GET    /api/workers                   获取 Worker 列表（每次热重载 config）
+ *   POST   /api/workers                   创建 Worker
+ *   PUT    /api/workers/:id               更新 Worker
+ *   DELETE /api/workers/:id              删除 Worker
+ *   GET    /api/models                    获取模型列表（每次热重载 config）
+ *   POST   /api/models                    创建模型实例
+ *   PUT    /api/models/:id               更新模型实例
+ *   DELETE /api/models/:id              删除模型实例
+ *   GET    /api/config                    获取脱敏配置
+ *   POST   /api/workers/:id/sessions      创建会话
+ *   GET    /api/workers/:id/sessions      列出会话
+ *   GET    /api/sessions/:id             获取会话+消息
+ *   DELETE /api/sessions/:id            删除会话
+ *   POST   /api/sessions/:id/messages    发消息（SSE 流）
+ *   GET    /api/analytics/tokens         token 统计
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -29,7 +34,7 @@ import type {
   ModelInstanceConfig,
   WorkerConfig,
 } from './config-loader.js';
-import { saveConfig } from './config-loader.js';
+import { saveConfig, loadConfig } from './config-loader.js';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -211,14 +216,38 @@ export class HttpServer {
 
     // ── GET /api/workers
     if (method === 'GET' && path === '/api/workers') {
-      this.handleGetWorkers(res);
+      await this.handleGetWorkers(res);
       return;
     }
 
     // ── GET /api/models
     if (method === 'GET' && path === '/api/models') {
-      this.handleGetModels(res);
+      await this.handleGetModels(res);
       return;
+    }
+
+    // ── POST /api/models
+    if (method === 'POST' && path === '/api/models') {
+      await this.handleCreateModel(req, res);
+      return;
+    }
+
+    // ── PUT /api/models/:modelId
+    {
+      const m = matchRoute('/api/models/:modelId', path);
+      if (m && method === 'PUT') {
+        await this.handleUpdateModel(req, res, m.params['modelId']!);
+        return;
+      }
+    }
+
+    // ── DELETE /api/models/:modelId
+    {
+      const m = matchRoute('/api/models/:modelId', path);
+      if (m && method === 'DELETE') {
+        await this.handleDeleteModel(res, m.params['modelId']!);
+        return;
+      }
     }
 
     // ── GET /api/config
@@ -311,7 +340,18 @@ export class HttpServer {
 
   // ── 具体处理函数 ─────────────────────────────────────────────────────────────
 
-  private handleGetWorkers(res: ServerResponse) {
+  /** 从磁盘热重载 config，使 CLI 改动无需重启即可在 Web 端生效 */
+  private async reloadConfig(): Promise<void> {
+    try {
+      const fresh = await loadConfig();
+      if (fresh) this.config = fresh;
+    } catch {
+      // reload 失败则沿用内存中的 config
+    }
+  }
+
+  private async handleGetWorkers(res: ServerResponse) {
+    await this.reloadConfig();
     const workers: ApiWorker[] = (this.config.workers ?? []).map(w => ({
       id:          w.id,
       name:        w.name,
@@ -326,7 +366,8 @@ export class HttpServer {
     json(res, 200, workers);
   }
 
-  private handleGetModels(res: ServerResponse) {
+  private async handleGetModels(res: ServerResponse) {
+    await this.reloadConfig();
     const models: ApiModel[] = this.config.models.map(m => ({
       id:         m.id,
       provider:   m.provider,
@@ -477,6 +518,138 @@ export class HttpServer {
     }
 
     writeSse(res, { event: 'done', data: tokenUsage ? { tokenUsage } : {} });
+    res.end();
+  }
+
+  // ── Model CRUD ───────────────────────────────────────────────────────────────
+
+  private async handleCreateModel(req: IncomingMessage, res: ServerResponse) {
+    let body: Partial<ModelInstanceConfig & { isPrimary?: boolean; isFallback?: boolean }>;
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { id, provider, apiKey, model, baseUrl, isPrimary, isFallback } = body;
+    if (!id?.trim())       { badRequest(res, '"id" is required'); return; }
+    if (!provider?.trim()) { badRequest(res, '"provider" is required'); return; }
+    if (!apiKey?.trim())   { badRequest(res, '"apiKey" is required'); return; }
+
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+      badRequest(res, '"id" must contain only letters, numbers, hyphens, or underscores'); return;
+    }
+
+    if (this.config.models.some(m => m.id === id)) {
+      json(res, 409, { error: `Model with id "${id}" already exists` }); return;
+    }
+
+    const newModel: ModelInstanceConfig = {
+      id: id.trim(),
+      provider: provider.trim() as ModelInstanceConfig['provider'],
+      apiKey: apiKey.trim(),
+      ...(model   && { model:   model.trim() }),
+      ...(baseUrl && { baseUrl: baseUrl.trim() }),
+      primary:  isPrimary  ?? false,
+      fallback: isFallback ?? false,
+    };
+
+    if (newModel.primary) {
+      this.config.models.forEach(m => { m.primary = false; });
+    }
+    this.config.models.push(newModel);
+
+    try {
+      await saveConfig(this.config);
+    } catch (err) {
+      serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
+    }
+
+    const apiModel: ApiModel = {
+      id:         newModel.id,
+      provider:   newModel.provider,
+      ...(newModel.model   && { model:   newModel.model }),
+      ...(newModel.baseUrl && { baseUrl: newModel.baseUrl }),
+      isPrimary:  newModel.primary  ?? false,
+      isFallback: newModel.fallback ?? false,
+    };
+    json(res, 201, apiModel);
+  }
+
+  private async handleUpdateModel(req: IncomingMessage, res: ServerResponse, modelId: string) {
+    const idx = this.config.models.findIndex(m => m.id === modelId);
+    if (idx < 0) { notFound(res); return; }
+
+    let body: Partial<ModelInstanceConfig & { isPrimary?: boolean; isFallback?: boolean }>;
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const existing = this.config.models[idx]!;
+    const updated: ModelInstanceConfig = {
+      id:       modelId,
+      provider: (body.provider?.trim() as ModelInstanceConfig['provider']) ?? existing.provider,
+      // 空字符串表示"不修改"，保留原 key
+      apiKey:   body.apiKey?.trim() || existing.apiKey,
+      primary:  body.isPrimary  ?? existing.primary  ?? false,
+      fallback: body.isFallback ?? existing.fallback ?? false,
+    };
+    if (body.model !== undefined) {
+      const m = body.model?.trim();
+      if (m) updated.model = m;
+    } else if (existing.model) {
+      updated.model = existing.model;
+    }
+    if (body.baseUrl !== undefined) {
+      const u = body.baseUrl?.trim();
+      if (u) updated.baseUrl = u;
+    } else if (existing.baseUrl) {
+      updated.baseUrl = existing.baseUrl;
+    }
+
+    if (updated.primary) {
+      this.config.models.forEach(m => { m.primary = false; });
+    }
+    this.config.models[idx] = updated;
+
+    try {
+      await saveConfig(this.config);
+    } catch (err) {
+      serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
+    }
+
+    const apiModel: ApiModel = {
+      id:         updated.id,
+      provider:   updated.provider,
+      ...(updated.model   && { model:   updated.model }),
+      ...(updated.baseUrl && { baseUrl: updated.baseUrl }),
+      isPrimary:  updated.primary  ?? false,
+      isFallback: updated.fallback ?? false,
+    };
+    json(res, 200, apiModel);
+  }
+
+  private async handleDeleteModel(res: ServerResponse, modelId: string) {
+    const idx = this.config.models.findIndex(m => m.id === modelId);
+    if (idx < 0) { notFound(res); return; }
+
+    const wasPrimary = this.config.models[idx]!.primary ?? false;
+    this.config.models.splice(idx, 1);
+
+    if (wasPrimary && this.config.models.length > 0) {
+      this.config.models[0]!.primary = true;
+    }
+
+    try {
+      await saveConfig(this.config);
+    } catch (err) {
+      serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
+    }
+
+    cors(res);
+    res.writeHead(204);
     res.end();
   }
 

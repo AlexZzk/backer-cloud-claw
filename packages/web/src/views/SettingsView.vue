@@ -109,7 +109,8 @@
                 size="small"
                 status="danger"
                 type="outline"
-                :disabled="model.isDefault"
+                :disabled="model.isDefault || modelDeleting === model.id"
+                :loading="modelDeleting === model.id"
                 @click="confirmDeleteModel(model.id)"
               >
                 {{ t('common.delete') }}
@@ -295,21 +296,27 @@
       v-model:visible="modalVisible"
       :title="editingModel ? t('settings.editModel') : t('settings.addModel')"
       :width="520"
+      :ok-loading="modelSaving"
       @ok="submitModelForm"
       @cancel="closeModal"
     >
       <a-form :model="modelForm" layout="vertical">
-        <a-form-item :label="t('settings.displayName')" required>
+        <a-form-item label="实例 ID" required>
           <a-input
-            v-model="modelForm.displayName"
-            :placeholder="t('settings.displayNamePlaceholder')"
+            v-model="modelForm.id"
+            placeholder="如：claude、my-gpt（字母/数字/连字符）"
+            :disabled="!!editingModel"
           />
+          <div class="form-hint" v-if="!editingModel">
+            唯一标识该模型实例，Worker 通过此 ID 引用模型，创建后不可修改
+          </div>
         </a-form-item>
 
         <a-form-item :label="t('settings.modelId')" required>
           <a-input
             v-model="modelForm.modelId"
             :placeholder="t('settings.modelIdPlaceholder')"
+            @input="onModelIdInput(modelForm.modelId)"
           />
         </a-form-item>
 
@@ -321,16 +328,14 @@
           </a-select>
         </a-form-item>
 
-        <a-form-item :label="t('settings.apiKey')">
+        <a-form-item :label="t('settings.apiKey')" :required="!editingModel">
           <a-input-password
             v-model="modelForm.apiKey"
-            :placeholder="editingModel && editingModel.apiKey
-              ? maskKey(editingModel.apiKey)
-              : t('settings.apiKeyPlaceholder')"
+            :placeholder="editingModel ? '留空则保持原 Key 不变' : t('settings.apiKeyPlaceholder')"
             allow-clear
           />
-          <div class="form-hint" v-if="editingModel && editingModel.apiKey">
-            {{ t('settings.apiKeyMasked') }} — {{ t('common.edit') }}{{ appStore.locale === 'zh-CN' ? '时留空保持不变' : ': leave blank to keep current' }}
+          <div class="form-hint" v-if="editingModel">
+            留空则保持原 Key 不变
           </div>
         </a-form-item>
 
@@ -397,14 +402,20 @@ const themes = [
 
 const modalVisible = ref(false);
 const editingModel = ref<ConfiguredModel | null>(null);
+const modelSaving = ref(false);
+const modelDeleting = ref('');
 
 const modelForm = reactive({
-  displayName: '',
-  modelId: '',
+  id: '',           // 实例 ID（config 中的 id 字段）
+  modelId: '',      // 实际模型名称（config 中的 model 字段）
   protocol: 'anthropic' as ModelProtocol,
   apiKey: '',
   baseUrl: '',
 });
+
+function slugifyModelId(name: string) {
+  return name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 32);
+}
 
 function protocolLabel(protocol: ModelProtocol): string {
   const map: Record<ModelProtocol, string> = {
@@ -431,7 +442,7 @@ function maskKey(key: string): string {
 
 function openAddModal() {
   editingModel.value = null;
-  modelForm.displayName = '';
+  modelForm.id = '';
   modelForm.modelId = '';
   modelForm.protocol = 'anthropic';
   modelForm.apiKey = '';
@@ -441,10 +452,10 @@ function openAddModal() {
 
 function openEditModal(model: ConfiguredModel) {
   editingModel.value = model;
-  modelForm.displayName = model.displayName;
+  modelForm.id = model.id;
   modelForm.modelId = model.modelId;
   modelForm.protocol = model.protocol;
-  modelForm.apiKey = '';  // Don't pre-fill for security
+  modelForm.apiKey = '';
   modelForm.baseUrl = model.baseUrl ?? '';
   modalVisible.value = true;
 }
@@ -454,48 +465,67 @@ function closeModal() {
   editingModel.value = null;
 }
 
-function submitModelForm() {
-  if (!modelForm.displayName.trim() || !modelForm.modelId.trim()) {
-    Message.warning(appStore.locale === 'zh-CN' ? '请填写必填项' : 'Please fill in required fields');
+function onModelIdInput(val: string) {
+  if (!editingModel.value && !modelForm.id) {
+    modelForm.id = slugifyModelId(val);
+  }
+}
+
+async function submitModelForm() {
+  if (!modelForm.id.trim()) {
+    Message.warning(appStore.locale === 'zh-CN' ? '请填写实例 ID' : 'Please fill in the instance ID');
+    return;
+  }
+  if (!modelForm.modelId.trim()) {
+    Message.warning(appStore.locale === 'zh-CN' ? '请填写模型名称' : 'Please fill in the model name');
+    return;
+  }
+  if (!editingModel.value && !modelForm.apiKey.trim()) {
+    Message.warning(appStore.locale === 'zh-CN' ? '请填写 API Key' : 'Please enter the API key');
     return;
   }
 
-  if (editingModel.value) {
-    const updates: Partial<Omit<ConfiguredModel, 'id'>> = {
-      displayName: modelForm.displayName,
-      modelId: modelForm.modelId,
-      protocol: modelForm.protocol,
-    };
-    if (modelForm.apiKey.trim()) {
-      updates.apiKey = modelForm.apiKey.trim();
-    }
-    if (modelForm.protocol === 'openai-compatible') {
-      updates.baseUrl = modelForm.baseUrl || undefined;
+  modelSaving.value = true;
+  try {
+    if (editingModel.value) {
+      await modelsStore.updateModel(editingModel.value.id, {
+        modelId:  modelForm.modelId.trim(),
+        protocol: modelForm.protocol,
+        apiKey:   modelForm.apiKey.trim() || undefined,
+        baseUrl:  modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl.trim() || undefined) : undefined,
+      });
     } else {
-      updates.baseUrl = undefined;
+      await modelsStore.addModel({
+        id:       modelForm.id.trim(),
+        modelId:  modelForm.modelId.trim(),
+        protocol: modelForm.protocol,
+        apiKey:   modelForm.apiKey.trim(),
+        baseUrl:  modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl.trim() || undefined) : undefined,
+      });
     }
-    modelsStore.updateModel(editingModel.value.id, updates);
-  } else {
-    modelsStore.addModel({
-      displayName: modelForm.displayName,
-      modelId: modelForm.modelId,
-      protocol: modelForm.protocol,
-      apiKey: modelForm.apiKey.trim(),
-      baseUrl: modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl || undefined) : undefined,
-    });
+    Message.success(t('settings.saveSuccess'));
+    closeModal();
+  } catch (err) {
+    Message.error(err instanceof Error ? err.message : (appStore.locale === 'zh-CN' ? '操作失败' : 'Operation failed'));
+  } finally {
+    modelSaving.value = false;
   }
-
-  Message.success(t('settings.saveSuccess'));
-  closeModal();
 }
 
 function confirmDeleteModel(id: string) {
   Modal.confirm({
     title: t('settings.deleteModel'),
     content: t('settings.confirmDeleteModel'),
-    onOk() {
-      modelsStore.deleteModel(id);
-      Message.success(t('common.success'));
+    async onOk() {
+      modelDeleting.value = id;
+      try {
+        await modelsStore.deleteModel(id);
+        Message.success(t('common.success'));
+      } catch (err) {
+        Message.error(err instanceof Error ? err.message : (appStore.locale === 'zh-CN' ? '删除失败' : 'Delete failed'));
+      } finally {
+        modelDeleting.value = '';
+      }
     },
   });
 }
