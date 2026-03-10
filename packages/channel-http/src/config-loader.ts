@@ -2,7 +2,7 @@
  * 配置加载（与 @bcc/channel-cli/src/config.ts 保持一致的类型，独立实现避免循环依赖）
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -53,4 +53,9 @@ export async function loadConfig(): Promise<BccConfig | null> {
   } catch {
     return null;
   }
+}
+
+export async function saveConfig(config: BccConfig): Promise<void> {
+  await mkdir(BCC_HOME, { recursive: true });
+  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
 }

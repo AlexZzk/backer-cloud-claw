@@ -259,7 +259,7 @@
         <a-form-item label="Worker (可选)">
           <a-select v-model="newEmp.workerId" allow-clear :placeholder="t('common.noData')">
             <a-option v-for="w in workersStore.workers" :key="w.id" :value="w.id">
-              {{ w.avatar }} {{ w.name }}
+              🤖 {{ w.name }}
             </a-option>
           </a-select>
         </a-form-item>
