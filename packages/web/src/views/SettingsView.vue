@@ -133,10 +133,11 @@
         </div>
       </div>
 
-      <!-- Model Defaults -->
+      <!-- Model Config -->
       <div v-if="activeSection === 'models'" class="settings-section">
-        <h2>{{ t('settings.modelDefaults') }}</h2>
-        <a-form layout="vertical" style="max-width: 480px;">
+        <h2>{{ t('settings.modelConfig') }}</h2>
+        <p class="section-desc">{{ t('settings.modelConfigDesc') }}</p>
+        <a-form layout="vertical" style="max-width: 560px;">
           <a-form-item :label="t('settings.defaultModel')">
             <a-select v-model="modelForm.defaultModel">
               <a-option
@@ -146,7 +147,110 @@
               >{{ m.label }}</a-option>
             </a-select>
           </a-form-item>
+
+          <a-form-item :label="t('settings.temperature')">
+            <div class="slider-row">
+              <a-slider
+                v-model="modelForm.temperature"
+                :min="0" :max="2" :step="0.1"
+                style="flex: 1"
+              />
+              <span class="slider-val">{{ modelForm.temperature }}</span>
+            </div>
+            <div class="form-hint">{{ t('settings.temperatureHint') }}</div>
+          </a-form-item>
+
+          <a-form-item :label="t('settings.maxTokens')">
+            <a-input-number
+              v-model="modelForm.maxTokens"
+              :min="256" :max="200000" :step="256"
+              style="width: 200px"
+            />
+            <div class="form-hint">{{ t('settings.maxTokensHint') }}</div>
+          </a-form-item>
+
+          <a-form-item :label="t('settings.systemPrompt')">
+            <a-textarea
+              v-model="modelForm.systemPrompt"
+              :placeholder="t('settings.systemPromptPlaceholder')"
+              :auto-size="{ minRows: 3, maxRows: 6 }"
+            />
+            <div class="form-hint">{{ t('settings.systemPromptHint') }}</div>
+          </a-form-item>
+
           <a-button type="primary" @click="saveModels">{{ t('common.save') }}</a-button>
+        </a-form>
+      </div>
+
+      <!-- Storage Config -->
+      <div v-if="activeSection === 'storage'" class="settings-section">
+        <h2>{{ t('settings.storageConfig') }}</h2>
+        <p class="section-desc">{{ t('settings.storageConfigDesc') }}</p>
+
+        <a-form layout="vertical" style="max-width: 560px;">
+          <!-- Memory store -->
+          <a-form-item :label="t('settings.memoryStore')">
+            <a-radio-group v-model="storageForm.memoryType" direction="vertical">
+              <a-radio value="file">
+                <div class="radio-option">
+                  <span class="ro-title">📁 {{ t('settings.memoryFile') }}</span>
+                  <span class="ro-desc">{{ t('settings.memoryFileDesc') }}</span>
+                </div>
+              </a-radio>
+              <a-radio value="database">
+                <div class="radio-option">
+                  <span class="ro-title">🗄️ {{ t('settings.memoryDb') }}</span>
+                  <span class="ro-desc">{{ t('settings.memoryDbDesc') }}</span>
+                </div>
+              </a-radio>
+            </a-radio-group>
+          </a-form-item>
+
+          <a-form-item :label="t('settings.dataDir')" v-if="storageForm.memoryType === 'file'">
+            <a-input
+              v-model="storageForm.dataDir"
+              :placeholder="'~/.bcc/'"
+              allow-clear
+            >
+              <template #prepend>📂</template>
+            </a-input>
+            <div class="form-hint">{{ t('settings.dataDirHint') }}</div>
+          </a-form-item>
+
+          <a-form-item :label="t('settings.dbUrl')" v-if="storageForm.memoryType === 'database'">
+            <a-input
+              v-model="storageForm.dbUrl"
+              :placeholder="'postgresql://user:pass@localhost:5432/bcc'"
+              allow-clear
+            />
+          </a-form-item>
+
+          <a-divider />
+
+          <!-- Episode config -->
+          <a-form-item :label="t('settings.episodicMemory')">
+            <a-switch v-model="storageForm.episodicEnabled" />
+            <div class="form-hint">{{ t('settings.episodicMemoryHint') }}</div>
+          </a-form-item>
+
+          <a-form-item :label="t('settings.maxEpisodes')" v-if="storageForm.episodicEnabled">
+            <a-input-number
+              v-model="storageForm.maxEpisodes"
+              :min="10" :max="500" :step="10"
+              style="width: 160px"
+            />
+          </a-form-item>
+
+          <a-form-item :label="t('settings.sessionDir')">
+            <a-input
+              v-model="storageForm.sessionDir"
+              :placeholder="'~/.bcc/sessions/'"
+            >
+              <template #prepend>📂</template>
+            </a-input>
+          </a-form-item>
+
+          <a-button type="primary" @click="saveStorage">{{ t('common.save') }}</a-button>
         </a-form>
       </div>
 
@@ -216,7 +320,8 @@ const sections = computed(() => [
   { id: 'profile',    icon: '👤', label: t('settings.profile') },
   { id: 'apikeys',    icon: '🔑', label: t('settings.apiKeys') },
   { id: 'appearance', icon: '🎨', label: t('settings.appearance') },
-  { id: 'models',     icon: '🤖', label: t('settings.modelDefaults') },
+  { id: 'models',     icon: '🤖', label: t('settings.modelConfig') },
+  { id: 'storage',    icon: '💾', label: t('settings.storageConfig') },
   { id: 'about',      icon: 'ℹ️',  label: t('settings.about') },
 ]);
 
@@ -237,6 +342,18 @@ const themes = [
 
 const modelForm = reactive({
   defaultModel: 'claude-sonnet-4-6',
+  temperature: 0.7,
+  maxTokens: 8192,
+  systemPrompt: '',
+});
+
+const storageForm = reactive({
+  memoryType: 'file' as 'file' | 'database',
+  dataDir: '~/.bcc/',
+  dbUrl: '',
+  episodicEnabled: true,
+  maxEpisodes: 50,
+  sessionDir: '~/.bcc/sessions/',
 });
 
 function saveProfile() {
@@ -252,6 +369,10 @@ function saveApiKey(key: typeof apiKeys[0]) {
 }
 
 function saveModels() {
+  Message.success(t('settings.saveSuccess'));
+}
+
+function saveStorage() {
   Message.success(t('settings.saveSuccess'));
 }
 
@@ -572,6 +693,47 @@ function handleLogout() {
 }
 
 .danger-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ─── Model / Storage form helpers ──────────────────────────────────── */
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.slider-val {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 32px;
+  text-align: right;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.radio-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+
+.ro-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.ro-desc {
   font-size: 12px;
   color: var(--text-secondary);
 }

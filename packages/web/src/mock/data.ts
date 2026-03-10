@@ -13,6 +13,7 @@ export interface MockWorker {
   totalSessions: number;
   lastActive: string;
   avatar: string; // emoji or url
+  isSecretary?: boolean; // default/pinned assistant
 }
 
 export interface MockMessage {
@@ -21,6 +22,15 @@ export interface MockMessage {
   content: string;
   timestamp: number;
   tokenUsage?: { inputTokens: number; outputTokens: number };
+}
+
+export interface MockSession {
+  id: string;
+  workerId: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: MockMessage[];
 }
 
 export interface MockConversation {
@@ -60,6 +70,21 @@ export interface MockCompany {
 // ─── Workers ──────────────────────────────────────────────────────────────────
 
 export const MOCK_WORKERS: MockWorker[] = [
+  {
+    id: 'w-secretary',
+    name: '个人助理',
+    description: '您的专属助理，可以帮您处理任何日常事务、回答问题、安排计划',
+    modelId: 'claude-opus-4-6',
+    role: '你是用户的专属个人助理，具备广泛的知识储备，能够处理各类问题。你性格亲切、专业高效。',
+    skills: ['assistant', 'planning', 'research'],
+    tools: ['datetime', 'web-fetch', 'file-read'],
+    status: 'online',
+    totalTokens: 98430,
+    totalSessions: 124,
+    lastActive: '刚刚',
+    avatar: '🤵',
+    isSecretary: true,
+  },
   {
     id: 'w-research',
     name: '研究助手',
@@ -118,105 +143,141 @@ export const MOCK_WORKERS: MockWorker[] = [
   },
 ];
 
-// ─── Conversations ─────────────────────────────────────────────────────────────
+// ─── Sessions (worker-centric) ────────────────────────────────────────────────
 
-export const MOCK_CONVERSATIONS: MockConversation[] = [
+const now = Date.now();
+
+export const MOCK_SESSIONS: MockSession[] = [
+  // Secretary sessions (multiple — like WeChat threads)
   {
-    id: 'conv-1',
-    workerId: 'w-research',
-    workerName: '研究助手',
-    title: 'Vue 3 组合式 API 最佳实践',
-    lastMessage: '好的，我已经整理了 Vue 3 组合式 API 的核心最佳实践...',
-    updatedAt: Date.now() - 1000 * 60 * 5,
+    id: 'sess-secretary-1',
+    workerId: 'w-secretary',
+    title: '今日工作安排',
+    createdAt: now - 1000 * 60 * 30,
+    updatedAt: now - 1000 * 60 * 5,
     messages: [
       {
-        id: 'm1',
-        role: 'user',
-        content: '帮我整理一下 Vue 3 组合式 API 的最佳实践',
-        timestamp: Date.now() - 1000 * 60 * 10,
+        id: 'sm1', role: 'user',
+        content: '帮我整理一下今天需要完成的工作',
+        timestamp: now - 1000 * 60 * 30,
       },
       {
-        id: 'm2',
-        role: 'assistant',
-        content: `# Vue 3 组合式 API 最佳实践
+        id: 'sm2', role: 'assistant',
+        content: '好的！根据您的日历和任务列表，今天需要完成以下工作：\n\n**上午**\n- 09:00 技术评审会议（1小时）\n- 10:30 完成 API 接口文档\n\n**下午**\n- 14:00 与产品团队对齐需求\n- 16:00 代码 Review\n\n**今日截止**\n- ✅ 提交月度报告\n- 📝 更新项目进度看板\n\n需要我帮您发送会议提醒或准备任何材料吗？',
+        timestamp: now - 1000 * 60 * 25,
+        tokenUsage: { inputTokens: 28, outputTokens: 186 },
+      },
+      {
+        id: 'sm3', role: 'user',
+        content: '帮我起草一封邮件给研发团队，说明下午14点的需求对齐会议',
+        timestamp: now - 1000 * 60 * 8,
+      },
+      {
+        id: 'sm4', role: 'assistant',
+        content: '邮件草稿如下：\n\n---\n**收件人：** 研发团队\n**主题：** 【今日 14:00】需求对齐会议通知\n\n各位好，\n\n今天下午 14:00 我们将在会议室 A 召开需求对齐会议，主要议题如下：\n\n1. Q2 核心功能规划确认\n2. 技术可行性评估\n3. 排期与里程碑讨论\n\n请提前准备好各自负责模块的最新进展，会议预计 1 小时。\n\n如有冲突请提前告知，谢谢！\n\n---\n\n需要我调整邮件内容或添加其他信息吗？',
+        timestamp: now - 1000 * 60 * 5,
+        tokenUsage: { inputTokens: 42, outputTokens: 220 },
+      },
+    ],
+  },
+  {
+    id: 'sess-secretary-2',
+    workerId: 'w-secretary',
+    title: '周末旅行计划',
+    createdAt: now - 1000 * 60 * 60 * 24,
+    updatedAt: now - 1000 * 60 * 60 * 23,
+    messages: [
+      {
+        id: 'sm5', role: 'user',
+        content: '帮我规划一下这个周末去杭州的行程',
+        timestamp: now - 1000 * 60 * 60 * 24,
+      },
+      {
+        id: 'sm6', role: 'assistant',
+        content: '杭州周末两日游推荐行程：\n\n**周六**\n- 上午：西湖游览（苏堤、断桥、雷峰塔）\n- 下午：河坊街、清河坊历史街区\n- 晚上：外婆家或知味观品尝杭帮菜\n\n**周日**\n- 上午：灵隐寺、飞来峰\n- 下午：龙井村采茶体验\n- 返程\n\n需要我帮您查询高铁票价或酒店推荐吗？',
+        timestamp: now - 1000 * 60 * 60 * 23,
+        tokenUsage: { inputTokens: 35, outputTokens: 198 },
+      },
+    ],
+  },
 
-## 1. 使用 \`<script setup>\`
-推荐使用 \`<script setup>\` 语法糖，它更简洁且具有更好的 TypeScript 支持。
-
-## 2. 合理拆分 Composables
-将可复用的逻辑提取到独立的 composable 函数中：
-
-\`\`\`typescript
-// useCounter.ts
-export function useCounter(initial = 0) {
-  const count = ref(initial)
-  const increment = () => count.value++
-  const decrement = () => count.value--
-  return { count, increment, decrement }
-}
-\`\`\`
-
-## 3. 响应式状态管理
-- 使用 \`ref()\` 处理原始值
-- 使用 \`reactive()\` 处理对象（但注意解构会失去响应性）
-- 使用 \`computed()\` 处理派生状态
-
-## 4. 生命周期钩子
-在 setup 中使用对应的生命周期函数，如 \`onMounted\`、\`onUnmounted\` 等。
-
-好的，我已经整理了 Vue 3 组合式 API 的核心最佳实践，需要我深入介绍哪个部分吗？`,
-        timestamp: Date.now() - 1000 * 60 * 5,
+  // Research assistant sessions
+  {
+    id: 'sess-research-1',
+    workerId: 'w-research',
+    title: 'Vue 3 组合式 API 最佳实践',
+    createdAt: now - 1000 * 60 * 60 * 2,
+    updatedAt: now - 1000 * 60 * 60 * 1,
+    messages: [
+      {
+        id: 'rm1', role: 'user',
+        content: '帮我整理一下 Vue 3 组合式 API 的最佳实践',
+        timestamp: now - 1000 * 60 * 60 * 2,
+      },
+      {
+        id: 'rm2', role: 'assistant',
+        content: `# Vue 3 组合式 API 最佳实践\n\n## 1. 使用 \`<script setup>\`\n推荐使用 \`<script setup>\` 语法糖，它更简洁且具有更好的 TypeScript 支持。\n\n## 2. 合理拆分 Composables\n将可复用的逻辑提取到独立的 composable 函数中：\n\n\`\`\`typescript\nexport function useCounter(initial = 0) {\n  const count = ref(initial)\n  const increment = () => count.value++\n  return { count, increment }\n}\n\`\`\`\n\n## 3. 响应式状态管理\n- 使用 \`ref()\` 处理原始值\n- 使用 \`reactive()\` 处理对象\n- 使用 \`computed()\` 处理派生状态`,
+        timestamp: now - 1000 * 60 * 60 * 1,
         tokenUsage: { inputTokens: 42, outputTokens: 287 },
       },
     ],
   },
+
+  // Code assistant sessions
   {
-    id: 'conv-2',
+    id: 'sess-code-1',
     workerId: 'w-code',
-    workerName: '代码助手',
     title: 'TypeScript 泛型使用指南',
-    lastMessage: '泛型让代码更加灵活且类型安全，以下是主要用法...',
-    updatedAt: Date.now() - 1000 * 60 * 60,
+    createdAt: now - 1000 * 60 * 60 * 5,
+    updatedAt: now - 1000 * 60 * 60 * 4,
     messages: [
       {
-        id: 'm3',
-        role: 'user',
+        id: 'cm1', role: 'user',
         content: '解释一下 TypeScript 泛型的使用场景',
-        timestamp: Date.now() - 1000 * 60 * 65,
+        timestamp: now - 1000 * 60 * 60 * 5,
       },
       {
-        id: 'm4',
-        role: 'assistant',
+        id: 'cm2', role: 'assistant',
         content: '泛型让代码更加灵活且类型安全，以下是主要用法...\n\n```typescript\nfunction identity<T>(arg: T): T {\n  return arg;\n}\n```',
-        timestamp: Date.now() - 1000 * 60 * 60,
+        timestamp: now - 1000 * 60 * 60 * 4,
         tokenUsage: { inputTokens: 28, outputTokens: 156 },
       },
     ],
   },
+
+  // Writer sessions
   {
-    id: 'conv-3',
+    id: 'sess-writer-1',
     workerId: 'w-writer',
-    workerName: '写作助手',
     title: '产品发布公告草稿',
-    lastMessage: '以下是产品发布公告的初稿，你可以根据需要调整...',
-    updatedAt: Date.now() - 1000 * 60 * 60 * 3,
+    createdAt: now - 1000 * 60 * 60 * 8,
+    updatedAt: now - 1000 * 60 * 60 * 7,
     messages: [
       {
-        id: 'm5',
-        role: 'user',
+        id: 'wm1', role: 'user',
         content: '帮我写一份 AI 产品发布的公告',
-        timestamp: Date.now() - 1000 * 60 * 60 * 3.5,
+        timestamp: now - 1000 * 60 * 60 * 8,
       },
       {
-        id: 'm6',
-        role: 'assistant',
-        content: '以下是产品发布公告的初稿，你可以根据需要调整...',
-        timestamp: Date.now() - 1000 * 60 * 60 * 3,
+        id: 'wm2', role: 'assistant',
+        content: '以下是产品发布公告的初稿：\n\n---\n**BCC v1.0 正式发布**\n\n我们很高兴地宣布，backer-cloud-claw v1.0 今日正式发布！\n\n本次发布包含以下核心功能：\n- 🤖 智能 Worker 系统\n- 💬 多会话对话管理\n- 📊 完整的数据统计\n- 🏢 企业组织架构管理\n\n---\n\n需要调整内容或风格吗？',
+        timestamp: now - 1000 * 60 * 60 * 7,
         tokenUsage: { inputTokens: 35, outputTokens: 342 },
       },
     ],
   },
 ];
+
+// Legacy format for backward compat
+export const MOCK_CONVERSATIONS: MockConversation[] = MOCK_SESSIONS.map(s => ({
+  id: s.id,
+  workerId: s.workerId,
+  workerName: MOCK_WORKERS.find(w => w.id === s.workerId)?.name ?? '',
+  title: s.title,
+  lastMessage: s.messages[s.messages.length - 1]?.content.slice(0, 60) ?? '',
+  updatedAt: s.updatedAt,
+  messages: s.messages,
+}));
 
 // ─── Organization ─────────────────────────────────────────────────────────────
 
