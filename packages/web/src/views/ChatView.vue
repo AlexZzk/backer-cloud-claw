@@ -1,6 +1,6 @@
 <template>
   <div class="chat-view">
-    <!-- Sub panel: conversation list -->
+    <!-- Sub panel: worker contact list -->
     <div class="sub-panel">
       <div class="sub-header">
         <span class="sub-title">{{ t('nav.chat') }}</span>
@@ -8,70 +8,63 @@
           <template #icon><icon-plus /></template>
         </a-button>
       </div>
-
       <div class="sub-search">
-        <a-input
-          v-model="searchText"
-          :placeholder="t('common.search')"
-          size="small"
-          allow-clear
-        >
+        <a-input v-model="searchText" :placeholder="t('common.search')" size="small" allow-clear>
           <template #prefix><icon-search /></template>
         </a-input>
       </div>
 
-      <div class="conv-list">
+      <div class="contact-list">
         <div
-          v-for="conv in filteredConvs"
-          :key="conv.id"
-          class="conv-item"
-          :class="{ active: chatStore.activeConvId === conv.id }"
-          @click="chatStore.selectConv(conv.id)"
+          v-for="item in filteredContacts"
+          :key="item.worker.id"
+          class="contact-item"
+          :class="{ active: chatStore.activeWorkerId === item.worker.id }"
+          @click="chatStore.selectWorker(item.worker.id)"
         >
-          <div class="conv-avatar">
-            {{ getWorkerAvatar(conv.workerId) }}
+          <div class="contact-avatar" :class="{ secretary: item.worker.isSecretary }">
+            {{ item.worker.avatar }}
+            <span class="status-dot" :class="item.worker.status"></span>
           </div>
-          <div class="conv-info">
-            <div class="conv-title">{{ conv.title }}</div>
-            <div class="conv-last">{{ conv.lastMessage || t('chat.startChat') }}</div>
+          <div class="contact-info">
+            <div class="contact-name-row">
+              <span class="contact-name">{{ item.worker.name }}</span>
+              <span v-if="item.worker.isSecretary" class="secretary-badge">助理</span>
+              <span class="contact-time">{{ item.updatedAt ? formatTime(item.updatedAt) : '' }}</span>
+            </div>
+            <div class="contact-last">
+              {{ item.lastMessage || t('chat.startChat') }}
+            </div>
           </div>
-          <div class="conv-meta">
-            <span class="conv-time">{{ formatTime(conv.updatedAt) }}</span>
-            <a-button
-              type="text"
-              size="mini"
-              class="conv-delete"
-              @click.stop="chatStore.deleteConv(conv.id)"
-            >
-              <template #icon><icon-delete /></template>
-            </a-button>
-          </div>
-        </div>
-
-        <div v-if="filteredConvs.length === 0" class="empty-hint">
-          <p>{{ t('chat.noConversations') }}</p>
-          <a-button type="primary" size="small" @click="showWorkerPicker = true">
-            {{ t('chat.newChat') }}
-          </a-button>
         </div>
       </div>
     </div>
 
-    <!-- Chat main area -->
+    <!-- Chat main -->
     <div class="chat-main">
-      <template v-if="chatStore.activeConv">
+      <template v-if="chatStore.activeWorkerId && activeWorker">
         <!-- Header -->
         <div class="chat-header">
           <div class="chat-header-left">
-            <span class="worker-avatar">{{ getWorkerAvatar(chatStore.activeConv.workerId) }}</span>
+            <span class="worker-avatar-lg">{{ activeWorker.avatar }}</span>
             <div>
-              <div class="worker-name">{{ chatStore.activeConv.workerName }}</div>
-              <div class="worker-model">{{ getWorkerModel(chatStore.activeConv.workerId) }}</div>
+              <div class="worker-name-row">
+                <span class="worker-name">{{ activeWorker.name }}</span>
+                <a-tag v-if="activeWorker.isSecretary" color="arcoblue" size="small">默认助理</a-tag>
+                <a-tag :color="statusColor(activeWorker.status)" size="small">
+                  {{ t(`workers.${activeWorker.status}`) }}
+                </a-tag>
+              </div>
+              <div class="worker-model">{{ activeWorker.modelId }}</div>
             </div>
           </div>
-          <div class="chat-header-actions">
+          <div class="chat-header-right">
+            <a-button type="primary" size="small" @click="handleNewSession">
+              <template #icon><icon-plus /></template>
+              {{ t('chat.newSession') }}
+            </a-button>
             <a-tooltip :content="t('chat.clearHistory')">
-              <a-button type="text" @click="handleClear">
+              <a-button type="text" @click="chatStore.clearSession()">
                 <template #icon><icon-delete /></template>
               </a-button>
             </a-tooltip>
@@ -83,46 +76,37 @@
           </div>
         </div>
 
+        <!-- Session tabs (shown when worker has multiple sessions) -->
+        <div class="session-tabs" v-if="workerSessions.length > 0">
+          <div class="sessions-scroll">
+            <div
+              v-for="sess in workerSessions"
+              :key="sess.id"
+              class="session-tab"
+              :class="{ active: chatStore.activeSessionId === sess.id }"
+              @click="chatStore.selectSession(sess.id)"
+            >
+              <span class="sess-title">{{ sess.title }}</span>
+              <span class="sess-time">{{ formatTime(sess.updatedAt) }}</span>
+              <span
+                class="sess-close"
+                @click.stop="chatStore.deleteSession(sess.id)"
+                v-if="workerSessions.length > 1"
+              >×</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Messages -->
         <div class="messages-area" ref="messagesArea">
-          <div
-            v-for="msg in chatStore.activeConv.messages"
-            :key="msg.id"
-            class="message-wrapper"
-            :class="msg.role"
-          >
-            <div v-if="msg.role === 'assistant'" class="msg-avatar">
-              {{ getWorkerAvatar(chatStore.activeConv!.workerId) }}
-            </div>
-            <div class="message-bubble" :class="msg.role">
-              <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
-              <div class="message-footer" v-if="msg.tokenUsage">
-                <span class="token-info">
-                  ↑ {{ msg.tokenUsage.inputTokens }} / ↓ {{ msg.tokenUsage.outputTokens }} tokens
-                </span>
-              </div>
-            </div>
-            <div v-if="msg.role === 'user'" class="msg-avatar user-av">
-              {{ authStore.user?.avatar || '👤' }}
-            </div>
-          </div>
-
-          <!-- Thinking indicator -->
-          <div v-if="chatStore.isThinking" class="message-wrapper assistant">
-            <div class="msg-avatar">{{ getWorkerAvatar(chatStore.activeConv.workerId) }}</div>
-            <div class="message-bubble assistant thinking">
-              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            </div>
-          </div>
-
           <!-- Empty state -->
-          <div v-if="chatStore.activeConv.messages.length === 0 && !chatStore.isThinking" class="chat-empty">
-            <div class="empty-icon">{{ getWorkerAvatar(chatStore.activeConv.workerId) }}</div>
-            <h3>{{ chatStore.activeConv.workerName }}</h3>
-            <p>{{ getWorkerDesc(chatStore.activeConv.workerId) }}</p>
+          <div v-if="!chatStore.activeSession || chatStore.activeSession.messages.length === 0" class="chat-empty">
+            <div class="empty-avatar">{{ activeWorker.avatar }}</div>
+            <h3>{{ activeWorker.name }}</h3>
+            <p>{{ activeWorker.description }}</p>
             <div class="suggestion-chips">
               <a-tag
-                v-for="chip in getSuggestions(chatStore.activeConv.workerId)"
+                v-for="chip in getSuggestions(activeWorker.id)"
                 :key="chip"
                 color="arcoblue"
                 class="suggestion-chip"
@@ -130,21 +114,56 @@
               >{{ chip }}</a-tag>
             </div>
           </div>
+
+          <!-- Messages -->
+          <template v-else>
+            <div
+              v-for="msg in chatStore.activeSession.messages"
+              :key="msg.id"
+              class="message-wrapper"
+              :class="msg.role"
+            >
+              <div v-if="msg.role === 'assistant'" class="msg-avatar">
+                {{ activeWorker.avatar }}
+              </div>
+              <div class="message-bubble" :class="msg.role">
+                <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
+                <div class="message-footer" v-if="msg.tokenUsage">
+                  <span class="token-info">
+                    ↑{{ msg.tokenUsage.inputTokens }} ↓{{ msg.tokenUsage.outputTokens }} tokens
+                  </span>
+                </div>
+              </div>
+              <div v-if="msg.role === 'user'" class="msg-avatar user-av">
+                {{ authStore.user?.avatar || '👤' }}
+              </div>
+            </div>
+          </template>
+
+          <!-- Thinking -->
+          <div v-if="chatStore.isThinking" class="message-wrapper assistant">
+            <div class="msg-avatar">{{ activeWorker.avatar }}</div>
+            <div class="message-bubble assistant thinking">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            </div>
+          </div>
         </div>
 
-        <!-- Input area -->
+        <!-- Input -->
         <div class="input-area">
-          <div class="input-box">
+          <div class="input-box" :class="{ focused: inputFocused }">
             <a-textarea
               v-model="inputText"
               :placeholder="t('chat.placeholder')"
               :auto-size="{ minRows: 1, maxRows: 5 }"
               @keydown.enter.exact.prevent="handleSend"
               @keydown.enter.shift.exact="() => {}"
+              @focus="inputFocused = true"
+              @blur="inputFocused = false"
               :disabled="chatStore.isThinking"
             />
-            <div class="input-actions">
-              <span class="char-count">{{ inputText.length }}</span>
+            <div class="input-footer">
+              <span class="input-hint">Enter 发送 · Shift+Enter 换行</span>
               <a-button
                 type="primary"
                 :disabled="!inputText.trim() || chatStore.isThinking"
@@ -152,24 +171,25 @@
                 class="send-btn"
               >
                 <template #icon><icon-send /></template>
+                {{ t('chat.send') }}
               </a-button>
             </div>
           </div>
         </div>
       </template>
 
-      <!-- No conversation selected -->
+      <!-- No worker selected -->
       <div v-else class="no-conv">
         <div class="no-conv-icon">💬</div>
         <h2>{{ t('chat.noConversations') }}</h2>
         <p>{{ t('chat.startChat') }}</p>
-        <a-button type="primary" size="large" @click="showWorkerPicker = true">
-          {{ t('chat.newChat') }}
+        <a-button type="primary" size="large" @click="chatStore.selectWorker('w-secretary')">
+          {{ t('chat.openSecretaryChat') }}
         </a-button>
       </div>
     </div>
 
-    <!-- Worker picker modal -->
+    <!-- Worker picker modal (for starting new worker chat) -->
     <a-modal
       v-model:visible="showWorkerPicker"
       :title="t('chat.selectWorker')"
@@ -178,14 +198,17 @@
     >
       <div class="worker-picker">
         <div
-          v-for="worker in workersStore.workers"
+          v-for="worker in allWorkers"
           :key="worker.id"
           class="worker-pick-item"
-          @click="startChat(worker.id)"
+          @click="startNewWorkerChat(worker.id)"
         >
           <span class="pick-avatar">{{ worker.avatar }}</span>
           <div class="pick-info">
-            <div class="pick-name">{{ worker.name }}</div>
+            <div class="pick-name">
+              {{ worker.name }}
+              <a-tag v-if="worker.isSecretary" color="arcoblue" size="small">默认助理</a-tag>
+            </div>
             <div class="pick-desc">{{ worker.description }}</div>
           </div>
           <a-tag :color="statusColor(worker.status)" size="small">
@@ -201,49 +224,41 @@
 import { ref, computed, nextTick, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useChatStore } from '@/stores/chat';
-import { useWorkersStore } from '@/stores/workers';
 import { useAuthStore } from '@/stores/auth';
-import { Message } from '@arco-design/web-vue';
+import { MOCK_WORKERS } from '@/mock/data';
 
 const { t } = useI18n();
 const chatStore = useChatStore();
-const workersStore = useWorkersStore();
 const authStore = useAuthStore();
 
 const inputText = ref('');
 const searchText = ref('');
 const showWorkerPicker = ref(false);
+const inputFocused = ref(false);
 const messagesArea = ref<HTMLElement>();
 
-const filteredConvs = computed(() => {
-  if (!searchText.value) return chatStore.conversations;
+const allWorkers = MOCK_WORKERS;
+
+const activeWorker = computed(() =>
+  chatStore.activeWorkerId
+    ? MOCK_WORKERS.find(w => w.id === chatStore.activeWorkerId) ?? null
+    : null
+);
+
+const workerSessions = computed(() =>
+  chatStore.activeWorkerId
+    ? chatStore.getWorkerSessions(chatStore.activeWorkerId)
+    : []
+);
+
+const filteredContacts = computed(() => {
+  if (!searchText.value) return chatStore.contactList;
   const s = searchText.value.toLowerCase();
-  return chatStore.conversations.filter(c =>
-    c.title.toLowerCase().includes(s) || c.workerName.toLowerCase().includes(s)
+  return chatStore.contactList.filter(item =>
+    item.worker.name.toLowerCase().includes(s) ||
+    item.lastMessage.toLowerCase().includes(s)
   );
 });
-
-function getWorkerAvatar(workerId: string) {
-  return workersStore.workers.find(w => w.id === workerId)?.avatar ?? '🤖';
-}
-
-function getWorkerModel(workerId: string) {
-  return workersStore.workers.find(w => w.id === workerId)?.modelId ?? '';
-}
-
-function getWorkerDesc(workerId: string) {
-  return workersStore.workers.find(w => w.id === workerId)?.description ?? '';
-}
-
-function getSuggestions(workerId: string): string[] {
-  const suggestions: Record<string, string[]> = {
-    'w-research': ['搜索最新的 AI 研究进展', '分析这篇论文的主要观点', '帮我整理技术资料'],
-    'w-code': ['帮我优化这段代码', '解释这个错误信息', '写一个 TypeScript 工具函数'],
-    'w-writer': ['写一篇产品介绍文章', '帮我优化这段文案', '翻译成英文'],
-    'w-data': ['分析这组数据的趋势', '生成数据可视化方案', '计算统计指标'],
-  };
-  return suggestions[workerId] ?? ['你好，请问有什么可以帮你？'];
-}
 
 function statusColor(status: string) {
   return { online: 'green', idle: 'orange', offline: 'gray' }[status] || 'gray';
@@ -254,14 +269,23 @@ function formatTime(ts: number) {
   if (diff < 60_000) return '刚刚';
   if (diff < 3600_000) return `${Math.floor(diff / 60_000)}分钟前`;
   if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}小时前`;
-  return new Date(ts).toLocaleDateString();
+  return new Date(ts).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
+
+function getSuggestions(workerId: string): string[] {
+  const map: Record<string, string[]> = {
+    'w-secretary': ['今天有什么工作安排？', '帮我起草一封邮件', '提醒我下午开会'],
+    'w-research':  ['搜索最新的 AI 研究进展', '分析这篇论文的主要观点', '帮我整理技术资料'],
+    'w-code':      ['帮我优化这段代码', '解释这个错误信息', '写一个 TypeScript 工具函数'],
+    'w-writer':    ['写一篇产品介绍文章', '帮我优化这段文案', '翻译成英文'],
+    'w-data':      ['分析这组数据的趋势', '生成数据可视化方案', '计算统计指标'],
+  };
+  return map[workerId] ?? ['你好，请问有什么可以帮你？'];
 }
 
 function renderMarkdown(text: string): string {
   return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -276,11 +300,20 @@ function renderMarkdown(text: string): string {
 
 async function handleSend() {
   if (!inputText.value.trim() || chatStore.isThinking) return;
+  // If no active session, create one first
+  if (!chatStore.activeSessionId && chatStore.activeWorkerId) {
+    chatStore.newSession(chatStore.activeWorkerId);
+  }
   const text = inputText.value;
   inputText.value = '';
   await chatStore.sendMessage(text);
   await nextTick();
   scrollToBottom();
+}
+
+function handleNewSession() {
+  if (!chatStore.activeWorkerId) return;
+  chatStore.newSession(chatStore.activeWorkerId);
 }
 
 function scrollToBottom() {
@@ -289,31 +322,27 @@ function scrollToBottom() {
   }
 }
 
-function handleClear() {
-  chatStore.clearHistory();
-  Message.success(t('common.success'));
-}
-
 function handleExport() {
-  const conv = chatStore.activeConv;
-  if (!conv) return;
-  const text = conv.messages
-    .map(m => `[${m.role === 'user' ? '用户' : conv.workerName}]\n${m.content}`)
+  const session = chatStore.activeSession;
+  const worker = activeWorker.value;
+  if (!session || !worker) return;
+  const text = session.messages
+    .map(m => `[${m.role === 'user' ? '我' : worker.name}]\n${m.content}`)
     .join('\n\n');
   const blob = new Blob([text], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${conv.title}.txt`;
+  a.download = `${worker.name}-${session.title}.txt`;
   a.click();
 }
 
-function startChat(workerId: string) {
-  chatStore.createConv(workerId);
+function startNewWorkerChat(workerId: string) {
+  chatStore.selectWorker(workerId);
   showWorkerPicker.value = false;
 }
 
-watch(() => chatStore.activeConv?.messages.length, async () => {
+watch(() => chatStore.activeSession?.messages.length, async () => {
   await nextTick();
   scrollToBottom();
 });
@@ -327,7 +356,7 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   overflow: hidden;
 }
 
-/* ─── Sub Panel ──────────────────────────────────────────────────────── */
+/* ─── Sub Panel: Contact List ────────────────────────────────────────── */
 
 .sub-panel {
   width: var(--subpanel-width);
@@ -354,17 +383,17 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
 }
 
 .sub-search {
-  padding: 0 12px 12px;
+  padding: 0 12px 10px;
   flex-shrink: 0;
 }
 
-.conv-list {
+.contact-list {
   flex: 1;
   overflow-y: auto;
   padding: 0 8px 8px;
 }
 
-.conv-item {
+.contact-item {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -375,75 +404,82 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   position: relative;
 }
 
-.conv-item:hover { background: rgba(22, 93, 255, 0.05); }
-.conv-item.active { background: rgba(22, 93, 255, 0.1); }
+.contact-item:hover { background: rgba(22, 93, 255, 0.05); }
+.contact-item.active { background: rgba(22, 93, 255, 0.1); }
 
-.conv-avatar {
-  font-size: 22px;
-  width: 36px;
-  height: 36px;
+.contact-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--bg-card);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
-  background: var(--bg-card);
+  font-size: 22px;
   flex-shrink: 0;
+  position: relative;
+  border: 1px solid var(--border-color);
 }
 
-.conv-info {
+.contact-avatar.secretary {
+  background: linear-gradient(135deg, rgba(22, 93, 255, 0.08), rgba(114, 46, 209, 0.08));
+  border-color: rgba(22, 93, 255, 0.3);
+}
+
+.status-dot {
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-subpanel);
+}
+.status-dot.online  { background: #00b42a; }
+.status-dot.idle    { background: #ff7d00; }
+.status-dot.offline { background: #86909c; }
+
+.contact-info {
   flex: 1;
   min-width: 0;
 }
 
-.conv-title {
+.contact-name-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 2px;
+}
+
+.contact-name {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conv-last {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conv-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
   flex-shrink: 0;
 }
 
-.conv-time {
+.secretary-badge {
+  font-size: 10px;
+  background: rgba(22, 93, 255, 0.1);
+  color: #165dff;
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.contact-time {
   font-size: 11px;
   color: var(--text-tertiary);
-  white-space: nowrap;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
-.conv-delete {
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.conv-item:hover .conv-delete {
-  opacity: 1;
-}
-
-.empty-hint {
-  text-align: center;
-  padding: 40px 20px;
+.contact-last {
+  font-size: 12px;
   color: var(--text-tertiary);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ─── Chat Main ──────────────────────────────────────────────────────── */
@@ -460,7 +496,7 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 20px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
@@ -471,15 +507,23 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   gap: 12px;
 }
 
-.worker-avatar {
-  font-size: 28px;
-  width: 40px;
-  height: 40px;
+.worker-avatar-lg {
+  font-size: 26px;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--bg-base);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
-  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+}
+
+.worker-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
 }
 
 .worker-name {
@@ -489,15 +533,67 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
 }
 
 .worker-model {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-tertiary);
-  margin-top: 1px;
+  font-family: monospace;
 }
 
-.chat-header-actions {
+.chat-header-right {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
 }
+
+/* ─── Session Tabs ───────────────────────────────────────────────────── */
+
+.session-tabs {
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-subpanel);
+  flex-shrink: 0;
+}
+
+.sessions-scroll {
+  display: flex;
+  overflow-x: auto;
+  padding: 6px 16px;
+  gap: 6px;
+}
+
+.sessions-scroll::-webkit-scrollbar { height: 3px; }
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.session-tab:hover { border-color: #165dff; color: var(--text-primary); }
+.session-tab.active {
+  border-color: #165dff;
+  background: rgba(22, 93, 255, 0.06);
+  color: #165dff;
+  font-weight: 500;
+}
+
+.sess-title { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+.sess-time { font-size: 11px; opacity: 0.6; }
+.sess-close {
+  font-size: 14px;
+  opacity: 0.5;
+  margin-left: 2px;
+  line-height: 1;
+}
+.sess-close:hover { opacity: 1; color: #f53f3f; }
 
 /* ─── Messages ───────────────────────────────────────────────────────── */
 
@@ -516,25 +612,22 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   gap: 10px;
 }
 
-.message-wrapper.user {
-  flex-direction: row-reverse;
-}
+.message-wrapper.user { flex-direction: row-reverse; }
 
 .msg-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
   background: var(--bg-base);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 18px;
   flex-shrink: 0;
+  border: 1px solid var(--border-color);
 }
 
-.user-av {
-  background: rgba(22, 93, 255, 0.1);
-}
+.user-av { background: rgba(22, 93, 255, 0.08); border-color: rgba(22, 93, 255, 0.2); }
 
 .message-bubble {
   max-width: 65%;
@@ -548,6 +641,7 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   background: var(--bg-base);
   border-radius: 4px 14px 14px 14px;
   color: var(--text-primary);
+  border: 1px solid var(--border-color);
 }
 
 .message-bubble.user {
@@ -562,12 +656,8 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   justify-content: flex-end;
 }
 
-.token-info {
-  font-size: 11px;
-  opacity: 0.5;
-}
+.token-info { font-size: 11px; opacity: 0.5; }
 
-/* Thinking animation */
 .thinking {
   display: flex;
   align-items: center;
@@ -576,13 +666,11 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
 }
 
 .dot {
-  width: 7px;
-  height: 7px;
+  width: 7px; height: 7px;
   border-radius: 50%;
   background: var(--text-tertiary);
   animation: bounce 1.2s infinite;
 }
-
 .dot:nth-child(2) { animation-delay: 0.2s; }
 .dot:nth-child(3) { animation-delay: 0.4s; }
 
@@ -591,7 +679,8 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   30% { transform: translateY(-6px); opacity: 1; }
 }
 
-/* Empty state */
+/* ─── Empty State ────────────────────────────────────────────────────── */
+
 .chat-empty {
   flex: 1;
   display: flex;
@@ -599,15 +688,12 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 40px;
+  padding: 60px 40px;
   gap: 12px;
   color: var(--text-secondary);
 }
 
-.empty-icon {
-  font-size: 56px;
-  margin-bottom: 8px;
-}
+.empty-avatar { font-size: 60px; margin-bottom: 8px; }
 
 .chat-empty h3 {
   font-size: 20px;
@@ -627,58 +713,49 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   cursor: pointer;
   transition: all 0.15s;
 }
-
-.suggestion-chip:hover {
-  transform: translateY(-2px);
-}
+.suggestion-chip:hover { transform: translateY(-2px); }
 
 /* ─── Input ──────────────────────────────────────────────────────────── */
 
 .input-area {
-  padding: 16px 20px 20px;
+  padding: 14px 20px 18px;
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
 .input-box {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
   background: var(--bg-base);
   border: 1px solid var(--border-color);
   border-radius: 14px;
-  padding: 8px 12px;
+  padding: 10px 14px 10px;
   transition: border-color 0.2s;
 }
 
-.input-box:focus-within {
-  border-color: #165dff;
-}
+.input-box.focused { border-color: #165dff; }
 
 .input-box :deep(.arco-textarea) {
   background: transparent;
   border: none;
   resize: none;
-  flex: 1;
+  padding: 0;
+  font-size: 14px;
 }
 
-.input-actions {
+.input-footer {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  justify-content: space-between;
+  margin-top: 8px;
 }
 
-.char-count {
+.input-hint {
   font-size: 11px;
   color: var(--text-tertiary);
 }
 
-.send-btn {
-  border-radius: 10px;
-}
+.send-btn { border-radius: 8px; }
 
-/* ─── No Conversation ────────────────────────────────────────────────── */
+/* ─── No Conv ────────────────────────────────────────────────────────── */
 
 .no-conv {
   flex: 1;
@@ -690,9 +767,7 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
   color: var(--text-secondary);
 }
 
-.no-conv-icon {
-  font-size: 64px;
-}
+.no-conv-icon { font-size: 64px; }
 
 .no-conv h2 {
   font-size: 20px;
@@ -725,15 +800,15 @@ watch(() => chatStore.activeConv?.messages.length, async () => {
 }
 
 .pick-avatar { font-size: 28px; }
-
 .pick-info { flex: 1; }
-
 .pick-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
-
 .pick-desc {
   font-size: 12px;
   color: var(--text-secondary);

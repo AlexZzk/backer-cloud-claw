@@ -48,6 +48,10 @@
               </div>
             </div>
             <div class="detail-actions">
+              <a-button type="primary" @click="startChat(selectedWorker.id)">
+                <template #icon><icon-message /></template>
+                {{ t('workers.startChat') }}
+              </a-button>
               <a-button type="outline" @click="openEdit(selectedWorker)">
                 <template #icon><icon-edit /></template>
                 {{ t('common.edit') }}
@@ -152,6 +156,9 @@
                 </a-tag>
               </div>
             </div>
+            <div class="card-chat-btn" @click.stop="startChat(w.id)">
+              <icon-message style="margin-right:4px" />{{ t('workers.startChat') }}
+            </div>
           </div>
 
           <!-- Add card -->
@@ -238,12 +245,16 @@
 <script setup lang="ts">
 import { ref, computed, reactive } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import { useWorkersStore } from '@/stores/workers';
+import { useChatStore } from '@/stores/chat';
 import { Modal, Message } from '@arco-design/web-vue';
 import type { MockWorker } from '@/mock/data';
 
 const { t } = useI18n();
+const router = useRouter();
 const workersStore = useWorkersStore();
+const chatStore = useChatStore();
 
 const searchText = ref('');
 const selectedId = ref<string | null>(null);
@@ -320,6 +331,11 @@ function handleSave() {
     Message.success(t('common.success'));
   }
   showModal.value = false;
+}
+
+function startChat(workerId: string) {
+  chatStore.openWorkerChat(workerId);
+  router.push('/chat');
 }
 
 function confirmDelete(id: string) {
@@ -543,6 +559,26 @@ function confirmDelete(id: string) {
 
 .add-icon {
   font-size: 32px;
+}
+
+.card-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 12px;
+  padding: 7px 0;
+  border-radius: 8px;
+  background: rgba(22, 93, 255, 0.06);
+  color: #165dff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+  border: 1px solid rgba(22, 93, 255, 0.15);
+}
+
+.card-chat-btn:hover {
+  background: rgba(22, 93, 255, 0.12);
 }
 
 /* ─── Detail ──────────────────────────────────────────────────────────── */

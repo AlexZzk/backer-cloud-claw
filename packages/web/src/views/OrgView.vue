@@ -131,7 +131,7 @@
             <div class="oc-children">
               <div v-for="dept in company.departments" :key="dept.id" class="oc-dept">
                 <div class="oc-connector"></div>
-                <div class="oc-node dept-node" @click="selectedDeptId = dept.id">
+                <div class="oc-node dept-node" @click="openDeptDrawer(dept.id)">
                   <icon-team />
                   <span>{{ dept.name }}</span>
                   <small>{{ dept.members.length }}人</small>
@@ -169,6 +169,46 @@
           <span>🤖</span>
           <a-tag color="green">{{ getWorkerName(selectedEmployee.workerId) }}</a-tag>
         </div>
+      </div>
+    </a-drawer>
+
+    <!-- Department detail drawer (triggered by org chart click) -->
+    <a-drawer
+      v-if="drawerDept"
+      :visible="showDeptDrawer"
+      :title="drawerDept.name"
+      :width="360"
+      @cancel="showDeptDrawer = false"
+      :footer="false"
+    >
+      <div class="dept-detail">
+        <p class="dept-detail-desc">{{ drawerDept.description }}</p>
+        <a-divider />
+        <h4 style="margin-bottom: 12px;">{{ t('org.members') }}（{{ drawerDept.members.length }}）</h4>
+        <div class="dept-member-list">
+          <div
+            v-for="emp in drawerDept.members"
+            :key="emp.id"
+            class="dept-member-item"
+          >
+            <span class="dm-avatar">{{ emp.avatar }}</span>
+            <div class="dm-info">
+              <div class="dm-name">{{ emp.name }}</div>
+              <div class="dm-role">{{ emp.role }}</div>
+            </div>
+            <a-tag v-if="emp.workerId" color="green" size="small">
+              🤖 {{ getWorkerName(emp.workerId) }}
+            </a-tag>
+          </div>
+        </div>
+        <a-divider />
+        <a-button
+          type="primary"
+          long
+          @click="selectedDeptId = drawerDept!.id; showDeptDrawer = false"
+        >
+          查看完整部门详情
+        </a-button>
       </div>
     </a-drawer>
 
@@ -239,6 +279,18 @@ const selectedEmployeeId = ref<string | null>(null);
 const viewMode = ref<'grid' | 'list'>('grid');
 const showCreateDept = ref(false);
 const showAddEmployee = ref(false);
+
+// Org chart department drawer
+const showDeptDrawer = ref(false);
+const drawerDeptId = ref<string | null>(null);
+const drawerDept = computed(() =>
+  drawerDeptId.value ? company.departments.find(d => d.id === drawerDeptId.value) ?? null : null
+);
+
+function openDeptDrawer(deptId: string) {
+  drawerDeptId.value = deptId;
+  showDeptDrawer.value = true;
+}
 
 const newDept = reactive({ name: '', description: '' });
 const newEmp = reactive({ name: '', role: '', email: '', departmentId: '', workerId: '' });
@@ -592,5 +644,49 @@ function handleAddEmployee() {
 
 .no-worker {
   color: var(--text-tertiary);
+}
+
+/* ─── Department Drawer ──────────────────────────────────────────────── */
+
+.dept-detail {
+  padding: 4px 0;
+}
+
+.dept-detail-desc {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.dept-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dept-member-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+}
+
+.dm-avatar { font-size: 24px; flex-shrink: 0; }
+
+.dm-info { flex: 1; min-width: 0; }
+
+.dm-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dm-role {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
 }
 </style>

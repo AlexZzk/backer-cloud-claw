@@ -1,45 +1,96 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import {
-  MOCK_CONVERSATIONS, MOCK_WORKERS,
-  type MockConversation, type MockMessage, type MockWorker,
+  MOCK_SESSIONS, MOCK_WORKERS,
+  type MockSession, type MockMessage,
 } from '@/mock/data';
 
 export const useChatStore = defineStore('chat', () => {
-  const conversations = ref<MockConversation[]>([...MOCK_CONVERSATIONS]);
-  const activeConvId = ref<string | null>(conversations.value[0]?.id ?? null);
+  // All sessions across all workers
+  const sessions = ref<MockSession[]>([...MOCK_SESSIONS]);
+
+  // Active state: which worker contact is open, and which session within it
+  const activeWorkerId = ref<string | null>('w-secretary');
+  const activeSessionId = ref<string | null>('sess-secretary-1');
+
   const isThinking = ref(false);
 
-  const activeConv = computed(() =>
-    conversations.value.find(c => c.id === activeConvId.value) ?? null
+  // ─── Computed ───────────────────────────────────────────────────────────
+
+  const activeSession = computed(() =>
+    sessions.value.find(s => s.id === activeSessionId.value) ?? null
   );
 
-  const workers = ref<MockWorker[]>([...MOCK_WORKERS]);
+  // Contact list: one row per worker, sorted by most recent session
+  const contactList = computed(() => {
+    return MOCK_WORKERS.map(worker => {
+      const workerSessions = sessions.value
+        .filter(s => s.workerId === worker.id)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      const latest = workerSessions[0];
+      const lastMsg = latest?.messages[latest.messages.length - 1];
+      return {
+        worker,
+        latestSession: latest ?? null,
+        lastMessage: lastMsg?.content.slice(0, 50) ?? '',
+        updatedAt: latest?.updatedAt ?? 0,
+        sessionCount: workerSessions.length,
+      };
+    }).sort((a, b) => {
+      // Secretary always first
+      if (a.worker.isSecretary) return -1;
+      if (b.worker.isSecretary) return 1;
+      return b.updatedAt - a.updatedAt;
+    });
+  });
 
-  function selectConv(id: string) {
-    activeConvId.value = id;
+  // Sessions for a specific worker
+  function getWorkerSessions(workerId: string): MockSession[] {
+    return sessions.value
+      .filter(s => s.workerId === workerId)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  function createConv(workerId: string) {
-    const worker = workers.value.find(w => w.id === workerId);
-    if (!worker) return;
+  // ─── Actions ────────────────────────────────────────────────────────────
 
-    const conv: MockConversation = {
-      id: `conv-${Date.now()}`,
+  function selectWorker(workerId: string) {
+    activeWorkerId.value = workerId;
+    const workerSessions = getWorkerSessions(workerId);
+    activeSessionId.value = workerSessions[0]?.id ?? null;
+  }
+
+  function selectSession(sessionId: string) {
+    activeSessionId.value = sessionId;
+  }
+
+  function newSession(workerId: string): MockSession {
+    const session: MockSession = {
+      id: `sess-${workerId}-${Date.now()}`,
       workerId,
-      workerName: worker.name,
-      title: '新对话',
-      lastMessage: '',
+      title: '新会话',
+      createdAt: Date.now(),
       updatedAt: Date.now(),
       messages: [],
     };
-    conversations.value.unshift(conv);
-    activeConvId.value = conv.id;
-    return conv;
+    sessions.value.unshift(session);
+    activeWorkerId.value = workerId;
+    activeSessionId.value = session.id;
+    return session;
+  }
+
+  function deleteSession(sessionId: string) {
+    const idx = sessions.value.findIndex(s => s.id === sessionId);
+    if (idx < 0) return;
+    const workerId = sessions.value[idx]!.workerId;
+    sessions.value.splice(idx, 1);
+    if (activeSessionId.value === sessionId) {
+      const remaining = getWorkerSessions(workerId);
+      activeSessionId.value = remaining[0]?.id ?? null;
+    }
   }
 
   async function sendMessage(content: string) {
-    if (!activeConv.value || !content.trim()) return;
+    if (!activeSession.value || !content.trim()) return;
 
     const userMsg: MockMessage = {
       id: `m-${Date.now()}`,
@@ -47,17 +98,14 @@ export const useChatStore = defineStore('chat', () => {
       content: content.trim(),
       timestamp: Date.now(),
     };
-    activeConv.value.messages.push(userMsg);
-    activeConv.value.lastMessage = content.trim();
-    activeConv.value.updatedAt = Date.now();
-    if (activeConv.value.messages.length === 1) {
-      activeConv.value.title = content.trim().slice(0, 20);
+    activeSession.value.messages.push(userMsg);
+    activeSession.value.updatedAt = Date.now();
+    if (activeSession.value.messages.length === 1) {
+      activeSession.value.title = content.trim().slice(0, 24);
     }
 
     isThinking.value = true;
-
-    // Simulate streaming response
-    await new Promise(r => setTimeout(r, 800 + Math.random() * 800));
+    await new Promise(r => setTimeout(r, 700 + Math.random() * 900));
 
     const responses = [
       '这是一个很好的问题！让我来详细解答...\n\n根据您的需求，我建议采用以下方案：\n\n1. 首先分析问题的核心需求\n2. 然后制定可行的解决方案\n3. 最后进行实施和验证\n\n如果您需要更多细节，请随时告诉我。',
@@ -68,7 +116,7 @@ export const useChatStore = defineStore('chat', () => {
     const assistantMsg: MockMessage = {
       id: `m-${Date.now() + 1}`,
       role: 'assistant',
-      content: responses[Math.floor(Math.random() * responses.length)] || responses[0]!,
+      content: responses[Math.floor(Math.random() * responses.length)]!,
       timestamp: Date.now(),
       tokenUsage: {
         inputTokens: Math.floor(Math.random() * 50) + 20,
@@ -77,29 +125,23 @@ export const useChatStore = defineStore('chat', () => {
     };
 
     isThinking.value = false;
-    activeConv.value.messages.push(assistantMsg);
-    activeConv.value.lastMessage = assistantMsg.content.slice(0, 50);
-    activeConv.value.updatedAt = Date.now();
+    activeSession.value.messages.push(assistantMsg);
+    activeSession.value.updatedAt = Date.now();
   }
 
-  function clearHistory() {
-    if (!activeConv.value) return;
-    activeConv.value.messages = [];
-    activeConv.value.lastMessage = '';
+  function clearSession() {
+    if (!activeSession.value) return;
+    activeSession.value.messages = [];
   }
 
-  function deleteConv(id: string) {
-    const idx = conversations.value.findIndex(c => c.id === id);
-    if (idx >= 0) {
-      conversations.value.splice(idx, 1);
-      if (activeConvId.value === id) {
-        activeConvId.value = conversations.value[0]?.id ?? null;
-      }
-    }
+  function openWorkerChat(workerId: string) {
+    selectWorker(workerId);
   }
 
   return {
-    conversations, activeConvId, activeConv, isThinking, workers,
-    selectConv, createConv, sendMessage, clearHistory, deleteConv,
+    sessions, activeWorkerId, activeSessionId, activeSession,
+    isThinking, contactList,
+    getWorkerSessions, selectWorker, selectSession,
+    newSession, deleteSession, sendMessage, clearSession, openWorkerChat,
   };
 });
