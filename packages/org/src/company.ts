@@ -104,12 +104,13 @@ export class Company implements Participant {
   /**
    * 向指定 Worker 发送一条消息（在某个 Thread 内）。
    * 路由到目标 Worker，等待回复后将回复消息追加到 Thread。
+   * @param from 发送方 ID，默认 'user'；Worker 间委托时传入发送方 Worker 的 ID
    */
-  async send(to: string | string[], content: string, threadId: string): Promise<OrgMessage[]> {
+  async send(to: string | string[], content: string, threadId: string, from = 'user'): Promise<OrgMessage[]> {
     const message: OrgMessage = {
       id: randomUUID(),
       threadId,
-      from: 'user',
+      from,
       to,
       content,
       timestamp: Date.now(),

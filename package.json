@@ -11,7 +11,8 @@
     "clean": "turbo run clean",
     "bcc-init":   "pnpm --filter @bcc/channel-cli run init",
     "bcc-worker": "turbo run build --filter=@bcc/channel-cli... --output-logs=errors-only && pnpm --filter @bcc/channel-cli run worker",
-    "bcc-chat":   "turbo run build --filter=@bcc/channel-cli... --output-logs=errors-only && pnpm --filter @bcc/channel-cli run start"
+    "bcc-chat":   "turbo run build --filter=@bcc/channel-cli... --output-logs=errors-only && pnpm --filter @bcc/channel-cli run start",
+    "bcc-server": "turbo run build --filter=@bcc/channel-http... --output-logs=errors-only && pnpm --filter @bcc/channel-http run start"
   },
   "workspaces": [
     "packages/*",

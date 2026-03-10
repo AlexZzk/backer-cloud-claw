@@ -68,12 +68,12 @@
           <!-- Stats -->
           <div class="detail-stats">
             <div class="stat-card">
-              <div class="stat-value">{{ formatNumber(selectedWorker.totalTokens) }}</div>
-              <div class="stat-label">{{ t('workers.totalTokens') }}</div>
+              <div class="stat-value">{{ selectedWorker.modelId }}</div>
+              <div class="stat-label">{{ t('workers.model') }}</div>
             </div>
             <div class="stat-card">
-              <div class="stat-value">{{ selectedWorker.totalSessions }}</div>
-              <div class="stat-label">{{ t('workers.totalSessions') }}</div>
+              <div class="stat-value">{{ selectedWorker.skills.length }}</div>
+              <div class="stat-label">{{ t('workers.skills') }}</div>
             </div>
             <div class="stat-card">
               <div class="stat-value">
@@ -84,8 +84,8 @@
               <div class="stat-label">{{ t('workers.workerStatus') }}</div>
             </div>
             <div class="stat-card">
-              <div class="stat-value">{{ selectedWorker.lastActive }}</div>
-              <div class="stat-label">{{ t('workers.lastActive') }}</div>
+              <div class="stat-value">{{ selectedWorker.tools.length }}</div>
+              <div class="stat-label">{{ t('workers.tools') }}</div>
             </div>
           </div>
 
@@ -133,7 +133,7 @@
             class="worker-card"
             @click="selectedId = w.id"
           >
-            <div class="card-avatar">{{ w.avatar }}</div>
+            <div class="card-avatar">🤖</div>
             <div class="card-name">{{ w.name }}</div>
             <div class="card-desc">{{ w.description }}</div>
             <div class="card-skills">
@@ -143,12 +143,12 @@
             <a-divider style="margin: 12px 0" />
             <div class="card-stats">
               <div class="card-stat">
-                <div class="cs-val">{{ formatNumber(w.totalTokens) }}</div>
-                <div class="cs-label">Tokens</div>
+                <div class="cs-val">{{ w.modelId }}</div>
+                <div class="cs-label">模型</div>
               </div>
               <div class="card-stat">
-                <div class="cs-val">{{ w.totalSessions }}</div>
-                <div class="cs-label">{{ t('workers.totalSessions') }}</div>
+                <div class="cs-val">{{ w.tools.length }}</div>
+                <div class="cs-label">{{ t('workers.tools') }}</div>
               </div>
               <div class="card-stat">
                 <a-tag :color="statusColor(w.status)" size="small">
@@ -249,7 +249,7 @@ import { useRouter } from 'vue-router';
 import { useWorkersStore } from '@/stores/workers';
 import { useChatStore } from '@/stores/chat';
 import { Modal, Message } from '@arco-design/web-vue';
-import type { MockWorker } from '@/mock/data';
+import type { MockWorker } from '@/stores/workers';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -313,7 +313,7 @@ function openEdit(worker: MockWorker) {
     role: worker.role,
     skills: [...worker.skills],
     tools: [...worker.tools],
-    avatar: worker.avatar,
+    avatar: '🤖',
   });
   showModal.value = true;
 }
@@ -323,13 +323,8 @@ function handleSave() {
     Message.error(t('workers.workerName') + ' ' + t('common.noData'));
     return;
   }
-  if (editingWorker.value) {
-    workersStore.updateWorker(editingWorker.value.id, { ...form });
-    Message.success(t('common.success'));
-  } else {
-    workersStore.createWorker({ ...form });
-    Message.success(t('common.success'));
-  }
+  // Worker 配置由后端 config.json 管理，前端仅提示需重启服务
+  Message.info('Worker 配置请在 ~/.bcc/config.json 中修改后重启服务生效');
   showModal.value = false;
 }
 
@@ -338,15 +333,12 @@ function startChat(workerId: string) {
   router.push('/chat');
 }
 
-function confirmDelete(id: string) {
+function confirmDelete(_id: string) {
   Modal.confirm({
     title: t('workers.confirmDelete'),
-    content: t('workers.deleteWarning'),
-
+    content: 'Worker 配置请在 ~/.bcc/config.json 中删除后重启服务生效',
     onOk() {
-      workersStore.deleteWorker(id);
-      selectedId.value = null;
-      Message.success(t('common.success'));
+      Message.info('请手动编辑配置文件后重启服务');
     },
   });
 }

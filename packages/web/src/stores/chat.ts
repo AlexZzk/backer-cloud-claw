@@ -1,19 +1,25 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import {
-  MOCK_SESSIONS, MOCK_WORKERS,
-  type MockSession, type MockMessage,
-} from '@/mock/data';
+import { sessionsApi, sendMessageStream, type ApiSession, type ApiMessage } from '@/api/client';
+import { useWorkersStore } from './workers';
+
+export type { ApiMessage as MockMessage };
+
+export interface ChatSession {
+  id: string;
+  workerId: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ApiMessage[];
+}
 
 export const useChatStore = defineStore('chat', () => {
-  // All sessions across all workers
-  const sessions = ref<MockSession[]>([...MOCK_SESSIONS]);
-
-  // Active state: which worker contact is open, and which session within it
-  const activeWorkerId = ref<string | null>('w-secretary');
-  const activeSessionId = ref<string | null>('sess-secretary-1');
-
+  const sessions = ref<ChatSession[]>([]);
+  const activeWorkerId = ref<string | null>(null);
+  const activeSessionId = ref<string | null>(null);
   const isThinking = ref(false);
+  const loading = ref(false);
 
   // ─── Computed ───────────────────────────────────────────────────────────
 
@@ -21,9 +27,9 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value.find(s => s.id === activeSessionId.value) ?? null
   );
 
-  // Contact list: one row per worker, sorted by most recent session
   const contactList = computed(() => {
-    return MOCK_WORKERS.map(worker => {
+    const workersStore = useWorkersStore();
+    return workersStore.workers.map(worker => {
       const workerSessions = sessions.value
         .filter(s => s.workerId === worker.id)
         .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -37,21 +43,19 @@ export const useChatStore = defineStore('chat', () => {
         sessionCount: workerSessions.length,
       };
     }).sort((a, b) => {
-      // Secretary always first
-      if (a.worker.isSecretary) return -1;
-      if (b.worker.isSecretary) return 1;
+      if (a.worker.isPrimary) return -1;
+      if (b.worker.isPrimary) return 1;
       return b.updatedAt - a.updatedAt;
     });
   });
 
-  // Sessions for a specific worker
-  function getWorkerSessions(workerId: string): MockSession[] {
+  // ─── Actions ────────────────────────────────────────────────────────────
+
+  function getWorkerSessions(workerId: string): ChatSession[] {
     return sessions.value
       .filter(s => s.workerId === workerId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
-
-  // ─── Actions ────────────────────────────────────────────────────────────
 
   function selectWorker(workerId: string) {
     activeWorkerId.value = workerId;
@@ -61,27 +65,40 @@ export const useChatStore = defineStore('chat', () => {
 
   function selectSession(sessionId: string) {
     activeSessionId.value = sessionId;
+    const session = sessions.value.find(s => s.id === sessionId);
+    if (session) activeWorkerId.value = session.workerId;
   }
 
-  function newSession(workerId: string): MockSession {
-    const session: MockSession = {
-      id: `sess-${workerId}-${Date.now()}`,
-      workerId,
-      title: '新会话',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      messages: [],
-    };
-    sessions.value.unshift(session);
-    activeWorkerId.value = workerId;
-    activeSessionId.value = session.id;
-    return session;
+  async function newSession(workerId: string): Promise<ChatSession> {
+    loading.value = true;
+    try {
+      const apiSession = await sessionsApi.create(workerId);
+      const session: ChatSession = {
+        id: apiSession.id,
+        workerId: apiSession.workerId,
+        title: apiSession.title,
+        createdAt: apiSession.createdAt,
+        updatedAt: apiSession.updatedAt,
+        messages: [],
+      };
+      sessions.value.unshift(session);
+      activeWorkerId.value = workerId;
+      activeSessionId.value = session.id;
+      return session;
+    } finally {
+      loading.value = false;
+    }
   }
 
-  function deleteSession(sessionId: string) {
+  async function deleteSession(sessionId: string) {
     const idx = sessions.value.findIndex(s => s.id === sessionId);
     if (idx < 0) return;
     const workerId = sessions.value[idx]!.workerId;
+    try {
+      await sessionsApi.delete(sessionId);
+    } catch {
+      // 忽略后端错误，本地直接删除
+    }
     sessions.value.splice(idx, 1);
     if (activeSessionId.value === sessionId) {
       const remaining = getWorkerSessions(workerId);
@@ -92,41 +109,53 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(content: string) {
     if (!activeSession.value || !content.trim()) return;
 
-    const userMsg: MockMessage = {
+    const session = activeSession.value;
+
+    // 用户消息立即追加（乐观更新）
+    const userMsg: ApiMessage = {
       id: `m-${Date.now()}`,
       role: 'user',
       content: content.trim(),
       timestamp: Date.now(),
     };
-    activeSession.value.messages.push(userMsg);
-    activeSession.value.updatedAt = Date.now();
-    if (activeSession.value.messages.length === 1) {
-      activeSession.value.title = content.trim().slice(0, 24);
+    session.messages.push(userMsg);
+    session.updatedAt = Date.now();
+    if (session.messages.length === 1) {
+      session.title = content.trim().slice(0, 24);
     }
 
     isThinking.value = true;
-    await new Promise(r => setTimeout(r, 700 + Math.random() * 900));
 
-    const responses = [
-      '这是一个很好的问题！让我来详细解答...\n\n根据您的需求，我建议采用以下方案：\n\n1. 首先分析问题的核心需求\n2. 然后制定可行的解决方案\n3. 最后进行实施和验证\n\n如果您需要更多细节，请随时告诉我。',
-      '明白了，我来帮您处理这个任务。\n\n```typescript\n// 示例代码\nconst solution = async () => {\n  const result = await processData(input);\n  return result;\n};\n```\n\n以上代码展示了基本思路，您可以根据实际情况进行调整。',
-      '这是一个复杂但有趣的问题。从我的分析来看：\n\n**关键点：**\n- 性能是首要考量\n- 可维护性同样重要\n- 需要考虑扩展性\n\n我推荐分阶段实施，这样可以降低风险并保证质量。',
-    ];
-
-    const assistantMsg: MockMessage = {
+    // assistant 占位消息（流式追加内容）
+    const assistantMsg: ApiMessage = {
       id: `m-${Date.now() + 1}`,
       role: 'assistant',
-      content: responses[Math.floor(Math.random() * responses.length)]!,
+      content: '',
       timestamp: Date.now(),
-      tokenUsage: {
-        inputTokens: Math.floor(Math.random() * 50) + 20,
-        outputTokens: Math.floor(Math.random() * 200) + 100,
-      },
     };
+    session.messages.push(assistantMsg);
 
-    isThinking.value = false;
-    activeSession.value.messages.push(assistantMsg);
-    activeSession.value.updatedAt = Date.now();
+    try {
+      await sendMessageStream(session.id, content.trim(), {
+        onChunk: (text) => {
+          assistantMsg.content += text;
+        },
+        onDone: (tokenUsage) => {
+          if (tokenUsage) {
+            assistantMsg.tokenUsage = {
+              inputTokens:  tokenUsage.inputTokens,
+              outputTokens: tokenUsage.outputTokens,
+            };
+          }
+          session.updatedAt = Date.now();
+        },
+        onError: (message) => {
+          assistantMsg.content = `⚠ 错误：${message}`;
+        },
+      });
+    } finally {
+      isThinking.value = false;
+    }
   }
 
   function clearSession() {
@@ -140,7 +169,7 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     sessions, activeWorkerId, activeSessionId, activeSession,
-    isThinking, contactList,
+    isThinking, loading, contactList,
     getWorkerSessions, selectWorker, selectSession,
     newSession, deleteSession, sendMessage, clearSession, openWorkerChat,
   };
