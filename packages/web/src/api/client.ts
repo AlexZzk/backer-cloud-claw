@@ -83,39 +83,47 @@ export interface ApiWorkerInput {
   isPrimary?: boolean
 }
 
+// class WorkerListApi {
+//   async getWorkers() {
+//     return service({
+//       url: '/workers',
+//       method: 'get',
+//     })
+//   }
+// }
+
 export const workersApi = {
-  list: () =>
-      service.get<ApiWorker[]>('/api/workers'),
+  list: () => service.get<ApiWorker[]>('/workers'),
 
   create: (data: ApiWorkerInput) =>
-      service.post<ApiWorker>('api/workers', { ...data, primary: data.isPrimary }),
+      service.post<ApiWorker>('/workers', { ...data, primary: data.isPrimary }),
 
   update: (id: string, data: Partial<ApiWorkerInput>) =>
-      service.put<ApiWorker>(`/api/workers/${id}`, { ...data, primary: data.isPrimary }),
+      service.put<ApiWorker>(`/workers/${id}`, { ...data, primary: data.isPrimary }),
 
   delete: (id: string) =>
-      service.delete(`/api/workers/${id}`)
+      service.delete(`/workers/${id}`)
 }
 
 // ─── Session API ────────────────────────────────────────────────────────
 
 export const sessionsApi = {
   create: (workerId: string) =>
-      service.post<ApiSession>(`/api/workers/${workerId}/sessions`),
+      service.post<ApiSession>(`/workers/${workerId}/sessions`),
 
   listByWorker: (workerId: string) =>
-      service.get<ApiSession[]>(`/api/workers/${workerId}/sessions`),
+      service.get<ApiSession[]>(`/workers/${workerId}/sessions`),
 
   get: (sessionId: string) =>
-      service.get<ApiSessionDetail>(`/api/sessions/${sessionId}`),
+      service.get<ApiSessionDetail>(`/sessions/${sessionId}`),
 
   delete: (sessionId: string) =>
-      service.delete(`/api/sessions/${sessionId}`)
+      service.delete(`/sessions/${sessionId}`)
 }
 
 export const dmApi = {
   create: (fromWorkerId: string, toWorkerId: string) =>
-      service.post<ApiSession>('/api/dm-sessions', { fromWorkerId, toWorkerId })
+      service.post<ApiSession>('/dm-sessions', { fromWorkerId, toWorkerId })
 }
 
 // ─── SSE 流式消息 ───────────────────────────────────────────────────────
@@ -135,7 +143,7 @@ export async function sendMessageStream(
     callbacks: StreamCallbacks
 ): Promise<void> {
 
-  const res = await fetch(`/api/sessions/${sessionId}/messages`, {
+  const res = await fetch(`/sessions/${sessionId}/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -226,16 +234,16 @@ export interface ApiModelInput {
 
 export const modelsApi = {
   list: () =>
-    service.get<ApiModel[]>('/api/models'),
+    service.get<ApiModel[]>('/models'),
 
   create: (data: ApiModelInput) =>
-      service.post<ApiModel>('/api/models', data),
+      service.post<ApiModel>('/models', data),
 
   update: (id: string, data: Partial<ApiModelInput>) =>
-      service.put<ApiModel>(`/api/models/${id}`, data),
+      service.put<ApiModel>(`/models/${id}`, data),
 
   delete: (id: string) =>
-      service.delete(`/api/models/${id}`)
+      service.delete(`/models/${id}`)
 }
 
 // ─── Async Chats API (Worker↔Worker 异步聊天，来自 CLI 的 send_message 工具) ─
@@ -266,17 +274,17 @@ export interface ApiAsyncChatMessage {
 
 export const chatsApi = {
   list: (participant?: string) =>
-    service.get<ApiAsyncChat[]>('/api/chats' + (participant ? `?participant=${encodeURIComponent(participant)}` : '')),
+    service.get<ApiAsyncChat[]>('/chats' + (participant ? `?participant=${encodeURIComponent(participant)}` : '')),
 
   getMessages: (chatId: string) =>
-    service.get<ApiAsyncChatMessage[]>(`/api/chats/${chatId}/messages`),
+    service.get<ApiAsyncChatMessage[]>(`/chats/${chatId}/messages`),
 }
 
 // ─── Analytics API ──────────────────────────────────────────────────────
 
 export const analyticsApi = {
   tokens: () =>
-      service.get<TokenStats>('/api/analytics/tokens')
+      service.get<TokenStats>('/analytics/tokens')
 }
 
 // ─── Health Check ───────────────────────────────────────────────────────
@@ -286,7 +294,7 @@ export interface HealthStatus {
 }
 
 export async function getServiceHealth() {
-  return service.get<HealthStatus>('/api/health')
+  return service.get<HealthStatus>('/health')
 }
 
 export async function checkHealth(): Promise<boolean> {
