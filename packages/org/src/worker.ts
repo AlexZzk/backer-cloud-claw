@@ -287,6 +287,51 @@ export class Worker implements Participant {
     return this.engine.getHistory();
   }
 
+  /**
+   * 获取 Worker 当前状态的文本摘要。
+   * 用于在对话开始前注入上下文，让 Worker 始终知道：
+   *   - 有没有未读消息等待处理
+   *   - 当前任务进展如何
+   *
+   * WorkerSession 在每次 stream() 前调用此方法，将结果前置到用户消息。
+   */
+  async getStateContext(): Promise<string> {
+    const parts: string[] = [];
+
+    if (this.inboxService) {
+      const pending = await this.inboxService.getPendingMessages(this.id);
+      if (pending.length > 0) {
+        const preview = pending
+          .slice(0, 5)
+          .map(p => {
+            const time = new Date(p.message.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            const preview = p.message.content.length > 60
+              ? p.message.content.slice(0, 60) + '…'
+              : p.message.content;
+            return `  • ${p.message.from}（${time}）：${preview}`;
+          })
+          .join('\n');
+        const more = pending.length > 5 ? `\n  …以及 ${pending.length - 5} 条更多` : '';
+        parts.push(`📬 你有 ${pending.length} 条未读消息：\n${preview}${more}`);
+      }
+    }
+
+    if (this.taskService) {
+      const tasks = await this.taskService.list(['todo', 'in_progress']);
+      if (tasks.length > 0) {
+        const next = tasks[0];
+        const preview = tasks
+          .slice(0, 3)
+          .map(t => `  • [${t.priority}] ${t.title}（${t.status}）`)
+          .join('\n');
+        const more = tasks.length > 3 ? `\n  …以及 ${tasks.length - 3} 项更多` : '';
+        parts.push(`📋 你有 ${tasks.length} 个待处理任务${next ? `，最高优先级：「${next.title}」` : ''}：\n${preview}${more}`);
+      }
+    }
+
+    return parts.join('\n\n');
+  }
+
   describe(): string {
     const skillList = this.profile.skills.length > 0
       ? `技能：${this.profile.skills.join('、')}`
@@ -456,6 +501,64 @@ export class Worker implements Participant {
 
   private _registerInboxTools(inboxService: AsyncInboxService): void {
     const workerId = this.id;
+
+    // 工具：主动查收收件箱（Worker 最常用的自我感知工具）
+    this.engine.registerTool({
+      definition: {
+        name: 'check_inbox',
+        description: '查看我的未读消息收件箱。当有人给我发消息（同事或老板），消息会存在这里，需要我主动查收。查收后消息会被标记为已读。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            mark_as_read: {
+              type: 'boolean',
+              description: '是否将查看的消息标记为已读，默认 true',
+            },
+          },
+          required: [],
+        },
+      },
+      handler: async (input: Record<string, unknown>) => {
+        const markAsRead = (input['mark_as_read'] as boolean | undefined) ?? true;
+        const pending = await inboxService.getPendingMessages(workerId);
+
+        if (pending.length === 0) {
+          return '收件箱为空，暂无未读消息。';
+        }
+
+        // Group by chat
+        const byChatId = new Map<string, typeof pending>();
+        for (const item of pending) {
+          const group = byChatId.get(item.chat.id) ?? [];
+          group.push(item);
+          byChatId.set(item.chat.id, group);
+        }
+
+        const lines: string[] = [`共 ${pending.length} 条未读消息：\n`];
+        for (const [chatId, items] of byChatId) {
+          const firstItem = items[0];
+          const chatTitle = firstItem?.chat.title
+            ?? `与 ${firstItem?.chat.participants.filter(p => p !== workerId).join(', ') ?? '未知'} 的对话`;
+          lines.push(`【${chatTitle}】（会话 ID: ${chatId}）`);
+          for (const item of items) {
+            const time = new Date(item.message.timestamp).toLocaleString('zh-CN');
+            lines.push(`  [${time}] ${item.message.from}: ${item.message.content}`);
+            lines.push(`  消息 ID: ${item.message.id}`);
+          }
+          lines.push('');
+
+          if (markAsRead) {
+            await inboxService.markRead(chatId, workerId);
+          }
+        }
+
+        if (markAsRead) {
+          lines.push('（所有消息已标记为已读）');
+        }
+
+        return lines.join('\n');
+      },
+    });
 
     // 工具：发送异步消息到某个聊天会话
     this.engine.registerTool({
