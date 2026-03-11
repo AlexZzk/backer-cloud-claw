@@ -27,6 +27,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomUUID } from 'node:crypto';
 import { AgentEngine } from '@bcc/agent-engine';
 import { getBuiltinTool } from '@bcc/skills';
+import type { AgentInterface } from '@bcc/foundation';
 import { SessionStore } from './session-store.js';
 import type { ApiWorker, ApiModel, TokenStats, SseEvent } from './types.js';
 import type {
@@ -40,8 +41,8 @@ import { saveConfig, loadConfig } from './config-loader.js';
 
 function cors(res: ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -172,6 +173,8 @@ interface WorkerTokenAcc {
 export class HttpServer {
   private store = new SessionStore();
   private tokenAcc = new Map<string, WorkerTokenAcc>();
+  /** 每个 Worker 共享同一 AgentEngine 实例，跨会话保持记忆 */
+  private workerAgents = new Map<string, AgentInterface>();
 
   constructor(
     private config: BccConfig,
@@ -199,6 +202,13 @@ export class HttpServer {
     const method = req.method ?? 'GET';
     const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
     const path = url.pathname;
+
+    // 请求日志
+    const start = Date.now();
+    res.on('finish', () => {
+      const ms = Date.now() - start;
+      console.log(`  ${method} ${path} → ${res.statusCode} (${ms}ms)`);
+    });
 
     // CORS 预检
     if (method === 'OPTIONS') {
@@ -404,7 +414,7 @@ export class HttpServer {
     }
 
     try {
-      const agent = await this.buildAgentForWorker(workerCfg);
+      const agent = await this.getAgentForWorker(workerCfg);
       const entry = this.store.create(workerId, agent);
       json(res, 201, this.store.toApiSession(entry));
     } catch (err) {
@@ -627,8 +637,8 @@ export class HttpServer {
     }
 
     try {
-      const fromAgent = await this.buildAgentForWorker(fromCfg);
-      const toAgent   = await this.buildAgentForWorker(toCfg);
+      const fromAgent = await this.getAgentForWorker(fromCfg);
+      const toAgent   = await this.getAgentForWorker(toCfg);
       const entry = this.store.createDm(fromWorkerId, toWorkerId, fromAgent, toAgent);
       json(res, 201, this.store.toApiSession(entry));
     } catch (err) {
@@ -868,6 +878,9 @@ export class HttpServer {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
     }
 
+    // Worker 配置已变更，清除缓存的 Agent（下次请求会以新配置重建）
+    this.evictAgent(workerId);
+
     const apiWorker: ApiWorker = {
       id:          updated.id,
       name:        updated.name,
@@ -902,14 +915,25 @@ export class HttpServer {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
     }
 
+    // 清除已缓存的 Agent
+    this.evictAgent(workerId);
+
     cors(res);
     res.writeHead(204);
     res.end();
   }
 
-  // ── 构建 Worker 专属的 AgentEngine（每个 HTTP 会话独立实例）────────────────
+  // ── 构建（或复用）Worker 专属的 AgentEngine ───────────────────────────────
+  //
+  // 每个 Worker 在服务运行期间共享同一 AgentEngine 实例，实现跨会话记忆：
+  //   - 普通对话（用户↔Worker）与 DM 对话（Worker↔Worker）使用同一 Agent
+  //   - Worker 能感知并记住在不同会话中发生的交互（包括 DM 收到的消息）
+  //   - 当 Worker 配置更新时调用 evictAgent() 清除缓存，下次请求重建
 
-  private async buildAgentForWorker(workerCfg: WorkerConfig) {
+  private async getAgentForWorker(workerCfg: WorkerConfig): Promise<AgentInterface> {
+    const cached = this.workerAgents.get(workerCfg.id);
+    if (cached) return cached;
+
     const modelInstance = this.config.models.find(m => m.id === workerCfg.modelId)
       ?? this.config.models.find(m => m.primary)
       ?? this.config.models[0];
@@ -929,7 +953,6 @@ export class HttpServer {
     const engine = await AgentEngine.create({
       model:  adapter,
       system,
-      // 每个 HTTP 会话不共享持久化（会话间隔离）
     });
 
     for (const toolId of workerCfg.tools ?? []) {
@@ -937,6 +960,12 @@ export class HttpServer {
       if (tool) engine.registerTool(tool);
     }
 
+    this.workerAgents.set(workerCfg.id, engine);
     return engine;
+  }
+
+  /** Worker 配置变更时调用，使其下次请求重新初始化 Agent */
+  private evictAgent(workerId: string) {
+    this.workerAgents.delete(workerId);
   }
 }
