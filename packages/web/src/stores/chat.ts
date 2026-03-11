@@ -13,6 +13,7 @@ export interface ChatSession {
   title: string;
   createdAt: number;
   updatedAt: number;
+  messageCount: number;   // 来自后端，用于判断会话是否有消息（未加载时）
   messages: ApiMessage[];
 }
 
@@ -24,6 +25,7 @@ export const useChatStore = defineStore('chat', () => {
   const activeSessionId = ref<string | null>(null);
   const isThinking = ref(false);
   const loading = ref(false);
+  const sessionsLoaded = ref(false);  // 是否已完成初始加载
 
   // ─── Async chats（CLI Worker 间异步消息，来自 send_message 工具）───────────
   const asyncChats = ref<ApiAsyncChat[]>([]);
@@ -36,27 +38,37 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value.find(s => s.id === activeSessionId.value) ?? null
   );
 
-  /** 用户↔Worker 会话列表（按 worker 分组，供联系人栏展示） */
+  /**
+   * 会话联系人列表（仅显示有聊天记录的 Worker）
+   * 参考微信/飞书风格：只有实际发生过对话才会出现在列表中
+   */
   const contactList = computed(() => {
     const workersStore = useWorkersStore();
-    return workersStore.workers.map(worker => {
-      const workerSessions = sessions.value
-        .filter(s => s.type === 'chat' && s.workerId === worker.id)
-        .sort((a, b) => b.updatedAt - a.updatedAt);
-      const latest = workerSessions[0];
-      const lastMsg = latest?.messages[latest.messages.length - 1];
-      return {
-        worker,
-        latestSession: latest ?? null,
-        lastMessage: lastMsg?.content.slice(0, 50) ?? '',
-        updatedAt: latest?.updatedAt ?? 0,
-        sessionCount: workerSessions.length,
-      };
-    }).sort((a, b) => {
-      if (a.worker.isPrimary) return -1;
-      if (b.worker.isPrimary) return 1;
-      return b.updatedAt - a.updatedAt;
-    });
+    return workersStore.workers
+      .map(worker => {
+        const workerSessions = sessions.value
+          .filter(s => s.type === 'chat' && s.workerId === worker.id)
+          .sort((a, b) => b.updatedAt - a.updatedAt);
+        const latest = workerSessions[0];
+        const lastMsg = latest?.messages[latest.messages.length - 1];
+        return {
+          worker,
+          latestSession: latest ?? null,
+          lastMessage: lastMsg?.content.slice(0, 50) ?? '',
+          updatedAt: latest?.updatedAt ?? 0,
+          sessionCount: workerSessions.length,
+        };
+      })
+      // 只显示有实际会话记录的 Worker（messages 已加载 或 messageCount > 0）
+      .filter(item =>
+        item.latestSession !== null &&
+        (item.latestSession.messages.length > 0 || item.latestSession.messageCount > 0)
+      )
+      .sort((a, b) => {
+        if (a.worker.isPrimary) return -1;
+        if (b.worker.isPrimary) return 1;
+        return b.updatedAt - a.updatedAt;
+      });
   });
 
   /** Worker↔Worker DM 会话列表（供 DM 区域展示） */
@@ -79,10 +91,68 @@ export const useChatStore = defineStore('chat', () => {
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  function selectWorker(workerId: string) {
+  /**
+   * 从后端加载某会话的消息详情，填充到本地 session
+   */
+  async function loadSessionMessages(sessionId: string): Promise<void> {
+    try {
+      const detail = await sessionsApi.get(sessionId);
+      const session = sessions.value.find(s => s.id === sessionId);
+      if (session) {
+        session.messages = detail.messages;
+        session.messageCount = detail.messages.length;
+        session.updatedAt = detail.updatedAt;
+        if (detail.title && detail.title !== '新会话') {
+          session.title = detail.title;
+        }
+      }
+    } catch {
+      // 加载失败则保留空消息列表
+    }
+  }
+
+  /**
+   * 启动时加载所有 Worker 的历史会话（在当前服务器进程内有效）
+   * 只加载元信息（含 messageCount），不立即加载消息内容（懒加载）
+   */
+  async function fetchAllSessions(): Promise<void> {
+    const workersStore = useWorkersStore();
+    if (workersStore.workers.length === 0) return;
+    loading.value = true;
+    try {
+      const results = await Promise.all(
+        workersStore.workers.map(w =>
+          sessionsApi.listByWorker(w.id).catch(() => [] as ApiSession[])
+        )
+      );
+      for (const apiSessions of results) {
+        for (const apiSession of apiSessions) {
+          if (!sessions.value.find(s => s.id === apiSession.id)) {
+            sessions.value.push(fromApiSession(apiSession));
+          }
+        }
+      }
+    } finally {
+      loading.value = false;
+      sessionsLoaded.value = true;
+    }
+  }
+
+  /**
+   * 选中某个 Worker 并打开其最新会话（如有），懒加载消息
+   * 参考微信风格：每个联系人只有一个对话窗口
+   */
+  async function selectWorker(workerId: string): Promise<void> {
     activeWorkerId.value = workerId;
+    activeAsyncChatId.value = null;  // 清除异步聊天选中状态
     const workerSessions = getWorkerSessions(workerId);
-    activeSessionId.value = workerSessions[0]?.id ?? null;
+    const latestSession = workerSessions[0] ?? null;
+    activeSessionId.value = latestSession?.id ?? null;
+
+    // 懒加载消息：仅在未加载过时从后端获取
+    if (latestSession && latestSession.messages.length === 0 && latestSession.messageCount > 0) {
+      await loadSessionMessages(latestSession.id);
+    }
   }
 
   function selectSession(sessionId: string) {
@@ -161,6 +231,7 @@ export const useChatStore = defineStore('chat', () => {
       timestamp: Date.now(),
     };
     session.messages.push(userMsg);
+    session.messageCount = session.messages.length;
     session.updatedAt = Date.now();
     if (session.messages.length === 1) {
       session.title = content.trim().slice(0, 24);
@@ -192,6 +263,7 @@ export const useChatStore = defineStore('chat', () => {
           },
           onDone: () => {
             session.updatedAt = Date.now();
+            session.messageCount = session.messages.length;
           },
           onError: (message) => {
             if (currentMsg) currentMsg.content = `⚠ 错误：${message}`;
@@ -224,6 +296,7 @@ export const useChatStore = defineStore('chat', () => {
               };
             }
             session.updatedAt = Date.now();
+            session.messageCount = session.messages.length;
           },
           onError: (message) => {
             assistantMsg.content = `⚠ 错误：${message}`;
@@ -238,10 +311,11 @@ export const useChatStore = defineStore('chat', () => {
   function clearSession() {
     if (!activeSession.value) return;
     activeSession.value.messages = [];
+    activeSession.value.messageCount = 0;
   }
 
   function openWorkerChat(workerId: string) {
-    selectWorker(workerId);
+    void selectWorker(workerId);
   }
 
   // ─── 异步聊天操作 ──────────────────────────────────────────────────────────
@@ -269,10 +343,11 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     sessions, activeWorkerId, activeSessionId, activeSession,
-    isThinking, loading, contactList, dmList,
+    isThinking, loading, sessionsLoaded, contactList, dmList,
     asyncChats, asyncChatList, activeAsyncChatId, activeAsyncChatMessages,
     getWorkerSessions, selectWorker, selectSession,
     newSession, newDmSession, deleteSession, sendMessage, clearSession, openWorkerChat,
+    fetchAllSessions, loadSessionMessages,
     fetchAsyncChats, selectAsyncChat,
   };
 });
@@ -281,13 +356,14 @@ export const useChatStore = defineStore('chat', () => {
 
 function fromApiSession(s: ApiSession): ChatSession {
   return {
-    id:          s.id,
-    type:        s.type,
-    workerId:    s.workerId,
-    toWorkerId:  s.toWorkerId,
-    title:       s.title,
-    createdAt:   s.createdAt,
-    updatedAt:   s.updatedAt,
-    messages:    [],
+    id:           s.id,
+    type:         s.type,
+    workerId:     s.workerId,
+    toWorkerId:   s.toWorkerId,
+    title:        s.title,
+    createdAt:    s.createdAt,
+    updatedAt:    s.updatedAt,
+    messageCount: s.messageCount,
+    messages:     [],
   };
 }

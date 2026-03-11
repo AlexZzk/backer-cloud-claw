@@ -1,10 +1,10 @@
 <template>
   <div class="chat-view">
-    <!-- Sub panel: worker contact list -->
+    <!-- Sub panel: conversation list -->
     <div class="sub-panel">
       <div class="sub-header">
         <span class="sub-title">{{ t('nav.chat') }}</span>
-        <a-button type="primary" size="mini" shape="circle" @click="showWorkerPicker = true">
+        <a-button type="primary" size="mini" shape="circle" @click="openNewChatPicker" title="新建对话">
           <template #icon><icon-plus /></template>
         </a-button>
       </div>
@@ -15,7 +15,7 @@
       </div>
 
       <div class="contact-list">
-        <!-- Onboarding hint when no workers -->
+        <!-- No workers configured at all -->
         <div v-if="!workersStore.loading && !hasWorkers" class="contact-empty">
           <div style="font-size: 28px; margin-bottom: 8px;">🤖</div>
           <div style="font-size: 12px; color: var(--text-secondary); text-align: center; line-height: 1.6;">
@@ -26,97 +26,121 @@
           </a-button>
         </div>
 
-        <!-- 与我对话（用户↔Worker） -->
-        <div class="contact-section-title" v-if="hasWorkers">与我对话</div>
+        <!-- Loading state -->
+        <div v-else-if="chatStore.loading && !chatStore.sessionsLoaded" class="contact-empty">
+          <a-spin size="small" />
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">加载中...</div>
+        </div>
+
+        <!-- Has workers, no conversations yet -->
         <div
-          v-for="item in filteredContacts"
-          :key="item.worker.id"
-          class="contact-item"
-          :class="{ active: chatStore.activeSessionId && chatStore.activeWorkerId === item.worker.id && activeSessionType === 'chat' }"
-          @click="chatStore.selectWorker(item.worker.id)"
+          v-else-if="hasWorkers && chatStore.sessionsLoaded && filteredContacts.length === 0 && chatStore.dmList.length === 0 && chatStore.asyncChatList.length === 0"
+          class="contact-empty"
         >
-          <div class="contact-avatar" :class="{ secretary: item.worker.isPrimary }">
-            🤖
-            <span class="status-dot" :class="item.worker.status"></span>
-          </div>
-          <div class="contact-info">
-            <div class="contact-name-row">
-              <span class="contact-name">{{ item.worker.name }}</span>
-              <span v-if="item.worker.isPrimary" class="secretary-badge">主要</span>
-              <span class="contact-time">{{ item.updatedAt ? formatTime(item.updatedAt) : '' }}</span>
-            </div>
-            <div class="contact-last">
-              {{ item.lastMessage || t('chat.startChat') }}
-            </div>
+          <div style="font-size: 28px; margin-bottom: 8px;">💬</div>
+          <div style="font-size: 12px; color: var(--text-secondary); text-align: center; line-height: 1.6;">
+            暂无对话记录<br>点击右上角 <strong>+</strong> 开始对话
           </div>
         </div>
+
+        <!-- 与我对话（用户↔Worker），仅显示有聊天记录的 Worker -->
+        <template v-if="filteredContacts.length > 0">
+          <div class="contact-section-title">与我对话</div>
+          <div
+            v-for="item in filteredContacts"
+            :key="item.worker.id"
+            class="contact-item"
+            :class="{ active: chatStore.activeSessionId && chatStore.activeWorkerId === item.worker.id && activeSessionType === 'chat' }"
+            @click="handleSelectWorker(item.worker.id)"
+          >
+            <div class="contact-avatar" :class="{ secretary: item.worker.isPrimary }">
+              🤖
+              <span class="status-dot" :class="item.worker.status"></span>
+            </div>
+            <div class="contact-info">
+              <div class="contact-name-row">
+                <span class="contact-name">{{ item.worker.name }}</span>
+                <span v-if="item.worker.isPrimary" class="secretary-badge">主要</span>
+                <span class="contact-time">{{ item.updatedAt ? formatTime(item.updatedAt) : '' }}</span>
+              </div>
+              <div class="contact-last">
+                {{ item.lastMessage || t('chat.startChat') }}
+              </div>
+            </div>
+          </div>
+        </template>
 
         <!-- 员工间对话（Worker↔Worker DM + 异步聊天） -->
-        <div class="contact-section-title dm-section" v-if="hasWorkers">
-          员工间对话
-          <a-button
-            size="mini"
-            type="text"
-            shape="circle"
-            title="发起员工间对话"
-            @click.stop="showDmPicker = true"
+        <template v-if="hasWorkers && (chatStore.dmList.length > 0 || chatStore.asyncChatList.length > 0)">
+          <div class="contact-section-title dm-section">
+            员工间对话
+            <a-button
+              size="mini"
+              type="text"
+              shape="circle"
+              title="发起员工间对话"
+              @click.stop="showDmPicker = true"
+            >
+              <template #icon><icon-plus /></template>
+            </a-button>
+          </div>
+
+          <!-- DM 会话（Web 发起的同步对话） -->
+          <div
+            v-for="dm in chatStore.dmList"
+            :key="dm.id"
+            class="contact-item dm-item"
+            :class="{ active: chatStore.activeSessionId === dm.id }"
+            @click="openDmSession(dm.id)"
           >
-            <template #icon><icon-plus /></template>
-          </a-button>
-        </div>
+            <div class="dm-avatars">
+              <span class="dm-av">🤖</span>
+              <span class="dm-av">🤖</span>
+            </div>
+            <div class="contact-info">
+              <div class="contact-name-row">
+                <span class="contact-name">{{ getDmTitle(dm) }}</span>
+                <span class="contact-time">{{ dm.updatedAt ? formatTime(dm.updatedAt) : '' }}</span>
+              </div>
+              <div class="contact-last">
+                {{ getDmLastMessage(dm) }}
+              </div>
+            </div>
+          </div>
 
-        <!-- DM 会话（Web 发起的同步对话） -->
-        <div
-          v-for="dm in chatStore.dmList"
-          :key="dm.id"
-          class="contact-item dm-item"
-          :class="{ active: chatStore.activeSessionId === dm.id }"
-          @click="openDmSession(dm.id)"
-        >
-          <div class="dm-avatars">
-            <span class="dm-av">🤖</span>
-            <span class="dm-av">🤖</span>
-          </div>
-          <div class="contact-info">
-            <div class="contact-name-row">
-              <span class="contact-name">{{ getDmTitle(dm) }}</span>
-              <span class="contact-time">{{ dm.updatedAt ? formatTime(dm.updatedAt) : '' }}</span>
+          <!-- 异步聊天（CLI Worker 通过 send_message 工具发起） -->
+          <div
+            v-for="chat in chatStore.asyncChatList"
+            :key="chat.id"
+            class="contact-item dm-item"
+            :class="{ active: chatStore.activeAsyncChatId === chat.id }"
+            @click="openAsyncChat(chat.id)"
+          >
+            <div class="dm-avatars">
+              <span class="dm-av" :style="chat.type === 'group' ? 'font-size:11px' : ''">
+                {{ chat.type === 'group' ? '👥' : '🤖' }}
+              </span>
+              <span class="dm-av">🤖</span>
             </div>
-            <div class="contact-last">
-              {{ getDmLastMessage(dm) }}
+            <div class="contact-info">
+              <div class="contact-name-row">
+                <span class="contact-name">{{ getAsyncChatTitle(chat) }}</span>
+                <a-tag size="small" :color="chat.type === 'group' ? 'orange' : 'purple'" style="font-size: 10px; margin-left: 2px;">
+                  {{ chat.type === 'group' ? '群聊' : '异步' }}
+                </a-tag>
+                <span class="contact-time">{{ chat.updatedAt ? formatTime(chat.updatedAt) : '' }}</span>
+              </div>
+              <div class="contact-last">
+                {{ chat.lastMessage ? chat.lastMessage.content.slice(0, 40) : '暂无消息' }}
+              </div>
             </div>
           </div>
-        </div>
+        </template>
 
-        <!-- 异步聊天（CLI Worker 通过 send_message 工具发起） -->
-        <div
-          v-for="chat in chatStore.asyncChatList"
-          :key="chat.id"
-          class="contact-item dm-item"
-          :class="{ active: chatStore.activeAsyncChatId === chat.id }"
-          @click="openAsyncChat(chat.id)"
-        >
-          <div class="dm-avatars">
-            <span class="dm-av">🤖</span>
-            <span class="dm-av">🤖</span>
-          </div>
-          <div class="contact-info">
-            <div class="contact-name-row">
-              <span class="contact-name">{{ getAsyncChatTitle(chat) }}</span>
-              <a-tag size="small" color="purple" style="font-size: 10px; margin-left: 2px;">异步</a-tag>
-              <span class="contact-time">{{ chat.updatedAt ? formatTime(chat.updatedAt) : '' }}</span>
-            </div>
-            <div class="contact-last">
-              {{ chat.lastMessage ? chat.lastMessage.content.slice(0, 40) : '暂无消息' }}
-            </div>
-          </div>
-        </div>
-
-        <div
-          v-if="hasWorkers && chatStore.dmList.length === 0 && chatStore.asyncChatList.length === 0 && !workersStore.loading"
-          class="dm-empty-hint"
-        >
-          <span>暂无员工间对话，点击 + 发起同步对话</span>
+        <!-- DM section add button when no DMs yet -->
+        <div v-if="hasWorkers && chatStore.sessionsLoaded && chatStore.dmList.length === 0 && chatStore.asyncChatList.length === 0 && filteredContacts.length > 0" class="dm-empty-hint">
+          <span>员工间对话：</span>
+          <a-button size="mini" type="text" @click.stop="showDmPicker = true">发起 +</a-button>
         </div>
       </div>
     </div>
@@ -129,15 +153,17 @@
         <div class="chat-header">
           <div class="chat-header-left">
             <div class="dm-header-avatars">
-              <span class="worker-avatar-lg">🤖</span>
+              <span class="worker-avatar-lg">{{ activeAsyncChat.type === 'group' ? '👥' : '🤖' }}</span>
               <span class="worker-avatar-lg dm-avatar-2">🤖</span>
             </div>
             <div>
               <div class="worker-name-row">
                 <span class="worker-name">{{ getAsyncChatTitle(activeAsyncChat) }}</span>
-                <a-tag color="purple" size="small">异步对话</a-tag>
+                <a-tag :color="activeAsyncChat.type === 'group' ? 'orange' : 'purple'" size="small">
+                  {{ activeAsyncChat.type === 'group' ? '群聊' : '异步对话' }}
+                </a-tag>
               </div>
-              <div class="worker-model">{{ activeAsyncChat.participants.join(' ↔ ') }}</div>
+              <div class="worker-model">{{ activeAsyncChat.participants.map(id => getWorkerName(id)).join(' · ') }}</div>
             </div>
           </div>
           <div class="chat-header-right">
@@ -156,6 +182,11 @@
             <p>暂无消息记录</p>
           </div>
           <template v-else>
+            <!-- Group chat intro hint -->
+            <div v-if="activeAsyncChat.type === 'group'" class="group-chat-notice">
+              <icon-info-circle style="margin-right: 6px;" />
+              这是一个由 AI Worker 发起的群聊，用于协作传递信息。@提及表示定向传达。
+            </div>
             <div
               v-for="msg in chatStore.activeAsyncChatMessages"
               :key="msg.id"
@@ -164,7 +195,7 @@
               <div class="msg-avatar" :title="getWorkerName(msg.from)">🤖</div>
               <div class="message-bubble assistant">
                 <div class="dm-speaker-label">{{ getWorkerName(msg.from) }}</div>
-                <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
+                <div class="message-content" v-html="renderMarkdownWithMentions(msg.content)"></div>
                 <div class="message-footer">
                   <span class="token-info" style="opacity: 0.5;">{{ formatTime(msg.timestamp) }}</span>
                 </div>
@@ -175,7 +206,7 @@
 
         <div class="async-chat-notice">
           <icon-info-circle style="margin-right: 4px;" />
-          此为员工间异步对话（只读监控视图），消息由 AI Worker 自主发送
+          此为员工间{{ activeAsyncChat.type === 'group' ? '群聊' : '异步对话' }}（只读监控视图），消息由 AI Worker 自主发送
         </div>
       </template>
 
@@ -214,10 +245,6 @@
             </template>
           </div>
           <div class="chat-header-right">
-            <a-button v-if="activeSessionType === 'chat'" type="primary" size="small" @click="handleNewSession">
-              <template #icon><icon-plus /></template>
-              {{ t('chat.newSession') }}
-            </a-button>
             <a-tooltip :content="t('chat.clearHistory')">
               <a-button type="text" @click="chatStore.clearSession()">
                 <template #icon><icon-delete /></template>
@@ -231,30 +258,9 @@
           </div>
         </div>
 
-        <!-- Session tabs (shown for chat sessions with multiple tabs) -->
-        <div class="session-tabs" v-if="activeSessionType === 'chat' && workerSessions.length > 0">
-          <div class="sessions-scroll">
-            <div
-              v-for="sess in workerSessions"
-              :key="sess.id"
-              class="session-tab"
-              :class="{ active: chatStore.activeSessionId === sess.id }"
-              @click="chatStore.selectSession(sess.id)"
-            >
-              <span class="sess-title">{{ sess.title }}</span>
-              <span class="sess-time">{{ formatTime(sess.updatedAt) }}</span>
-              <span
-                class="sess-close"
-                @click.stop="chatStore.deleteSession(sess.id)"
-                v-if="workerSessions.length > 1"
-              >×</span>
-            </div>
-          </div>
-        </div>
-
         <!-- Messages -->
         <div class="messages-area" ref="messagesArea">
-          <!-- Empty state -->
+          <!-- Empty state: no messages yet -->
           <div v-if="!chatStore.activeSession || chatStore.activeSession.messages.length === 0" class="chat-empty">
             <div class="empty-avatar">🤖</div>
             <h3>{{ activeWorker.name }}</h3>
@@ -285,7 +291,7 @@
                 <div v-if="activeSessionType === 'dm' && msg.role === 'assistant' && msg.speakerId" class="dm-speaker-label">
                   {{ getDmSpeakerName(msg.speakerId) }}
                 </div>
-                <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
+                <div class="message-content" v-html="renderMarkdownWithMentions(msg.content)"></div>
                 <div class="message-footer" v-if="msg.tokenUsage">
                   <span class="token-info">
                     ↑{{ msg.tokenUsage.inputTokens }} ↓{{ msg.tokenUsage.outputTokens }} tokens
@@ -336,23 +342,28 @@
         </div>
       </template>
 
-      <!-- No worker selected -->
+      <!-- No worker selected / Welcome screen -->
       <div v-else class="no-conv">
         <template v-if="hasWorkers">
           <div class="no-conv-icon">💬</div>
           <h2>{{ t('chat.noConversations') }}</h2>
-          <p>{{ t('chat.startChat') }}</p>
-          <a-button
-            v-if="primaryWorker"
-            type="primary"
-            size="large"
-            @click="chatStore.selectWorker(primaryWorker.id)"
-          >
-            与「{{ primaryWorker.name }}」开始对话
-          </a-button>
-          <a-button v-else type="primary" size="large" @click="showWorkerPicker = true">
-            {{ t('chat.selectWorker') }}
-          </a-button>
+          <p>选择一个对话，或点击 + 开始新对话</p>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 4px;">
+            <a-button
+              v-if="primaryWorker"
+              type="primary"
+              size="large"
+              @click="openNewChatPicker"
+            >
+              开始新对话
+            </a-button>
+            <a-button v-else type="primary" size="large" @click="openNewChatPicker">
+              {{ t('chat.selectWorker') }}
+            </a-button>
+            <a-button size="large" @click="showDmPicker = true">
+              发起员工间对话
+            </a-button>
+          </div>
         </template>
 
         <!-- Onboarding: no workers configured yet -->
@@ -395,6 +406,56 @@
       </div>
     </div>
 
+    <!-- New Chat Picker Modal: select worker(s) to start conversation -->
+    <a-modal
+      v-model:visible="showWorkerPicker"
+      title="开始新对话"
+      :footer="false"
+      width="520px"
+    >
+      <div style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);">
+        选择一个员工开始单独对话，或选择多个员工创建群聊
+      </div>
+      <div class="worker-picker">
+        <div
+          v-for="worker in allWorkers"
+          :key="worker.id"
+          class="worker-pick-item"
+          :class="{ selected: pickerSelectedIds.includes(worker.id) }"
+          @click="togglePickerWorker(worker.id)"
+        >
+          <span class="pick-avatar">🤖</span>
+          <div class="pick-info">
+            <div class="pick-name">
+              {{ worker.name }}
+              <a-tag v-if="worker.isPrimary" color="arcoblue" size="small">默认助理</a-tag>
+            </div>
+            <div class="pick-desc">{{ worker.description }}</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <a-tag :color="statusColor(worker.status)" size="small">
+              {{ t(`workers.${worker.status}`) }}
+            </a-tag>
+            <a-checkbox :model-value="pickerSelectedIds.includes(worker.id)" @click.stop />
+          </div>
+        </div>
+      </div>
+
+      <!-- Action footer -->
+      <div v-if="pickerSelectedIds.length > 0" class="picker-footer">
+        <template v-if="pickerSelectedIds.length === 1">
+          <span class="picker-hint">与「{{ allWorkers.find(w => w.id === pickerSelectedIds[0])?.name }}」开始对话</span>
+          <a-button type="primary" @click="confirmNewChat">开始对话</a-button>
+        </template>
+        <template v-else>
+          <span class="picker-hint">已选 {{ pickerSelectedIds.length }} 人 · 将创建群聊</span>
+          <a-button type="primary" @click="confirmGroupChat">
+            创建群聊
+          </a-button>
+        </template>
+      </div>
+    </a-modal>
+
     <!-- DM picker modal (for starting worker↔worker DM) -->
     <a-modal
       v-model:visible="showDmPicker"
@@ -424,35 +485,6 @@
         </div>
       </div>
     </a-modal>
-
-    <!-- Worker picker modal (for starting new worker chat) -->
-    <a-modal
-      v-model:visible="showWorkerPicker"
-      :title="t('chat.selectWorker')"
-      :footer="false"
-      width="480px"
-    >
-      <div class="worker-picker">
-        <div
-          v-for="worker in allWorkers"
-          :key="worker.id"
-          class="worker-pick-item"
-          @click="startNewWorkerChat(worker.id)"
-        >
-          <span class="pick-avatar">🤖</span>
-          <div class="pick-info">
-            <div class="pick-name">
-              {{ worker.name }}
-              <a-tag v-if="worker.isPrimary" color="arcoblue" size="small">默认助理</a-tag>
-            </div>
-            <div class="pick-desc">{{ worker.description }}</div>
-          </div>
-          <a-tag :color="statusColor(worker.status)" size="small">
-            {{ t(`workers.${worker.status}`) }}
-          </a-tag>
-        </div>
-      </div>
-    </a-modal>
   </div>
 </template>
 
@@ -464,6 +496,7 @@ import { useChatStore, type ChatSession, type ApiAsyncChat } from '@/stores/chat
 import { useAuthStore } from '@/stores/auth';
 import { useWorkersStore } from '@/stores/workers';
 import { useModelsStore } from '@/stores/models';
+import { Message } from '@arco-design/web-vue';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -477,6 +510,9 @@ const searchText = ref('');
 const showWorkerPicker = ref(false);
 const inputFocused = ref(false);
 const messagesArea = ref<HTMLElement>();
+
+// New chat picker state (multi-select)
+const pickerSelectedIds = ref<string[]>([]);
 
 const showDmPicker = ref(false);
 const dmFromWorkerId = ref('');
@@ -511,12 +547,6 @@ const activeDmToWorker = computed(() => {
     : null;
 });
 
-const workerSessions = computed(() =>
-  chatStore.activeWorkerId
-    ? chatStore.getWorkerSessions(chatStore.activeWorkerId)
-    : []
-);
-
 const filteredContacts = computed(() => {
   if (!searchText.value) return chatStore.contactList;
   const s = searchText.value.toLowerCase();
@@ -542,7 +572,6 @@ function getSuggestions(workerId: string): string[] {
   const worker = workersStore.getWorker(workerId);
   const role = (worker?.role ?? '').toLowerCase();
   const name = (worker?.name ?? '').toLowerCase();
-  // 根据 role/name 的关键词推断建议词
   if (role.includes('代码') || role.includes('程序') || name.includes('coder') || name.includes('code')) {
     return ['帮我优化这段代码', '解释这个错误信息', '写一个工具函数'];
   }
@@ -558,8 +587,11 @@ function getSuggestions(workerId: string): string[] {
   return ['你好，有什么可以帮你？', '介绍一下你自己', '我们开始工作吧'];
 }
 
-function renderMarkdown(text: string): string {
-  return text
+/**
+ * 渲染 Markdown 并高亮 @mention（@workerName 或 @workerId）
+ */
+function renderMarkdownWithMentions(text: string): string {
+  const rendered = text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -571,6 +603,16 @@ function renderMarkdown(text: string): string {
     .replace(/^- (.+)$/gm, '<li>$1</li>')
     .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
     .replace(/\n/g, '<br>');
+
+  // 高亮 @mention：匹配 @word 或 @word-word
+  return rendered.replace(/@([\w\u4e00-\u9fa5][\w\u4e00-\u9fa5-]*)/g, (match, name) => {
+    // 尝试通过 id 或名称找到对应 worker，显示真实名称
+    const worker = workersStore.workers.find(
+      w => w.id === name || w.name === name
+    );
+    const displayName = worker ? worker.name : name;
+    return `<span class="mention">@${displayName}</span>`;
+  });
 }
 
 async function handleSend() {
@@ -584,11 +626,6 @@ async function handleSend() {
   await chatStore.sendMessage(text);
   await nextTick();
   scrollToBottom();
-}
-
-async function handleNewSession() {
-  if (!chatStore.activeWorkerId) return;
-  await chatStore.newSession(chatStore.activeWorkerId);
 }
 
 function scrollToBottom() {
@@ -612,9 +649,41 @@ function handleExport() {
   a.click();
 }
 
-function startNewWorkerChat(workerId: string) {
-  chatStore.selectWorker(workerId);
+// ─── New chat picker ─────────────────────────────────────────────────────────
+
+function openNewChatPicker() {
+  pickerSelectedIds.value = [];
+  showWorkerPicker.value = true;
+}
+
+function togglePickerWorker(workerId: string) {
+  const idx = pickerSelectedIds.value.indexOf(workerId);
+  if (idx >= 0) {
+    pickerSelectedIds.value.splice(idx, 1);
+  } else {
+    pickerSelectedIds.value.push(workerId);
+  }
+}
+
+async function confirmNewChat() {
+  if (pickerSelectedIds.value.length !== 1) return;
+  const workerId = pickerSelectedIds.value[0]!;
   showWorkerPicker.value = false;
+  pickerSelectedIds.value = [];
+  await chatStore.selectWorker(workerId);
+}
+
+async function confirmGroupChat() {
+  if (pickerSelectedIds.value.length < 2) return;
+  showWorkerPicker.value = false;
+  // 群聊：使用 DM 发起第一对 Worker 间对话，多 Worker 群聊功能待扩展
+  // TODO: 当后端支持多人群聊会话后，在此创建 group session
+  Message.info('多人群聊功能即将支持，当前可通过「员工间对话」发起 Worker 间 DM');
+  pickerSelectedIds.value = [];
+}
+
+async function handleSelectWorker(workerId: string) {
+  await chatStore.selectWorker(workerId);
 }
 
 function openDmSession(id: string) {
@@ -656,9 +725,10 @@ function openAsyncChat(chatId: string) {
 }
 
 function getAsyncChatTitle(chat: ApiAsyncChat): string {
+  if (chat.title) return chat.title;
   return chat.participants
     .map(id => workersStore.getWorker(id)?.name ?? id)
-    .join(' ↔ ');
+    .join(' · ');
 }
 
 function getWorkerName(id: string): string {
@@ -670,8 +740,16 @@ watch(() => chatStore.activeSession?.messages.length, async () => {
   scrollToBottom();
 });
 
-onMounted(() => {
-  void chatStore.fetchAsyncChats();
+onMounted(async () => {
+  // 加载 Workers（如果尚未加载）
+  if (workersStore.workers.length === 0) {
+    await workersStore.fetchWorkers();
+  }
+  // 并行加载：历史会话列表 + 异步聊天列表
+  await Promise.all([
+    chatStore.fetchAllSessions(),
+    chatStore.fetchAsyncChats(),
+  ]);
 });
 </script>
 
@@ -871,57 +949,6 @@ onMounted(() => {
   gap: 6px;
 }
 
-/* ─── Session Tabs ───────────────────────────────────────────────────── */
-
-.session-tabs {
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-subpanel);
-  flex-shrink: 0;
-}
-
-.sessions-scroll {
-  display: flex;
-  overflow-x: auto;
-  padding: 6px 16px;
-  gap: 6px;
-}
-
-.sessions-scroll::-webkit-scrollbar { height: 3px; }
-
-.session-tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  cursor: pointer;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--bg-card);
-  transition: all 0.15s;
-  flex-shrink: 0;
-}
-
-.session-tab:hover { border-color: #165dff; color: var(--text-primary); }
-.session-tab.active {
-  border-color: #165dff;
-  background: rgba(22, 93, 255, 0.06);
-  color: #165dff;
-  font-weight: 500;
-}
-
-.sess-title { max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
-.sess-time { font-size: 11px; opacity: 0.6; }
-.sess-close {
-  font-size: 14px;
-  opacity: 0.5;
-  margin-left: 2px;
-  line-height: 1;
-}
-.sess-close:hover { opacity: 1; color: #f53f3f; }
-
 /* ─── Messages ───────────────────────────────────────────────────────── */
 
 .messages-area {
@@ -1004,6 +1031,32 @@ onMounted(() => {
 @keyframes bounce {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30% { transform: translateY(-6px); opacity: 1; }
+}
+
+/* ─── @Mention ───────────────────────────────────────────────────────── */
+
+:deep(.mention) {
+  display: inline-block;
+  background: rgba(22, 93, 255, 0.12);
+  color: #165dff;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-weight: 500;
+  font-size: 0.92em;
+}
+
+/* ─── Group Chat Notice ──────────────────────────────────────────────── */
+
+.group-chat-notice {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  background: rgba(255, 125, 0, 0.06);
+  border: 1px solid rgba(255, 125, 0, 0.2);
+  border-radius: 8px;
+  font-size: 12px;
+  color: #ff7d00;
+  margin-bottom: 8px;
 }
 
 /* ─── Empty State ────────────────────────────────────────────────────── */
@@ -1168,28 +1221,35 @@ onMounted(() => {
   padding: 32px 16px;
 }
 
-/* ─── Worker Picker ──────────────────────────────────────────────────── */
+/* ─── Worker Picker (multi-select) ───────────────────────────────────── */
 
 .worker-picker {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
 }
 
 .worker-pick-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border-radius: 12px;
   cursor: pointer;
-  border: 1px solid var(--border-color);
+  border: 1.5px solid var(--border-color);
   transition: all 0.15s;
 }
 
 .worker-pick-item:hover {
   border-color: #165dff;
   background: rgba(22, 93, 255, 0.04);
+}
+
+.worker-pick-item.selected {
+  border-color: #165dff;
+  background: rgba(22, 93, 255, 0.06);
 }
 
 .pick-avatar { font-size: 28px; }
@@ -1206,6 +1266,20 @@ onMounted(() => {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 2px;
+}
+
+.picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.picker-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 /* ─── Contact Section Title ──────────────────────────────────────────── */
@@ -1252,10 +1326,12 @@ onMounted(() => {
 .dm-av:last-child  { bottom: 0; right: 0; }
 
 .dm-empty-hint {
-  padding: 10px 10px;
+  padding: 8px 10px;
   font-size: 12px;
   color: var(--text-tertiary);
-  text-align: center;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* ─── DM Header ──────────────────────────────────────────────────────── */
