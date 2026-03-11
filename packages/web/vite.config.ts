@@ -16,10 +16,9 @@ export default defineConfig(({ mode }) => {
       host: true,
       proxy: {
         // 开发时将 /api 请求转发到 bcc-server（pnpm bcc-server）
-        '/bcc_server': {
+        '/api': {
           target: env.VITE_BASE_API_PROXY,
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/bcc_server/, ''),
           configure: (proxy) => {
             proxy.on('proxyReq', (proxyReq, req) => {
               console.log('代理转发:', req.url, '->', proxyReq.getHeader('host'))

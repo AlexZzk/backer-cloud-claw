@@ -51,7 +51,7 @@
           </div>
         </div>
 
-        <!-- 员工间对话（Worker↔Worker DM） -->
+        <!-- 员工间对话（Worker↔Worker DM + 异步聊天） -->
         <div class="contact-section-title dm-section" v-if="hasWorkers">
           员工间对话
           <a-button
@@ -64,6 +64,8 @@
             <template #icon><icon-plus /></template>
           </a-button>
         </div>
+
+        <!-- DM 会话（Web 发起的同步对话） -->
         <div
           v-for="dm in chatStore.dmList"
           :key="dm.id"
@@ -85,18 +87,99 @@
             </div>
           </div>
         </div>
+
+        <!-- 异步聊天（CLI Worker 通过 send_message 工具发起） -->
         <div
-          v-if="hasWorkers && chatStore.dmList.length === 0 && !workersStore.loading"
+          v-for="chat in chatStore.asyncChatList"
+          :key="chat.id"
+          class="contact-item dm-item"
+          :class="{ active: chatStore.activeAsyncChatId === chat.id }"
+          @click="openAsyncChat(chat.id)"
+        >
+          <div class="dm-avatars">
+            <span class="dm-av">🤖</span>
+            <span class="dm-av">🤖</span>
+          </div>
+          <div class="contact-info">
+            <div class="contact-name-row">
+              <span class="contact-name">{{ getAsyncChatTitle(chat) }}</span>
+              <a-tag size="small" color="purple" style="font-size: 10px; margin-left: 2px;">异步</a-tag>
+              <span class="contact-time">{{ chat.updatedAt ? formatTime(chat.updatedAt) : '' }}</span>
+            </div>
+            <div class="contact-last">
+              {{ chat.lastMessage ? chat.lastMessage.content.slice(0, 40) : '暂无消息' }}
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="hasWorkers && chatStore.dmList.length === 0 && chatStore.asyncChatList.length === 0 && !workersStore.loading"
           class="dm-empty-hint"
         >
-          <span>点击 + 发起员工间对话</span>
+          <span>暂无员工间对话，点击 + 发起同步对话</span>
         </div>
       </div>
     </div>
 
     <!-- Chat main -->
     <div class="chat-main">
-      <template v-if="chatStore.activeWorkerId && activeWorker">
+
+      <!-- 异步聊天监控面板 -->
+      <template v-if="chatStore.activeAsyncChatId && activeAsyncChat">
+        <div class="chat-header">
+          <div class="chat-header-left">
+            <div class="dm-header-avatars">
+              <span class="worker-avatar-lg">🤖</span>
+              <span class="worker-avatar-lg dm-avatar-2">🤖</span>
+            </div>
+            <div>
+              <div class="worker-name-row">
+                <span class="worker-name">{{ getAsyncChatTitle(activeAsyncChat) }}</span>
+                <a-tag color="purple" size="small">异步对话</a-tag>
+              </div>
+              <div class="worker-model">{{ activeAsyncChat.participants.join(' ↔ ') }}</div>
+            </div>
+          </div>
+          <div class="chat-header-right">
+            <a-tooltip content="刷新消息">
+              <a-button type="text" @click="chatStore.selectAsyncChat(activeAsyncChat.id)">
+                <template #icon><icon-refresh /></template>
+              </a-button>
+            </a-tooltip>
+          </div>
+        </div>
+
+        <div class="messages-area" ref="messagesArea">
+          <div v-if="chatStore.activeAsyncChatMessages.length === 0" class="chat-empty">
+            <div class="empty-avatar">💬</div>
+            <h3>{{ getAsyncChatTitle(activeAsyncChat) }}</h3>
+            <p>暂无消息记录</p>
+          </div>
+          <template v-else>
+            <div
+              v-for="msg in chatStore.activeAsyncChatMessages"
+              :key="msg.id"
+              class="message-wrapper assistant"
+            >
+              <div class="msg-avatar" :title="getWorkerName(msg.from)">🤖</div>
+              <div class="message-bubble assistant">
+                <div class="dm-speaker-label">{{ getWorkerName(msg.from) }}</div>
+                <div class="message-content" v-html="renderMarkdown(msg.content)"></div>
+                <div class="message-footer">
+                  <span class="token-info" style="opacity: 0.5;">{{ formatTime(msg.timestamp) }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="async-chat-notice">
+          <icon-info-circle style="margin-right: 4px;" />
+          此为员工间异步对话（只读监控视图），消息由 AI Worker 自主发送
+        </div>
+      </template>
+
+      <template v-else-if="chatStore.activeWorkerId && activeWorker">
         <!-- Header -->
         <div class="chat-header">
           <div class="chat-header-left">
@@ -374,10 +457,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue';
+import { ref, computed, nextTick, watch, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { useChatStore, type ChatSession } from '@/stores/chat';
+import { useChatStore, type ChatSession, type ApiAsyncChat } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
 import { useWorkersStore } from '@/stores/workers';
 import { useModelsStore } from '@/stores/models';
@@ -408,6 +491,12 @@ const primaryWorker = computed(() =>
 );
 
 const activeSessionType = computed(() => chatStore.activeSession?.type ?? 'chat');
+
+const activeAsyncChat = computed(() =>
+  chatStore.activeAsyncChatId
+    ? chatStore.asyncChatList.find(c => c.id === chatStore.activeAsyncChatId) ?? null
+    : null
+);
 
 const activeWorker = computed(() =>
   chatStore.activeWorkerId
@@ -562,9 +651,27 @@ async function createDmSession() {
   }
 }
 
+function openAsyncChat(chatId: string) {
+  void chatStore.selectAsyncChat(chatId);
+}
+
+function getAsyncChatTitle(chat: ApiAsyncChat): string {
+  return chat.participants
+    .map(id => workersStore.getWorker(id)?.name ?? id)
+    .join(' ↔ ');
+}
+
+function getWorkerName(id: string): string {
+  return workersStore.getWorker(id)?.name ?? id;
+}
+
 watch(() => chatStore.activeSession?.messages.length, async () => {
   await nextTick();
   scrollToBottom();
+});
+
+onMounted(() => {
+  void chatStore.fetchAsyncChats();
 });
 </script>
 
@@ -1193,5 +1300,19 @@ watch(() => chatStore.activeSession?.messages.length, async () => {
   font-weight: 500;
   color: var(--text-primary);
   border: 1px solid var(--border-color);
+}
+
+/* ─── Async Chat Notice ──────────────────────────────────────────────── */
+
+.async-chat-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  background: rgba(114, 46, 209, 0.05);
+  border-top: 1px solid rgba(114, 46, 209, 0.15);
+  font-size: 12px;
+  color: #722ed1;
+  flex-shrink: 0;
 }
 </style>

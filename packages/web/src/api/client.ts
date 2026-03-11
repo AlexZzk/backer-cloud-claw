@@ -238,6 +238,40 @@ export const modelsApi = {
       service.delete(`/api/models/${id}`)
 }
 
+// ─── Async Chats API (Worker↔Worker 异步聊天，来自 CLI 的 send_message 工具) ─
+
+export interface ApiAsyncChat {
+  id: string
+  type: 'direct' | 'group'
+  participants: string[]
+  title?: string
+  status: 'active' | 'archived'
+  createdAt: number
+  updatedAt: number
+  lastMessage?: {
+    from: string
+    content: string
+    timestamp: number
+  }
+}
+
+export interface ApiAsyncChatMessage {
+  id: string
+  chatId: string
+  from: string
+  content: string
+  timestamp: number
+  status: 'sent' | 'delivered' | 'read'
+}
+
+export const chatsApi = {
+  list: (participant?: string) =>
+    service.get<ApiAsyncChat[]>('/api/chats' + (participant ? `?participant=${encodeURIComponent(participant)}` : '')),
+
+  getMessages: (chatId: string) =>
+    service.get<ApiAsyncChatMessage[]>(`/api/chats/${chatId}/messages`),
+}
+
 // ─── Analytics API ──────────────────────────────────────────────────────
 
 export const analyticsApi = {

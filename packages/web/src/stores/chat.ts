@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { sessionsApi, dmApi, sendMessageStream, type ApiSession, type ApiMessage, type SessionType } from '@/api/client';
+import { sessionsApi, dmApi, chatsApi, sendMessageStream, type ApiSession, type ApiMessage, type SessionType, type ApiAsyncChat, type ApiAsyncChatMessage } from '@/api/client';
 import { useWorkersStore } from './workers';
 
 export type { ApiMessage as MockMessage };
@@ -16,12 +16,19 @@ export interface ChatSession {
   messages: ApiMessage[];
 }
 
+export type { ApiAsyncChat, ApiAsyncChatMessage };
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([]);
   const activeWorkerId = ref<string | null>(null);
   const activeSessionId = ref<string | null>(null);
   const isThinking = ref(false);
   const loading = ref(false);
+
+  // ─── Async chats（CLI Worker 间异步消息，来自 send_message 工具）───────────
+  const asyncChats = ref<ApiAsyncChat[]>([]);
+  const activeAsyncChatId = ref<string | null>(null);
+  const activeAsyncChatMessages = ref<ApiAsyncChatMessage[]>([]);
 
   // ─── Computed ───────────────────────────────────────────────────────────
 
@@ -57,6 +64,11 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value
       .filter(s => s.type === 'dm')
       .sort((a, b) => b.updatedAt - a.updatedAt)
+  );
+
+  /** 异步聊天列表（按更新时间降序） */
+  const asyncChatList = computed(() =>
+    [...asyncChats.value].sort((a, b) => b.updatedAt - a.updatedAt)
   );
 
   // ─── Actions ────────────────────────────────────────────────────────────
@@ -232,11 +244,36 @@ export const useChatStore = defineStore('chat', () => {
     selectWorker(workerId);
   }
 
+  // ─── 异步聊天操作 ──────────────────────────────────────────────────────────
+
+  async function fetchAsyncChats(): Promise<void> {
+    try {
+      asyncChats.value = await chatsApi.list();
+    } catch {
+      asyncChats.value = [];
+    }
+  }
+
+  async function selectAsyncChat(chatId: string): Promise<void> {
+    // 清除 session 选中状态
+    activeSessionId.value = null;
+    activeWorkerId.value = null;
+    activeAsyncChatId.value = chatId;
+    activeAsyncChatMessages.value = [];
+    try {
+      activeAsyncChatMessages.value = await chatsApi.getMessages(chatId);
+    } catch {
+      activeAsyncChatMessages.value = [];
+    }
+  }
+
   return {
     sessions, activeWorkerId, activeSessionId, activeSession,
     isThinking, loading, contactList, dmList,
+    asyncChats, asyncChatList, activeAsyncChatId, activeAsyncChatMessages,
     getWorkerSessions, selectWorker, selectSession,
     newSession, newDmSession, deleteSession, sendMessage, clearSession, openWorkerChat,
+    fetchAsyncChats, selectAsyncChat,
   };
 });
 

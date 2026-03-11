@@ -52,22 +52,42 @@ function cors(res: ServerResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
-function json(res: ServerResponse, status: number, body: unknown) {
+/** 标准 API 响应信封 */
+interface ApiEnvelope<T = unknown> {
+  code: string;
+  msg: string;
+  data: T;
+}
+
+function ok<T>(res: ServerResponse, data: T, status = 200) {
   cors(res);
   res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
+  const envelope: ApiEnvelope<T> = { code: '', msg: '', data };
+  res.end(JSON.stringify(envelope));
 }
 
 function notFound(res: ServerResponse) {
-  json(res, 404, { error: 'Not found' });
+  cors(res);
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ code: 'NOT_FOUND', msg: '资源不存在', data: null }));
 }
 
 function badRequest(res: ServerResponse, message: string) {
-  json(res, 400, { error: message });
+  cors(res);
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ code: 'BAD_REQUEST', msg: message, data: null }));
 }
 
 function serverError(res: ServerResponse, message: string) {
-  json(res, 500, { error: message });
+  cors(res);
+  res.writeHead(500, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ code: 'SERVER_ERROR', msg: message, data: null }));
+}
+
+function conflict(res: ServerResponse, message: string) {
+  cors(res);
+  res.writeHead(409, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ code: 'CONFLICT', msg: message, data: null }));
 }
 
 async function readBody(req: IncomingMessage): Promise<string> {
@@ -229,7 +249,7 @@ export class HttpServer {
 
     // ── GET /api/health
     if (method === 'GET' && path === '/api/health') {
-      json(res, 200, { status: 'ok', timestamp: Date.now() });
+      ok(res, { status: 'ok', timestamp: Date.now() });
       return;
     }
 
@@ -271,7 +291,7 @@ export class HttpServer {
 
     // ── GET /api/config
     if (method === 'GET' && path === '/api/config') {
-      json(res, 200, {
+      ok(res, {
         models: this.config.models.map(m => ({ ...m, apiKey: m.apiKey ? '***' : '' })),
         workers: this.config.workers ?? [],
         defaults: this.config.defaults,
@@ -420,7 +440,7 @@ export class HttpServer {
       isPrimary:   w.primary ?? false,
       status:      'online' as const,
     }));
-    json(res, 200, workers);
+    ok(res, workers);
   }
 
   private async handleGetModels(res: ServerResponse) {
@@ -433,7 +453,7 @@ export class HttpServer {
       isPrimary:  m.primary  ?? false,
       isFallback: m.fallback ?? false,
     }));
-    json(res, 200, models);
+    ok(res, models);
   }
 
   private handleGetAnalytics(res: ServerResponse) {
@@ -444,7 +464,7 @@ export class HttpServer {
       totalTokens:       byWorker.reduce((s, w) => s + w.totalTokens,  0),
       byWorker,
     };
-    json(res, 200, stats);
+    ok(res, stats);
   }
 
   private async handleCreateSession(req: IncomingMessage, res: ServerResponse, workerId: string) {
@@ -457,7 +477,7 @@ export class HttpServer {
     try {
       const agent = await this.getAgentForWorker(workerCfg);
       const entry = this.store.create(workerId, agent);
-      json(res, 201, this.store.toApiSession(entry));
+      ok(res, this.store.toApiSession(entry), 201);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : String(err));
     }
@@ -465,13 +485,13 @@ export class HttpServer {
 
   private handleListSessions(res: ServerResponse, workerId: string) {
     const sessions = this.store.listByWorker(workerId).map(e => this.store.toApiSession(e));
-    json(res, 200, sessions);
+    ok(res, sessions);
   }
 
   private handleGetSession(res: ServerResponse, sessionId: string) {
     const entry = this.store.get(sessionId);
     if (!entry) { notFound(res); return; }
-    json(res, 200, { ...this.store.toApiSession(entry), messages: entry.messages });
+    ok(res, { ...this.store.toApiSession(entry), messages: entry.messages });
   }
 
   private handleDeleteSession(res: ServerResponse, sessionId: string) {
@@ -664,7 +684,7 @@ export class HttpServer {
     const participant = url.searchParams.get('participant') ?? undefined;
     try {
       const chats = await this.chatStore.listChats(participant);
-      json(res, 200, chats);
+      ok(res, chats);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : 'Failed to list chats');
     }
@@ -678,7 +698,7 @@ export class HttpServer {
     try {
       const chat = await this.chatStore.getChat(chatId);
       if (!chat) { notFound(res); return; }
-      json(res, 200, chat);
+      ok(res, chat);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : 'Failed to get chat');
     }
@@ -696,7 +716,7 @@ export class HttpServer {
         const chat = await this.chatStore.getChat(chatId);
         if (!chat) { notFound(res); return; }
       }
-      json(res, 200, messages);
+      ok(res, messages);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : 'Failed to get chat messages');
     }
@@ -722,7 +742,7 @@ export class HttpServer {
 
     try {
       const chat = await this.chatStore.createChat([participant1, participant2], 'direct');
-      json(res, 200, chat);
+      ok(res, chat);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : 'Failed to create chat');
     }
@@ -749,7 +769,7 @@ export class HttpServer {
     // 如果会话已存在则直接返回（幂等）
     const existing = this.store.findDm(fromWorkerId, toWorkerId);
     if (existing) {
-      json(res, 200, this.store.toApiSession(existing));
+      ok(res, this.store.toApiSession(existing));
       return;
     }
 
@@ -757,7 +777,7 @@ export class HttpServer {
       const fromAgent = await this.getAgentForWorker(fromCfg);
       const toAgent   = await this.getAgentForWorker(toCfg);
       const entry = this.store.createDm(fromWorkerId, toWorkerId, fromAgent, toAgent);
-      json(res, 201, this.store.toApiSession(entry));
+      ok(res, this.store.toApiSession(entry), 201);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : String(err));
     }
@@ -783,7 +803,7 @@ export class HttpServer {
     }
 
     if (this.config.models.some(m => m.id === id)) {
-      json(res, 409, { error: `Model with id "${id}" already exists` }); return;
+      conflict(res, `Model with id "${id}" already exists`); return;
     }
 
     const newModel: ModelInstanceConfig = {
@@ -815,7 +835,7 @@ export class HttpServer {
       isPrimary:  newModel.primary  ?? false,
       isFallback: newModel.fallback ?? false,
     };
-    json(res, 201, apiModel);
+    ok(res, apiModel, 201);
   }
 
   private async handleUpdateModel(req: IncomingMessage, res: ServerResponse, modelId: string) {
@@ -870,7 +890,7 @@ export class HttpServer {
       isPrimary:  updated.primary  ?? false,
       isFallback: updated.fallback ?? false,
     };
-    json(res, 200, apiModel);
+    ok(res, apiModel);
   }
 
   private async handleDeleteModel(res: ServerResponse, modelId: string) {
@@ -917,7 +937,7 @@ export class HttpServer {
 
     const workers = this.config.workers ?? [];
     if (workers.some(w => w.id === id)) {
-      json(res, 409, { error: `Worker with id "${id}" already exists` }); return;
+      conflict(res, `Worker with id "${id}" already exists`); return;
     }
 
     const newWorker: WorkerConfig = {
@@ -956,7 +976,7 @@ export class HttpServer {
       isPrimary:   newWorker.primary ?? false,
       status:      'online',
     };
-    json(res, 201, apiWorker);
+    ok(res, apiWorker, 201);
   }
 
   private async handleUpdateWorker(req: IncomingMessage, res: ServerResponse, workerId: string) {
@@ -1009,7 +1029,7 @@ export class HttpServer {
       isPrimary:   updated.primary ?? false,
       status:      'online',
     };
-    json(res, 200, apiWorker);
+    ok(res, apiWorker);
   }
 
   private async handleDeleteWorker(res: ServerResponse, workerId: string) {
