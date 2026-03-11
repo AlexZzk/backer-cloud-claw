@@ -6,6 +6,7 @@ import { ThreadManager } from './thread.js';
 import { TokenTracker } from './token-tracker.js';
 import type { WorkerTokenSummary } from './token-tracker.js';
 import type { Worker } from './worker.js';
+import { WorkerScheduler } from './worker-scheduler.js';
 
 export interface CompanyOptions {
   /** 公司名称，例如"研发团队" */
@@ -32,6 +33,7 @@ export class Company implements Participant {
 
   readonly eventBus: EventEmitter;
   readonly tokenTracker: TokenTracker;
+  readonly scheduler: WorkerScheduler;
 
   private router: MessageRouter;
   private threadManager: ThreadManager;
@@ -43,6 +45,7 @@ export class Company implements Participant {
     this.tokenTracker = new TokenTracker();
     this.router = new MessageRouter();
     this.threadManager = new ThreadManager(this.eventBus);
+    this.scheduler = new WorkerScheduler({ eventBus: this.eventBus });
 
     // Company 自身的 profile（当它作为 Participant 被调用时用）
     this.profile = {
@@ -57,16 +60,30 @@ export class Company implements Participant {
 
   // ─── 成员管理 ────────────────────────────────────────────────────────────────
 
-  /** 加入一名 Worker（Worker 将共享本 Company 的 tokenTracker 和 eventBus） */
+  /**
+   * 加入一名 Worker（Worker 将共享本 Company 的 tokenTracker 和 eventBus）。
+   *
+   * 若 Worker 注入了 AsyncInboxService，会自动将其注册到 WorkerScheduler，
+   * 调用 company.scheduler.start(workerId) 即可启动定期审视。
+   */
   addWorker(worker: Worker): void {
     this.members.set(worker.id, worker);
     this.router.register(worker);
+
+    // 自动将 Worker 注册到调度器（若该 Worker 支持 processInbox）
+    this.scheduler.register({
+      workerId: worker.id,
+      onReview: async () => {
+        await worker.processInbox();
+      },
+    });
   }
 
   /** 移除成员 */
   removeWorker(id: string): void {
     this.members.delete(id);
     this.router.unregister(id);
+    this.scheduler.unregister(id);
   }
 
   /** 获取所有成员 */
