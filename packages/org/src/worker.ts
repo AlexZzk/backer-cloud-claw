@@ -30,6 +30,16 @@ export interface AsyncInboxService {
   /** 将某个会话的消息标记为已读 */
   markRead(chatId: string, participantId: string): Promise<void>;
 
+  /**
+   * 打开（或创建）两人之间的私聊会话，返回会话信息。
+   * 幂等：两人之间已有 active 会话时直接返回现有会话。
+   * Worker 发消息前必须先获取 chatId，此方法是标准入口。
+   */
+  openDirectChat(
+    participant1: string,
+    participant2: string,
+  ): Promise<{ id: string; participants: string[] }>;
+
   /** 异步发送一条消息（不等待接收方处理） */
   post(
     chatId: string,
@@ -207,7 +217,7 @@ export class Worker implements Participant {
     let accumulatedText = '';
     let tokenUsage: TokenUsage | undefined;
 
-    for await (const chunk of this.engine.stream(message.content)) {
+    for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
       if (chunk.type === 'text' && chunk.text) {
         accumulatedText += chunk.text;
         yield { type: 'chunk', text: chunk.text };
@@ -442,7 +452,7 @@ export class Worker implements Participant {
     let accumulatedText = '';
     let tokenUsage: TokenUsage | undefined;
 
-    for await (const chunk of this.engine.stream(message.content)) {
+    for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
       if (chunk.type === 'text' && chunk.text) {
         accumulatedText += chunk.text;
       }
@@ -456,6 +466,27 @@ export class Worker implements Participant {
     const reply = this._buildReply(message, accumulatedText, tokenUsage);
     this._recordAndEmit(message.threadId, tokenUsage, reply);
     return reply;
+  }
+
+  /**
+   * 将 OrgMessage 转化为 AgentEngine 的输入字符串。
+   *
+   * 核心：保留消息溯源（发件人）。
+   * 当消息来自其他 Worker（非用户）时，明确标注发件人 ID，
+   * 确保 LLM 知道"这条消息是谁说的"，实现完整的消息追溯链。
+   *
+   * 示例输出（Worker 间委托）：
+   *   【来自同事「worker2」的消息】
+   *   请在中午12点提醒用户吃饭
+   *
+   * 示例输出（用户直接发消息）：
+   *   请在中午12点提醒用户吃饭（原样，无前缀）
+   */
+  private _buildEngineInput(message: OrgMessage): string {
+    if (message.from === 'user') {
+      return message.content;
+    }
+    return `【来自同事「${message.from}」的消息】\n${message.content}`;
   }
 
   private _buildReply(
@@ -560,30 +591,50 @@ export class Worker implements Participant {
       },
     });
 
-    // 工具：发送异步消息到某个聊天会话
+    // 工具：给指定同事发送异步消息（自动创建/打开会话）
+    //
+    // 设计关键点：
+    // - 参数是"收件人 ID"（to），不是 chatId，更符合人类直觉
+    // - 系统自动 openDirectChat() 确保会话存在，并在系统中留档
+    // - 消息发送方（from）永远是本 Worker 自己，保证溯源
     this.engine.registerTool({
       definition: {
         name: 'send_message',
-        description: '向指定聊天会话发送一条异步消息。接收方会在自己的工作审视周期中处理此消息，无需等待回复。',
+        description:
+          '给指定同事发送一条异步消息。系统会自动打开/创建你们之间的对话，消息永久存档可追溯。' +
+          '接收方会在他们的工作审视周期中看到这条消息——这是团队内部异步沟通的标准方式。',
         inputSchema: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '目标聊天会话 ID' },
-            content: { type: 'string', description: '消息正文' },
-            replyToId: { type: 'string', description: '（可选）回复的消息 ID' },
+            to: {
+              type: 'string',
+              description: '收件人的 Worker ID（例如 "worker2"、"worker3"）',
+            },
+            content: {
+              type: 'string',
+              description: '消息正文。请清晰说明：你是谁、为什么发这条消息、希望对方做什么。',
+            },
           },
-          required: ['chatId', 'content'],
+          required: ['to', 'content'],
         },
       },
       handler: async (input: Record<string, unknown>) => {
-        const { chatId, content, replyToId } = input as {
-          chatId: string;
-          content: string;
-          replyToId?: string;
-        };
-        const opts = replyToId !== undefined ? { replyToId } : {};
-        const msg = await inboxService.post(chatId, workerId, content, opts);
-        return `消息已发送（ID: ${msg.id}，时间: ${new Date(msg.timestamp).toLocaleString('zh-CN')}）`;
+        const { to, content } = input as { to: string; content: string };
+
+        // 1. 自动打开/创建与收件人的私聊会话（幂等）
+        const chat = await inboxService.openDirectChat(workerId, to);
+
+        // 2. 以本 Worker 身份发送消息，from 字段永远是 workerId
+        const msg = await inboxService.post(chat.id, workerId, content);
+
+        return [
+          `✅ 消息已发送给 ${to}`,
+          `   发件人：${workerId}（我）`,
+          `   会话 ID：${chat.id}`,
+          `   消息 ID：${msg.id}`,
+          `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
+          `   对方会在他们的工作时间查收。`,
+        ].join('\n');
       },
     });
 

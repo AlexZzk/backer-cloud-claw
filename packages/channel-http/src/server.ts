@@ -21,6 +21,12 @@
  *   DELETE /api/sessions/:id            删除会话
  *   POST   /api/sessions/:id/messages    发消息（SSE 流）
  *   GET    /api/analytics/tokens         token 统计
+ *
+ * Worker 间异步聊天监控（依赖 @bcc/messaging）：
+ *   GET    /api/chats                     列出所有 Worker 间聊天会话
+ *   GET    /api/chats/:chatId             获取会话元信息
+ *   GET    /api/chats/:chatId/messages    获取会话消息历史
+ *   POST   /api/chats                     创建/打开直聊会话
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -36,6 +42,7 @@ import type {
   WorkerConfig,
 } from './config-loader.js';
 import { saveConfig, loadConfig } from './config-loader.js';
+import { ChatStore } from '@bcc/messaging';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -175,6 +182,8 @@ export class HttpServer {
   private tokenAcc = new Map<string, WorkerTokenAcc>();
   /** 每个 Worker 共享同一 AgentEngine 实例，跨会话保持记忆 */
   private workerAgents = new Map<string, AgentInterface>();
+  /** Worker 间异步聊天存储（与 CLI 模式共享同一 ~/.bcc/chats 目录） */
+  private chatStore = new ChatStore();
 
   constructor(
     private config: BccConfig,
@@ -317,6 +326,38 @@ export class HttpServer {
       const m = matchRoute('/api/sessions/:sessionId/messages', path);
       if (m && method === 'POST') {
         await this.handleSendMessage(req, res, m.params['sessionId']!);
+        return;
+      }
+    }
+
+    // ── Worker 间异步聊天监控 ────────────────────────────────────────────────────
+
+    // ── GET /api/chats  (列出所有 Worker 间聊天会话)
+    if (method === 'GET' && path === '/api/chats') {
+      await this.handleListChats(req, res);
+      return;
+    }
+
+    // ── POST /api/chats  (创建/打开直聊会话)
+    if (method === 'POST' && path === '/api/chats') {
+      await this.handleCreateChat(req, res);
+      return;
+    }
+
+    // ── GET /api/chats/:chatId/messages
+    {
+      const m = matchRoute('/api/chats/:chatId/messages', path);
+      if (m && method === 'GET') {
+        await this.handleGetChatMessages(res, m.params['chatId']!);
+        return;
+      }
+    }
+
+    // ── GET /api/chats/:chatId
+    {
+      const m = matchRoute('/api/chats/:chatId', path);
+      if (m && method === 'GET') {
+        await this.handleGetChat(res, m.params['chatId']!);
         return;
       }
     }
@@ -610,6 +651,82 @@ export class HttpServer {
   }
 
   // ── DM 会话 ──────────────────────────────────────────────────────────────────
+
+  // ── Worker 间异步聊天监控 ──────────────────────────────────────────────────────
+
+  /**
+   * GET /api/chats
+   * 列出所有 Worker 间聊天会话，可选 ?participant=workerId 过滤。
+   * 这是监控面板的核心接口：看到所有人在聊什么。
+   */
+  private async handleListChats(req: IncomingMessage, res: ServerResponse) {
+    const url = new URL(req.url ?? '/', `http://localhost:${this.port}`);
+    const participant = url.searchParams.get('participant') ?? undefined;
+    try {
+      const chats = await this.chatStore.listChats(participant);
+      json(res, 200, chats);
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : 'Failed to list chats');
+    }
+  }
+
+  /**
+   * GET /api/chats/:chatId
+   * 获取单个聊天会话的元信息（参与者、状态、最后消息预览）。
+   */
+  private async handleGetChat(res: ServerResponse, chatId: string) {
+    try {
+      const chat = await this.chatStore.getChat(chatId);
+      if (!chat) { notFound(res); return; }
+      json(res, 200, chat);
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : 'Failed to get chat');
+    }
+  }
+
+  /**
+   * GET /api/chats/:chatId/messages
+   * 获取聊天会话的消息历史，可选 ?limit=N 限制条数。
+   * 监控面板用此接口展示完整对话记录，溯源每条消息的发件人。
+   */
+  private async handleGetChatMessages(res: ServerResponse, chatId: string) {
+    try {
+      const messages = await this.chatStore.getMessages(chatId);
+      if (messages.length === 0) {
+        const chat = await this.chatStore.getChat(chatId);
+        if (!chat) { notFound(res); return; }
+      }
+      json(res, 200, messages);
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : 'Failed to get chat messages');
+    }
+  }
+
+  /**
+   * POST /api/chats
+   * 创建或打开两个参与者之间的直聊会话（幂等）。
+   * Body: { participant1: string, participant2: string }
+   */
+  private async handleCreateChat(req: IncomingMessage, res: ServerResponse) {
+    let body: { participant1?: string; participant2?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { participant1, participant2 } = body;
+    if (!participant1) { badRequest(res, '"participant1" is required'); return; }
+    if (!participant2) { badRequest(res, '"participant2" is required'); return; }
+    if (participant1 === participant2) { badRequest(res, 'participant1 and participant2 must be different'); return; }
+
+    try {
+      const chat = await this.chatStore.createChat([participant1, participant2], 'direct');
+      json(res, 200, chat);
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : 'Failed to create chat');
+    }
+  }
 
   private async handleCreateDmSession(req: IncomingMessage, res: ServerResponse) {
     let body: { fromWorkerId?: string; toWorkerId?: string };
