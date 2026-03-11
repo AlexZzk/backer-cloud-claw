@@ -2,220 +2,264 @@
  * BCC API Client
  *
  * 封装所有对后端（@bcc/channel-http）的请求。
- * 开发时 Vite proxy 将 /api 转发到 http://localhost:3000/api。
+ * 开发时 Vite proxy 将 /bcc_server 转发到 http://localhost:3000。
  */
+
 import service from '@/http/axios.ts'
 
-// ─── 类型（与 @bcc/channel-http/src/types.ts 保持一致）───────────────────────
+// ─── 类型 ───────────────────────────────────────────────────────────────
 
 export interface ApiWorker {
-  id: string;
-  name: string;
-  description: string;
-  skills: string[];
-  modelId: string;
-  role: string;
-  tools: string[];
-  isPrimary: boolean;
-  status: 'online' | 'idle' | 'offline';
+  id: string
+  name: string
+  description: string
+  skills: string[]
+  modelId: string
+  role: string
+  tools: string[]
+  isPrimary: boolean
+  status: 'online' | 'idle' | 'offline'
 }
 
-export type SessionType = 'chat' | 'dm';
+export type SessionType = 'chat' | 'dm'
 
 export interface ApiSession {
-  id: string;
-  type: SessionType;
-  workerId: string;
-  /** DM 会话中接收方 Worker ID */
-  toWorkerId?: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  messageCount: number;
+  id: string
+  type: SessionType
+  workerId: string
+  toWorkerId?: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  messageCount: number
 }
 
 export interface ApiMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  /** DM 会话中标记发言 Worker ID */
-  speakerId?: string;
-  content: string;
-  timestamp: number;
-  tokenUsage?: { inputTokens: number; outputTokens: number };
+  id: string
+  role: 'user' | 'assistant'
+  speakerId?: string
+  content: string
+  timestamp: number
+  tokenUsage?: { inputTokens: number; outputTokens: number }
 }
 
 export interface ApiSessionDetail extends ApiSession {
-  messages: ApiMessage[];
+  messages: ApiMessage[]
 }
 
 export interface ApiModel {
-  id: string;
-  provider: string;
-  model?: string;
-  baseUrl?: string;
-  isPrimary: boolean;
-  isFallback: boolean;
+  id: string
+  provider: string
+  model?: string
+  baseUrl?: string
+  isPrimary: boolean
+  isFallback: boolean
 }
 
 export interface TokenStats {
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalTokens: number;
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalTokens: number
   byWorker: {
-    workerId: string;
-    workerName: string;
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-    callCount: number;
-  }[];
+    workerId: string
+    workerName: string
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+    callCount: number
+  }[]
 }
 
-// ─── Worker API ───────────────────────────────────────────────────────────────
+// ─── Worker API ─────────────────────────────────────────────────────────
 
 export interface ApiWorkerInput {
-  id: string;
-  name: string;
-  description: string;
-  role: string;
-  modelId: string;
-  skills: string[];
-  tools: string[];
-  isPrimary?: boolean;
+  id: string
+  name: string
+  description: string
+  role: string
+  modelId: string
+  skills: string[]
+  tools: string[]
+  isPrimary?: boolean
 }
 
 export const workersApi = {
-  list:   ()                                    => service.get<ApiWorker[]>('/workers'),
-  create: (data: ApiWorkerInput)                => service.post<ApiWorker>('/workers', { ...data, primary: data.isPrimary }),
-  update: (id: string, data: Partial<ApiWorkerInput>) =>
-      service.put<ApiWorker>(`/workers/${id}`, { ...data, primary: data.isPrimary }),
-  delete: (id: string)                          => service.del(`/workers/${id}`),
-};
+  list: () =>
+      service.get<ApiWorker[]>('/api/workers'),
 
-// ─── Session API ──────────────────────────────────────────────────────────────
+  create: (data: ApiWorkerInput) =>
+      service.post<ApiWorker>('api/workers', { ...data, primary: data.isPrimary }),
+
+  update: (id: string, data: Partial<ApiWorkerInput>) =>
+      service.put<ApiWorker>(`/api/workers/${id}`, { ...data, primary: data.isPrimary }),
+
+  delete: (id: string) =>
+      service.delete(`/api/workers/${id}`)
+}
+
+// ─── Session API ────────────────────────────────────────────────────────
 
 export const sessionsApi = {
-  create:       (workerId: string)               => service.post<ApiSession>(`/workers/${workerId}/sessions`),
-  listByWorker: (workerId: string)               => service.get<ApiSession[]>(`/workers/${workerId}/sessions`),
-  get:          (sessionId: string)              => service.get<ApiSessionDetail>(`/sessions/${sessionId}`),
-  delete:       (sessionId: string)              => service.del(`/sessions/${sessionId}`),
-};
+  create: (workerId: string) =>
+      service.post<ApiSession>(`/api/workers/${workerId}/sessions`),
+
+  listByWorker: (workerId: string) =>
+      service.get<ApiSession[]>(`/api/workers/${workerId}/sessions`),
+
+  get: (sessionId: string) =>
+      service.get<ApiSessionDetail>(`/api/sessions/${sessionId}`),
+
+  delete: (sessionId: string) =>
+      service.delete(`/api/sessions/${sessionId}`)
+}
 
 export const dmApi = {
   create: (fromWorkerId: string, toWorkerId: string) =>
-      service.post<ApiSession>('/dm-sessions', { fromWorkerId, toWorkerId }),
-};
+      service.post<ApiSession>('/api/dm-sessions', { fromWorkerId, toWorkerId })
+}
 
-// ─── SSE 流式发送消息 ─────────────────────────────────────────────────────────
+// ─── SSE 流式消息 ───────────────────────────────────────────────────────
 
 export interface StreamCallbacks {
-  onChunk:       (text: string) => void;
-  onSpeaker?:    (workerId: string, workerName: string) => void;
-  onToolCall?:   (tool: string, input: Record<string, unknown>) => void;
-  onToolResult?: (tool: string, result: string, isError: boolean) => void;
-  onDone:        (tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number }) => void;
-  onError:       (message: string) => void;
+  onChunk: (text: string) => void
+  onSpeaker?: (workerId: string, workerName: string) => void
+  onToolCall?: (tool: string, input: Record<string, unknown>) => void
+  onToolResult?: (tool: string, result: string, isError: boolean) => void
+  onDone: (tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number }) => void
+  onError: (message: string) => void
 }
 
 export async function sendMessageStream(
-  sessionId: string,
-  content: string,
-  callbacks: StreamCallbacks,
+    sessionId: string,
+    content: string,
+    callbacks: StreamCallbacks
 ): Promise<void> {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/messages`, {
+
+  const res = await fetch(`/api/sessions/${sessionId}/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ content })
+  })
 
   if (!res.ok || !res.body) {
-    callbacks.onError(`HTTP ${res.status}`);
-    return;
+    callbacks.onError(`HTTP ${res.status}`)
+    return
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
 
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    const { done, value } = await reader.read()
+    if (done) break
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
+    buffer += decoder.decode(value, { stream: true })
 
-    let currentEvent = '';
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+
+    let currentEvent = ''
+
     for (const line of lines) {
+
       if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7).trim();
-      } else if (line.startsWith('data: ')) {
+        currentEvent = line.slice(7).trim()
+        continue
+      }
+
+      if (line.startsWith('data: ')) {
+
         try {
-          const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
+          const data = JSON.parse(line.slice(6))
+
           switch (currentEvent) {
+
             case 'chunk':
-              callbacks.onChunk((data['text'] as string) ?? '');
-              break;
+              callbacks.onChunk(data.text ?? '')
+              break
+
             case 'speaker':
-              callbacks.onSpeaker?.(data['workerId'] as string, data['workerName'] as string);
-              break;
+              callbacks.onSpeaker?.(data.workerId, data.workerName)
+              break
+
             case 'tool_call':
-              callbacks.onToolCall?.(data['tool'] as string, data['input'] as Record<string, unknown>);
-              break;
+              callbacks.onToolCall?.(data.tool, data.input)
+              break
+
             case 'tool_result':
-              callbacks.onToolResult?.(data['tool'] as string, data['result'] as string, data['isError'] as boolean);
-              break;
+              callbacks.onToolResult?.(data.tool, data.result, data.isError)
+              break
+
             case 'done':
-              callbacks.onDone(data['tokenUsage'] as { inputTokens: number; outputTokens: number; totalTokens: number } | undefined);
-              break;
+              callbacks.onDone(data.tokenUsage)
+              break
+
             case 'error':
-              callbacks.onError(data['message'] as string);
-              break;
+              callbacks.onError(data.message)
+              break
           }
+
         } catch {
-          // 跳过解析失败的行
+          // ignore parse error
         }
-        currentEvent = '';
+
+        currentEvent = ''
       }
     }
   }
 }
 
-// ─── Models API ───────────────────────────────────────────────────────────────
+// ─── Models API ─────────────────────────────────────────────────────────
 
 export interface ApiModelInput {
-  id: string;
-  provider: string;   // claude | openai | deepseek | bailian | custom
-  apiKey?: string;    // 更新时留空表示不修改
-  model?: string;
-  baseUrl?: string;
-  isPrimary?: boolean;
-  isFallback?: boolean;
+  id: string
+  provider: string
+  apiKey?: string
+  model?: string
+  baseUrl?: string
+  isPrimary?: boolean
+  isFallback?: boolean
 }
 
 export const modelsApi = {
-  list:   ()                                             => service.get<ApiModel[]>('/models'),
-  create: (data: ApiModelInput)                          => service.post<ApiModel>('/models', data),
-  update: (id: string, data: Partial<ApiModelInput>)     => service.put<ApiModel>(`/models/${id}`, data),
-  delete: (id: string)                                   => service.del(`/models/${id}`),
-};
+  list: () =>
+    service.get<ApiModel[]>('/api/models'),
 
-// ─── Analytics API ────────────────────────────────────────────────────────────
+  create: (data: ApiModelInput) =>
+      service.post<ApiModel>('/api/models', data),
+
+  update: (id: string, data: Partial<ApiModelInput>) =>
+      service.put<ApiModel>(`/api/models/${id}`, data),
+
+  delete: (id: string) =>
+      service.delete(`/api/models/${id}`)
+}
+
+// ─── Analytics API ──────────────────────────────────────────────────────
 
 export const analyticsApi = {
-  tokens: () => service.get<TokenStats>('/analytics/tokens'),
-};
+  tokens: () =>
+      service.get<TokenStats>('/api/analytics/tokens')
+}
 
-// ─── 健康检查（判断后端是否可用）─────────────────────────────────────────────
+// ─── Health Check ───────────────────────────────────────────────────────
+
+export interface HealthStatus {
+  status: 'ok'
+}
+
 export async function getServiceHealth() {
-  return service.get<TokenStats>('/health', {signal: AbortSignal.timeout(2000)})
+  return service.get<HealthStatus>('/api/health')
 }
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await getServiceHealth();
-    return res.ok;
+    await getServiceHealth()
+    return true
   } catch {
-    return false;
+    return false
   }
 }
