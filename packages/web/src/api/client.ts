@@ -21,13 +21,15 @@ export interface ApiWorker {
   status: 'online' | 'idle' | 'offline'
 }
 
-export type SessionType = 'chat' | 'dm'
+export type SessionType = 'chat' | 'dm' | 'group'
 
 export interface ApiSession {
   id: string
   type: SessionType
   workerId: string
   toWorkerId?: string
+  /** group 会话中所有参与 Worker IDs */
+  workerIds?: string[]
   title: string
   createdAt: number
   updatedAt: number
@@ -124,6 +126,12 @@ export const sessionsApi = {
 export const dmApi = {
   create: (fromWorkerId: string, toWorkerId: string) =>
       service.post<ApiSession>('/dm-sessions', { fromWorkerId, toWorkerId })
+}
+
+export const groupApi = {
+  /** 创建用户↔多 Worker 群聊会话（至少 2 个 Worker） */
+  create: (workerIds: string[]) =>
+      service.post<ApiSession>('/group-sessions', { workerIds })
 }
 
 // ─── SSE 流式消息 ───────────────────────────────────────────────────────

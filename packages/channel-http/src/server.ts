@@ -388,6 +388,12 @@ export class HttpServer {
       return;
     }
 
+    // ── POST /api/group-sessions  (创建用户↔多 Worker 群聊会话)
+    if (method === 'POST' && path === '/api/group-sessions') {
+      await this.handleCreateGroupSession(req, res);
+      return;
+    }
+
     // ── POST /api/workers  (创建 Worker)
     if (method === 'POST' && path === '/api/workers') {
       await this.handleCreateWorker(req, res);
@@ -524,6 +530,8 @@ export class HttpServer {
 
     if (entry.type === 'dm') {
       await this.handleDmMessage(res, entry, content);
+    } else if (entry.type === 'group') {
+      await this.handleGroupMessage(res, entry, content);
     } else {
       await this.handleChatMessage(res, entry, content);
     }
@@ -651,6 +659,90 @@ export class HttpServer {
 
     writeSse(res, { event: 'done', data: {} });
     res.end();
+  }
+
+  /** group 会话：用户 → 多 Worker，每个 Worker 依次以自己身份回复 */
+  private async handleGroupMessage(
+    res: ServerResponse,
+    entry: import('./session-store.js').SessionEntry,
+    content: string,
+  ) {
+    const workerIds = entry.workerIds ?? [entry.workerId];
+
+    if (entry.messages.length === 0) {
+      entry.title = `群聊：${content.slice(0, 20)}`;
+    }
+    entry.messages.push({ id: randomUUID(), role: 'user', content, timestamp: Date.now() });
+    entry.updatedAt = Date.now();
+
+    for (const workerId of workerIds) {
+      const workerCfg = (this.config.workers ?? []).find(w => w.id === workerId);
+      const workerName = workerCfg?.name ?? workerId;
+      const agent = entry.groupAgents?.get(workerId) ?? entry.agent;
+
+      writeSse(res, { event: 'speaker', data: { workerId, workerName } });
+
+      let workerText = '';
+      try {
+        for await (const chunk of agent.stream(content)) {
+          if (chunk.type === 'text' && chunk.text) {
+            workerText += chunk.text;
+            writeSse(res, { event: 'chunk', data: { text: chunk.text } });
+          }
+          if (chunk.type === 'tool_call') writeSse(res, { event: 'tool_call', data: { tool: chunk.tool, input: chunk.input } });
+          if (chunk.type === 'tool_result') writeSse(res, { event: 'tool_result', data: { tool: chunk.tool, result: chunk.result, isError: chunk.isError } });
+          if (chunk.type === 'done' && chunk.tokenUsage) this.accumulateTokens(workerId, chunk.tokenUsage);
+        }
+      } catch (err) {
+        writeSse(res, { event: 'error', data: { message: err instanceof Error ? err.message : String(err) } });
+        res.end(); return;
+      }
+
+      if (workerText) {
+        entry.messages.push({ id: randomUUID(), role: 'assistant', speakerId: workerId, content: workerText, timestamp: Date.now() });
+        entry.updatedAt = Date.now();
+      }
+    }
+
+    writeSse(res, { event: 'done', data: {} });
+    res.end();
+  }
+
+  /** POST /api/group-sessions — 创建用户↔多 Worker 群聊 */
+  private async handleCreateGroupSession(req: IncomingMessage, res: ServerResponse) {
+    let body: { workerIds?: string[] };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { workerIds } = body;
+    if (!workerIds || !Array.isArray(workerIds) || workerIds.length < 2) {
+      badRequest(res, '"workerIds" must be an array with at least 2 Worker IDs'); return;
+    }
+    if (new Set(workerIds).size !== workerIds.length) {
+      badRequest(res, '"workerIds" must not contain duplicates'); return;
+    }
+
+    const workers = this.config.workers ?? [];
+    const workerCfgs = workerIds.map(id => workers.find(w => w.id === id));
+    if (workerCfgs.some(w => !w)) {
+      notFound(res); return;
+    }
+
+    try {
+      const agentMap = new Map<string, AgentInterface>();
+      for (const cfg of workerCfgs) {
+        const agent = await this.getAgentForWorker(cfg!);
+        agentMap.set(cfg!.id, agent);
+      }
+      const title = workerCfgs.map(w => w!.name).join('、') + ' 群聊';
+      const entry = this.store.createGroup(workerIds, agentMap, title);
+      ok(res, this.store.toApiSession(entry), 201);
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : String(err));
+    }
   }
 
   private accumulateTokens(
@@ -1096,6 +1188,80 @@ export class HttpServer {
       const tool = getBuiltinTool(toolId);
       if (tool) engine.registerTool(tool);
     }
+
+    // ── 注册消息传递工具（与 CLI 模式共享同一 ChatStore，持久化到 ~/.bcc/chats）──
+    const selfWorkerId = workerCfg.id;
+    const chatStore = this.chatStore;
+
+    engine.registerTool({
+      definition: {
+        name: 'send_message',
+        description:
+          '给指定同事发送一条异步消息。系统会自动打开/创建你们之间的对话，消息永久存档可追溯。' +
+          '接收方会在他们工作时看到这条消息——这是团队内部异步沟通的标准方式。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            to:      { type: 'string',  description: '收件人的 Worker ID（例如 "worker2"、"worker3"）' },
+            content: { type: 'string',  description: '消息正文。请清晰说明：你是谁、为什么发这条消息、希望对方做什么。' },
+          },
+          required: ['to', 'content'],
+        },
+      },
+      handler: async (input: Record<string, unknown>) => {
+        const { to, content } = input as { to: string; content: string };
+        const chat = await chatStore.createChat([selfWorkerId, to], 'direct');
+        const msg  = await chatStore.sendMessage(chat.id, selfWorkerId, content);
+        return [
+          `✅ 消息已发送给 ${to}`,
+          `   发件人：${selfWorkerId}（我）`,
+          `   会话 ID：${chat.id}`,
+          `   消息 ID：${msg.id}`,
+          `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
+        ].join('\n');
+      },
+    });
+
+    engine.registerTool({
+      definition: {
+        name: 'check_inbox',
+        description: '查看我的所有未读消息（来自同事的异步消息）。',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+      },
+      handler: async () => {
+        const items = await chatStore.getAllUnread(selfWorkerId);
+        if (items.length === 0) return '📭 当前没有未读消息。';
+        return items.map((item: { chat: { id: string }; message: { from: string; timestamp: number; content: string } }) => {
+          const time = new Date(item.message.timestamp).toLocaleString('zh-CN');
+          return `[${time}] 来自 ${item.message.from}（会话 ${item.chat.id.slice(0, 8)}…）：${item.message.content}`;
+        }).join('\n');
+      },
+    });
+
+    engine.registerTool({
+      definition: {
+        name: 'get_chat_history',
+        description: '获取指定聊天会话的最近消息历史，用于了解对话背景。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            chatId: { type: 'string', description: '聊天会话 ID' },
+            limit:  { type: 'number', description: '最多返回的消息条数，默认 10' },
+          },
+          required: ['chatId'],
+        },
+      },
+      handler: async (input: Record<string, unknown>) => {
+        const { chatId, limit = 10 } = input as { chatId: string; limit?: number };
+        const messages = await chatStore.getMessages(chatId, limit);
+        if (messages.length === 0) return '该会话暂无消息记录。';
+        return messages.map((m: { from: string; timestamp: number; content: string }) => {
+          const sender = m.from === selfWorkerId ? '我' : m.from;
+          const time   = new Date(m.timestamp).toLocaleString('zh-CN');
+          return `[${time}] ${sender}: ${m.content}`;
+        }).join('\n');
+      },
+    });
 
     this.workerAgents.set(workerCfg.id, engine);
     return engine;

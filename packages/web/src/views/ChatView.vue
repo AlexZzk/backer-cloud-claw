@@ -34,7 +34,7 @@
 
         <!-- Has workers, no conversations yet -->
         <div
-          v-else-if="hasWorkers && chatStore.sessionsLoaded && filteredContacts.length === 0 && chatStore.dmList.length === 0 && chatStore.asyncChatList.length === 0"
+          v-else-if="hasWorkers && chatStore.sessionsLoaded && filteredContacts.length === 0 && chatStore.groupSessionList.length === 0 && chatStore.dmList.length === 0 && chatStore.asyncChatList.length === 0"
           class="contact-empty"
         >
           <div style="font-size: 28px; margin-bottom: 8px;">💬</div>
@@ -65,6 +65,33 @@
               </div>
               <div class="contact-last">
                 {{ item.lastMessage || t('chat.startChat') }}
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 群聊（用户↔多 Worker） -->
+        <template v-if="chatStore.groupSessionList.length > 0">
+          <div class="contact-section-title">群聊</div>
+          <div
+            v-for="gs in chatStore.groupSessionList"
+            :key="gs.id"
+            class="contact-item dm-item"
+            :class="{ active: chatStore.activeSessionId === gs.id }"
+            @click="openGroupSession(gs.id)"
+          >
+            <div class="dm-avatars">
+              <span class="dm-av" style="font-size: 16px;">👥</span>
+              <span class="dm-av">🤖</span>
+            </div>
+            <div class="contact-info">
+              <div class="contact-name-row">
+                <span class="contact-name">{{ gs.title }}</span>
+                <a-tag size="small" color="orange" style="font-size: 10px; margin-left: 2px;">群聊</a-tag>
+                <span class="contact-time">{{ gs.updatedAt ? formatTime(gs.updatedAt) : '' }}</span>
+              </div>
+              <div class="contact-last">
+                {{ getGroupLastMessage(gs) }}
               </div>
             </div>
           </div>
@@ -227,6 +254,22 @@
                   <span class="worker-name">{{ activeDmToWorker?.name ?? '?' }}</span>
                 </div>
                 <div class="worker-model">员工间对话</div>
+              </div>
+            </template>
+            <!-- Group session header -->
+            <template v-else-if="activeSessionType === 'group' && activeGroupSession">
+              <div class="dm-header-avatars">
+                <span class="worker-avatar-lg">👥</span>
+                <span class="worker-avatar-lg dm-avatar-2">🤖</span>
+              </div>
+              <div>
+                <div class="worker-name-row">
+                  <span class="worker-name">{{ activeGroupSession.title }}</span>
+                  <a-tag color="orange" size="small">群聊</a-tag>
+                </div>
+                <div class="worker-model">
+                  {{ (activeGroupSession.workerIds ?? []).map(id => getWorkerName(id)).join(' · ') }}
+                </div>
               </div>
             </template>
             <!-- Regular chat session header -->
@@ -547,6 +590,11 @@ const activeDmToWorker = computed(() => {
     : null;
 });
 
+const activeGroupSession = computed(() => {
+  const s = chatStore.activeSession;
+  return s?.type === 'group' ? s : null;
+});
+
 const filteredContacts = computed(() => {
   if (!searchText.value) return chatStore.contactList;
   const s = searchText.value.toLowerCase();
@@ -675,11 +723,14 @@ async function confirmNewChat() {
 
 async function confirmGroupChat() {
   if (pickerSelectedIds.value.length < 2) return;
+  const workerIds = [...pickerSelectedIds.value];
   showWorkerPicker.value = false;
-  // 群聊：使用 DM 发起第一对 Worker 间对话，多 Worker 群聊功能待扩展
-  // TODO: 当后端支持多人群聊会话后，在此创建 group session
-  Message.info('多人群聊功能即将支持，当前可通过「员工间对话」发起 Worker 间 DM');
   pickerSelectedIds.value = [];
+  try {
+    await chatStore.newGroupSession(workerIds);
+  } catch (e) {
+    Message.error('创建群聊失败：' + (e instanceof Error ? e.message : String(e)));
+  }
 }
 
 async function handleSelectWorker(workerId: string) {
@@ -718,6 +769,22 @@ async function createDmSession() {
   } finally {
     dmCreating.value = false;
   }
+}
+
+function openGroupSession(sessionId: string) {
+  chatStore.selectSession(sessionId);
+  // 为 header 显示设置 activeWorkerId（群聊的第一个 worker）
+  const session = chatStore.sessions.find(s => s.id === sessionId);
+  if (session?.workerIds?.[0]) {
+    // activeWorkerId is set by selectSession only for worker context; for group, set it here
+  }
+}
+
+function getGroupLastMessage(gs: ChatSession): string {
+  const last = gs.messages[gs.messages.length - 1];
+  if (!last) return gs.messageCount > 0 ? '点击查看消息' : '暂无消息';
+  const speaker = last.speakerId ? getWorkerName(last.speakerId) : '我';
+  return `${speaker}: ${last.content.slice(0, 30)}`;
 }
 
 function openAsyncChat(chatId: string) {
