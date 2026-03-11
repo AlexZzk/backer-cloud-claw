@@ -4,41 +4,7 @@
  * 封装所有对后端（@bcc/channel-http）的请求。
  * 开发时 Vite proxy 将 /api 转发到 http://localhost:3000/api。
  */
-
-const BASE = '/api';
-
-// ─── 通用工具 ──────────────────────────────────────────────────────────────────
-
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(`POST ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-async function put<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`PUT ${path} → ${res.status}`);
-  return res.json() as Promise<T>;
-}
-
-async function del(path: string): Promise<void> {
-  const res = await fetch(`${BASE}${path}`, { method: 'DELETE' });
-  if (!res.ok && res.status !== 204) throw new Error(`DELETE ${path} → ${res.status}`);
-}
+import service from '@/http/axios.ts'
 
 // ─── 类型（与 @bcc/channel-http/src/types.ts 保持一致）───────────────────────
 
@@ -119,25 +85,25 @@ export interface ApiWorkerInput {
 }
 
 export const workersApi = {
-  list:   ()                                    => get<ApiWorker[]>('/workers'),
-  create: (data: ApiWorkerInput)                => post<ApiWorker>('/workers', { ...data, primary: data.isPrimary }),
+  list:   ()                                    => service.get<ApiWorker[]>('/workers'),
+  create: (data: ApiWorkerInput)                => service.post<ApiWorker>('/workers', { ...data, primary: data.isPrimary }),
   update: (id: string, data: Partial<ApiWorkerInput>) =>
-    put<ApiWorker>(`/workers/${id}`, { ...data, primary: data.isPrimary }),
-  delete: (id: string)                          => del(`/workers/${id}`),
+      service.put<ApiWorker>(`/workers/${id}`, { ...data, primary: data.isPrimary }),
+  delete: (id: string)                          => service.del(`/workers/${id}`),
 };
 
 // ─── Session API ──────────────────────────────────────────────────────────────
 
 export const sessionsApi = {
-  create:       (workerId: string)               => post<ApiSession>(`/workers/${workerId}/sessions`),
-  listByWorker: (workerId: string)               => get<ApiSession[]>(`/workers/${workerId}/sessions`),
-  get:          (sessionId: string)              => get<ApiSessionDetail>(`/sessions/${sessionId}`),
-  delete:       (sessionId: string)              => del(`/sessions/${sessionId}`),
+  create:       (workerId: string)               => service.post<ApiSession>(`/workers/${workerId}/sessions`),
+  listByWorker: (workerId: string)               => service.get<ApiSession[]>(`/workers/${workerId}/sessions`),
+  get:          (sessionId: string)              => service.get<ApiSessionDetail>(`/sessions/${sessionId}`),
+  delete:       (sessionId: string)              => service.del(`/sessions/${sessionId}`),
 };
 
 export const dmApi = {
   create: (fromWorkerId: string, toWorkerId: string) =>
-    post<ApiSession>('/dm-sessions', { fromWorkerId, toWorkerId }),
+      service.post<ApiSession>('/dm-sessions', { fromWorkerId, toWorkerId }),
 };
 
 // ─── SSE 流式发送消息 ─────────────────────────────────────────────────────────
@@ -228,23 +194,26 @@ export interface ApiModelInput {
 }
 
 export const modelsApi = {
-  list:   ()                                             => get<ApiModel[]>('/models'),
-  create: (data: ApiModelInput)                          => post<ApiModel>('/models', data),
-  update: (id: string, data: Partial<ApiModelInput>)     => put<ApiModel>(`/models/${id}`, data),
-  delete: (id: string)                                   => del(`/models/${id}`),
+  list:   ()                                             => service.get<ApiModel[]>('/models'),
+  create: (data: ApiModelInput)                          => service.post<ApiModel>('/models', data),
+  update: (id: string, data: Partial<ApiModelInput>)     => service.put<ApiModel>(`/models/${id}`, data),
+  delete: (id: string)                                   => service.del(`/models/${id}`),
 };
 
 // ─── Analytics API ────────────────────────────────────────────────────────────
 
 export const analyticsApi = {
-  tokens: () => get<TokenStats>('/analytics/tokens'),
+  tokens: () => service.get<TokenStats>('/analytics/tokens'),
 };
 
 // ─── 健康检查（判断后端是否可用）─────────────────────────────────────────────
+export async function getServiceHealth() {
+  return service.get<TokenStats>('/health', {signal: AbortSignal.timeout(2000)})
+}
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${BASE}/health`, { signal: AbortSignal.timeout(2000) });
+    const res = await getServiceHealth();
     return res.ok;
   } catch {
     return false;
