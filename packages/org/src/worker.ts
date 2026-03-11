@@ -207,7 +207,7 @@ export class Worker implements Participant {
     let accumulatedText = '';
     let tokenUsage: TokenUsage | undefined;
 
-    for await (const chunk of this.engine.stream(message.content)) {
+    for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
       if (chunk.type === 'text' && chunk.text) {
         accumulatedText += chunk.text;
         yield { type: 'chunk', text: chunk.text };
@@ -442,7 +442,7 @@ export class Worker implements Participant {
     let accumulatedText = '';
     let tokenUsage: TokenUsage | undefined;
 
-    for await (const chunk of this.engine.stream(message.content)) {
+    for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
       if (chunk.type === 'text' && chunk.text) {
         accumulatedText += chunk.text;
       }
@@ -456,6 +456,27 @@ export class Worker implements Participant {
     const reply = this._buildReply(message, accumulatedText, tokenUsage);
     this._recordAndEmit(message.threadId, tokenUsage, reply);
     return reply;
+  }
+
+  /**
+   * 将 OrgMessage 转化为 AgentEngine 的输入字符串。
+   *
+   * 核心：保留消息溯源（发件人）。
+   * 当消息来自其他 Worker（非用户）时，明确标注发件人 ID，
+   * 确保 LLM 知道"这条消息是谁说的"，实现完整的消息追溯链。
+   *
+   * 示例输出（Worker 间委托）：
+   *   【来自同事「worker2」的消息】
+   *   请在中午12点提醒用户吃饭
+   *
+   * 示例输出（用户直接发消息）：
+   *   请在中午12点提醒用户吃饭（原样，无前缀）
+   */
+  private _buildEngineInput(message: OrgMessage): string {
+    if (message.from === 'user') {
+      return message.content;
+    }
+    return `【来自同事「${message.from}」的消息】\n${message.content}`;
   }
 
   private _buildReply(
