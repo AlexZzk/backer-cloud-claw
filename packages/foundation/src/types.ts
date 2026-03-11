@@ -266,7 +266,132 @@ export type OrgEvent =
   | { type: 'worker:thinking'; workerId: string; threadId: string }
   | { type: 'worker:done'; workerId: string; threadId: string; tokenUsage: TokenUsage }
   | { type: 'thread:opened'; thread: OrgThread }
-  | { type: 'thread:closed'; thread: OrgThread; totalTokens: number };
+  | { type: 'thread:closed'; thread: OrgThread; totalTokens: number }
+  // ─── Chat 异步通信事件 ───────────────────────────────────────────────────────
+  | { type: 'chat:message:sent'; chatId: string; message: ChatMessage }
+  | { type: 'chat:message:received'; workerId: string; chatId: string; message: ChatMessage }
+  | { type: 'chat:opened'; chat: Chat }
+  | { type: 'chat:archived'; chatId: string }
+  // ─── Task 任务事件 ────────────────────────────────────────────────────────────
+  | { type: 'task:created'; task: WorkerTask }
+  | { type: 'task:updated'; task: WorkerTask; previousStatus: TaskStatus }
+  | { type: 'task:completed'; task: WorkerTask }
+  // ─── Worker 定期审视事件 ──────────────────────────────────────────────────────
+  | { type: 'worker:inbox:checked'; workerId: string; pendingCount: number }
+  | { type: 'worker:tasks:reviewed'; workerId: string; taskSummary: { todo: number; inProgress: number; done: number } };
+
+// ─── Chat（异步会话通信系统）──────────────────────────────────────────────────
+
+/**
+ * ChatType：会话类型。
+ * - direct：两人私聊（Worker ↔ Worker 或 User ↔ Worker）
+ * - group：多人群聊
+ */
+export type ChatType = 'direct' | 'group';
+
+/** ChatStatus：会话状态。 */
+export type ChatStatus = 'active' | 'archived';
+
+/**
+ * Chat：Worker 之间（或 User 与 Worker 之间）的聊天会话。
+ *
+ * 类比飞书/微信的"聊天窗口"：
+ * - 发送消息是异步的，发送方不需要等待接收方回复
+ * - 每条消息都被持久化存档
+ * - Worker 定期检查自己的会话，处理未读消息
+ */
+export interface Chat {
+  /** 会话唯一 ID */
+  id: string;
+  type: ChatType;
+  /** 参与者 ID 列表（Worker ID 或 'user'） */
+  participants: string[];
+  /** 会话标题（群聊时有意义，私聊可选） */
+  title?: string;
+  status: ChatStatus;
+  createdAt: number;
+  updatedAt: number;
+  /** 最后一条消息预览（UI 显示用） */
+  lastMessage?: string;
+}
+
+/** ChatMessageStatus：消息送达状态。 */
+export type ChatMessageStatus = 'sent' | 'delivered' | 'read';
+
+/**
+ * ChatMessage：聊天会话中的一条消息。
+ *
+ * 与 OrgMessage 的核心区别：
+ * - OrgMessage 是同步请求-响应模型（调用方阻塞等待回复）
+ * - ChatMessage 是异步留言模型（发完即可继续其他工作）
+ */
+export interface ChatMessage {
+  /** 消息唯一 ID */
+  id: string;
+  /** 所属会话 ID */
+  chatId: string;
+  /** 发送方 ID（Worker ID 或 'user'） */
+  from: string;
+  /** 消息正文 */
+  content: string;
+  /** 发送时间戳（ms） */
+  timestamp: number;
+  status: ChatMessageStatus;
+  /** 引用回复的消息 ID（对某条消息的回复） */
+  replyToId?: string;
+  /** 关联的任务 ID（消息触发或完成了某个任务） */
+  taskId?: string;
+  /** token 消耗（Worker 生成消息时填充） */
+  tokenUsage?: TokenUsage;
+  /** 扩展元数据 */
+  metadata?: Record<string, unknown>;
+}
+
+// ─── WorkerTask（任务 / TodoList）────────────────────────────────────────────
+
+/** TaskStatus：任务状态。 */
+export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'blocked' | 'cancelled';
+
+/** TaskPriority：任务优先级。 */
+export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+/**
+ * WorkerTask：Worker 的待办任务条目。
+ *
+ * 任务可以由用户或其他 Worker 通过聊天消息创建，
+ * Worker 定期审视自己的任务列表，按优先级处理。
+ *
+ * 设计思路（类比真实公司）：
+ * - 用户/上级 Worker 通过消息指派任务
+ * - Worker 自己可以拆解为子任务
+ * - Worker 完成后更新状态，触发通知
+ */
+export interface WorkerTask {
+  /** 任务唯一 ID */
+  id: string;
+  /** 负责此任务的 Worker ID */
+  assignedTo: string;
+  /** 创建此任务的 ID（Worker ID 或 'user'） */
+  createdBy: string;
+  /** 关联的聊天会话 ID（任务来源上下文） */
+  chatId?: string;
+  /** 触发创建此任务的消息 ID */
+  messageId?: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  createdAt: number;
+  updatedAt: number;
+  /** 截止时间（可选） */
+  dueAt?: number;
+  /** 父任务 ID（子任务拆解场景） */
+  parentTaskId?: string;
+}
+
+// ─── Extended OrgEvent（新增 Chat 和 Task 事件）───────────────────────────────
+
+// OrgEvent 在下方扩展，此处仅做类型声明占位
 
 // ─── 情节记忆（Episodic Memory）────────────────────────────────────────────────
 

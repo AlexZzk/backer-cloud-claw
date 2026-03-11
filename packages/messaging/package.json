@@ -1,0 +1,26 @@
+{
+  "name": "@bcc/messaging",
+  "version": "0.1.0",
+  "description": "backer-cloud-claw 异步消息通信层：Worker 间聊天会话、收件箱与消息归档",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/foundation": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "@types/node": "*"
+  }
+}
