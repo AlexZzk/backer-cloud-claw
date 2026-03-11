@@ -30,6 +30,8 @@ import { BccAgent, AgentRegistry } from '@bcc/agents';
 import { Worker, Company } from '@bcc/org';
 import type { Tool } from '@bcc/foundation';
 import { WorkerSession, WorkerRegistry } from '../src/worker-session.js';
+import { ChatStore, MessagingService } from '@bcc/messaging';
+import { TaskStore, TaskManager } from '@bcc/task';
 
 // ─── CLI 参数解析 ─────────────────────────────────────────────────────────────
 
@@ -380,6 +382,36 @@ function createDelegateTool(fromWorker: Worker, targets: Worker[], company: Comp
   };
 }
 
+// ─── Worker 身份 & 异步沟通系统 Prompt 构建 ──────────────────────────────────
+
+/**
+ * 为某个 Worker 生成"同事名录"片段，注入到 system prompt。
+ * Worker 需要知道团队中有哪些人，才能主动发消息给他们。
+ */
+function buildColleagueSection(allDefs: WorkerConfig[], currentWorkerId: string): string {
+  const others = allDefs.filter(d => d.id !== currentWorkerId);
+  if (others.length === 0) return '';
+
+  const lines = ['## 你的同事'];
+  for (const d of others) {
+    lines.push(`- **${d.name}**（ID: \`${d.id}\`）：${d.description ?? d.role}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 生成异步协作工作方式说明，告诉 Worker 如何使用消息系统和任务系统。
+ * 这是让 Worker 真正拟人化的关键 prompt 片段。
+ */
+function buildAsyncCommsGuide(): string {
+  return `## 工作方式
+你是一人公司中的 AI 员工。公司内的沟通方式类似飞书/微信：
+- **查收消息**：同事或老板会给你留言，消息不会打断你，你需要主动使用 \`check_inbox\` 工具查收。每次对话开始时系统会告知你是否有未读消息。
+- **发送消息**：使用 \`send_message\` 工具给同事发异步消息（填写会话 ID 和内容）。对方会在他们的工作时间查收，无需等待即时回复。
+- **管理任务**：使用 \`list_tasks\` 查看待办，\`create_task\` 创建新任务，\`update_task_status\` 更新进度。
+- **主动汇报**：完成重要任务后，主动给相关同事或老板发消息告知进展。`;
+}
+
 // ─── 构建 WorkerRegistry（新 Org 模式）──────────────────────────────────────
 
 interface WorkerBuildResult {
@@ -400,6 +432,13 @@ async function buildWorkerRegistry(
   const registry = new WorkerRegistry();
   const allWorkers: Worker[] = [];
 
+  // 共享的异步消息服务（所有 Worker 共用一个 ChatStore）
+  const chatStore = new ChatStore();
+  const messagingService = new MessagingService({ store: chatStore, eventBus: company.eventBus });
+
+  // 共享的任务存储（每个 Worker 独立管理各自的任务）
+  const taskStore = new TaskStore();
+
   for (const def of workerDefs) {
     const modelInstance = modelInstances.find(m => m.id === def.modelId)
       ?? modelInstances.find(m => m.primary)
@@ -413,19 +452,31 @@ async function buildWorkerRegistry(
     try {
       const adapter = await createAdapter(modelInstance);
 
-      // 构建 system prompt：身份头部 + 情节记忆注入 + 用户角色设定
+      // ── 构建 system prompt（四个层次）──────────────────────────────────────
+      // 1. 身份头部：告诉 Worker 自己是谁
       const identityHeader = def.description
         ? `你的名字是「${def.name}」。${def.description}`
         : `你的名字是「${def.name}」。`;
 
-      // 加载最近 5 条情节记忆，注入到 system prompt
+      // 2. 情节记忆：跨会话长期记忆（过去的工作摘要）
       const memorySection = await buildMemorySection(episodicStore, def.id);
+
+      // 3. 同事名录：让 Worker 知道团队成员，可以主动沟通
+      const colleagueSection = buildColleagueSection(workerDefs, def.id);
+
+      // 4. 工作方式：异步沟通协议（消息 / 任务 / 汇报）
+      const asyncCommsGuide = workerDefs.length > 1 ? buildAsyncCommsGuide() : '';
 
       const fullSystem = [
         identityHeader,
         def.role || '',
         memorySection,
+        colleagueSection,
+        asyncCommsGuide,
       ].filter(Boolean).join('\n\n').trim();
+
+      // 每个 Worker 拥有独立的 TaskManager（任务存储隔离）
+      const taskManager = new TaskManager({ store: taskStore, workerId: def.id, eventBus: company.eventBus });
 
       const worker = await Worker.create({
         profile: {
@@ -433,7 +484,7 @@ async function buildWorkerRegistry(
           name:        def.name,
           role:        def.description || def.name,  // 职位描述（非 system prompt）
           skills:      def.skills,
-          description: def.description,
+          description: def.description ?? '',
           modelId:     def.modelId,
         },
         engineOptions: {
@@ -442,8 +493,10 @@ async function buildWorkerRegistry(
           // 每个 Worker 使用独立 sessionId，历史文件互相隔离
           ...(memory !== undefined && { memory, sessionId: `worker-${def.id}` }),
         },
-        tokenTracker: company.tokenTracker,
-        eventBus:     company.eventBus,
+        tokenTracker:  company.tokenTracker,
+        eventBus:      company.eventBus,
+        inboxService:  messagingService,
+        taskService:   taskManager,
       });
 
       // 注册配置的工具

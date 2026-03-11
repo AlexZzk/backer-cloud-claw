@@ -107,6 +107,9 @@ importers:
       '@bcc/memory-fs':
         specifier: workspace:*
         version: link:../memory-fs
+      '@bcc/messaging':
+        specifier: workspace:*
+        version: link:../messaging
       '@bcc/model-core':
         specifier: workspace:*
         version: link:../model-core
@@ -116,6 +119,9 @@ importers:
       '@bcc/skills':
         specifier: workspace:*
         version: link:../skills
+      '@bcc/task':
+        specifier: workspace:*
+        version: link:../task
     devDependencies:
       '@bcc/protocol-anthropic':
         specifier: workspace:*

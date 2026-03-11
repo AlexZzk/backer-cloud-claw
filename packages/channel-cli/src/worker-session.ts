@@ -76,12 +76,19 @@ export class WorkerSession implements AgentInterface {
   async *stream(userInput: string): AsyncIterable<AgentChunk> {
     this.lastTokenUsage = undefined;
 
+    // 在每次用户消息前，注入 Worker 当前状态上下文（未读消息 + 待处理任务）。
+    // 这让 Worker 始终感知自己的"工作现场"，不再只是响应孤立的用户输入。
+    const stateContext = await this.worker.getStateContext();
+    const enrichedInput = stateContext
+      ? `【当前状态提醒 - 你的工作现场】\n${stateContext}\n\n【本条消息】\n${userInput}`
+      : userInput;
+
     const message = {
       id: randomUUID(),
       threadId: this.threadId,
       from: 'user',
       to: this.worker.id,
-      content: userInput,
+      content: enrichedInput,
       timestamp: Date.now(),
     };
 
