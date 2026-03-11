@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { sessionsApi, dmApi, chatsApi, sendMessageStream, type ApiSession, type ApiMessage, type SessionType, type ApiAsyncChat, type ApiAsyncChatMessage } from '@/api/client';
+import { sessionsApi, dmApi, groupApi, chatsApi, sendMessageStream, type ApiSession, type ApiMessage, type SessionType, type ApiAsyncChat, type ApiAsyncChatMessage } from '@/api/client';
 import { useWorkersStore } from './workers';
 
 export type { ApiMessage as MockMessage };
@@ -10,6 +10,7 @@ export interface ChatSession {
   type: SessionType;
   workerId: string;
   toWorkerId?: string;    // 仅 DM 会话有
+  workerIds?: string[];   // 仅 group 会话有：所有参与 Worker IDs
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -39,13 +40,15 @@ export const useChatStore = defineStore('chat', () => {
   );
 
   /**
-   * 会话联系人列表（仅显示有聊天记录的 Worker）
+   * 会话联系人列表（仅显示有聊天记录的 Worker - chat 类型）
    * 参考微信/飞书风格：只有实际发生过对话才会出现在列表中
+   * group 会话单独在 groupSessionList 中展示，避免重复
    */
   const contactList = computed(() => {
     const workersStore = useWorkersStore();
     return workersStore.workers
       .map(worker => {
+        // 只看 chat（单聊）会话
         const workerSessions = sessions.value
           .filter(s => s.type === 'chat' && s.workerId === worker.id)
           .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -71,6 +74,13 @@ export const useChatStore = defineStore('chat', () => {
       });
   });
 
+  /** group 会话列表（用户与多 Worker 的群聊，独立区域展示） */
+  const groupSessionList = computed(() =>
+    sessions.value
+      .filter(s => s.type === 'group')
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  );
+
   /** Worker↔Worker DM 会话列表（供 DM 区域展示） */
   const dmList = computed(() =>
     sessions.value
@@ -87,7 +97,10 @@ export const useChatStore = defineStore('chat', () => {
 
   function getWorkerSessions(workerId: string): ChatSession[] {
     return sessions.value
-      .filter(s => s.type === 'chat' && s.workerId === workerId)
+      .filter(s =>
+        (s.type === 'chat' && s.workerId === workerId) ||
+        (s.type === 'group' && s.workerIds?.includes(workerId))
+      )
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -157,6 +170,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function selectSession(sessionId: string) {
     activeSessionId.value = sessionId;
+    activeAsyncChatId.value = null;
     const session = sessions.value.find(s => s.id === sessionId);
     if (session) activeWorkerId.value = session.workerId;
   }
@@ -169,6 +183,22 @@ export const useChatStore = defineStore('chat', () => {
       sessions.value.unshift(session);
       activeWorkerId.value = workerId;
       activeSessionId.value = session.id;
+      return session;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  /** 创建用户↔多 Worker 群聊会话 */
+  async function newGroupSession(workerIds: string[]): Promise<ChatSession> {
+    loading.value = true;
+    try {
+      const apiSession = await groupApi.create(workerIds);
+      const session = fromApiSession(apiSession);
+      sessions.value.unshift(session);
+      activeSessionId.value = session.id;
+      // 设置 activeWorkerId 为第一个 worker（用于 header 显示）
+      activeWorkerId.value = workerIds[0] ?? null;
       return session;
     } finally {
       loading.value = false;
@@ -239,8 +269,8 @@ export const useChatStore = defineStore('chat', () => {
 
     isThinking.value = true;
 
-    if (isDm) {
-      // DM 会话：等待 speaker 事件逐条追加两个 worker 的消息
+    if (isDm || session.type === 'group') {
+      // DM / group 会话：等待 speaker 事件逐条追加各 worker 的消息
       let currentSpeakerId: string | null = null;
       let currentMsg: ApiMessage | null = null;
 
@@ -343,10 +373,10 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     sessions, activeWorkerId, activeSessionId, activeSession,
-    isThinking, loading, sessionsLoaded, contactList, dmList,
+    isThinking, loading, sessionsLoaded, contactList, dmList, groupSessionList,
     asyncChats, asyncChatList, activeAsyncChatId, activeAsyncChatMessages,
     getWorkerSessions, selectWorker, selectSession,
-    newSession, newDmSession, deleteSession, sendMessage, clearSession, openWorkerChat,
+    newSession, newDmSession, newGroupSession, deleteSession, sendMessage, clearSession, openWorkerChat,
     fetchAllSessions, loadSessionMessages,
     fetchAsyncChats, selectAsyncChat,
   };
@@ -360,6 +390,7 @@ function fromApiSession(s: ApiSession): ChatSession {
     type:         s.type,
     workerId:     s.workerId,
     toWorkerId:   s.toWorkerId,
+    workerIds:    s.workerIds,
     title:        s.title,
     createdAt:    s.createdAt,
     updatedAt:    s.updatedAt,

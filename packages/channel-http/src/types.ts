@@ -22,8 +22,8 @@ export interface ApiWorker {
 
 // ─── Session ──────────────────────────────────────────────────────────────────
 
-/** 会话类型：chat = 用户↔Worker；dm = Worker↔Worker 直接消息 */
-export type SessionType = 'chat' | 'dm';
+/** 会话类型：chat = 用户↔Worker；dm = Worker↔Worker 直接消息；group = 用户↔多 Worker 群聊 */
+export type SessionType = 'chat' | 'dm' | 'group';
 
 export interface ApiSession {
   id: string;
@@ -31,6 +31,8 @@ export interface ApiSession {
   workerId: string;
   /** DM 会话中接收方 Worker ID */
   toWorkerId?: string;
+  /** group 会话中所有参与 Worker ID 列表 */
+  workerIds?: string[];
   title: string;
   createdAt: number;
   updatedAt: number;
