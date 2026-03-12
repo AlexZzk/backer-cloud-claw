@@ -27,6 +27,10 @@
  *   GET    /api/chats/:chatId             获取会话元信息
  *   GET    /api/chats/:chatId/messages    获取会话消息历史
  *   POST   /api/chats                     创建/打开直聊会话
+ *
+ * Worker 心跳机制（对标 OpenClaw heartbeat）：
+ *   GET    /api/events                    SSE 全局事件流（心跳、消息、任务事件实时推送）
+ *   POST   /api/workers/:id/heartbeat     手动触发某个 Worker 的一次心跳审视
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -44,6 +48,7 @@ import type {
 import { saveConfig, loadConfig } from './config-loader.js';
 import { ChatStore } from '@bcc/messaging';
 import { TaskStore, TaskManager } from '@bcc/task';
+import { WorkerHeartbeatManager, type HeartbeatEvent } from './worker-heartbeat.js';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -209,6 +214,17 @@ export class HttpServer {
   private taskStore = new TaskStore();
   /** 每个 Worker 的 TaskManager（有 todolist 技能的 Worker 才创建） */
   private workerTaskManagers = new Map<string, TaskManager>();
+  /**
+   * Worker 心跳调度器。
+   * 定期驱动每个 Worker 检查收件箱并处理未读消息，实现 Worker 的主动性。
+   * 对标 OpenClaw 的 heartbeat daemon。
+   */
+  private heartbeatManager: WorkerHeartbeatManager | null = null;
+  /**
+   * SSE 全局事件流的客户端连接集合。
+   * GET /api/events 的每个订阅者对应一个 ServerResponse 对象。
+   */
+  private sseClients = new Set<ServerResponse>();
 
   constructor(
     private config: BccConfig,
@@ -221,6 +237,9 @@ export class HttpServer {
     // 从磁盘恢复历史会话（元数据 + 消息，agent 按需重建）
     await this.store.loadFromDisk();
 
+    // ── 初始化 Worker 心跳调度器 ────────────────────────────────────────────────
+    this._initHeartbeatManager();
+
     return new Promise(resolve => {
       const server = createServer((req, res) => {
         void this.dispatch(req, res);
@@ -231,6 +250,63 @@ export class HttpServer {
         resolve();
       });
     });
+  }
+
+  /**
+   * 初始化 WorkerHeartbeatManager：
+   * 为所有已配置的 Worker 注册心跳，启动定时审视。
+   * 心跳事件通过 SSE /api/events 推送给前端。
+   */
+  private _initHeartbeatManager(): void {
+    const workerCount = this.config.workers?.length ?? 0;
+    if (workerCount === 0) return;
+
+    this.heartbeatManager = new WorkerHeartbeatManager(
+      this.chatStore,
+      (workerId) => this.workerAgents.get(workerId),
+      (workerId) => {
+        const cfg = (this.config.workers ?? []).find(w => w.id === workerId);
+        return cfg?.name ?? workerId;
+      },
+      30_000, // 默认 30 秒心跳间隔
+    );
+
+    // 订阅心跳事件，广播给所有 SSE 客户端
+    this.heartbeatManager.on((event: HeartbeatEvent) => {
+      this._broadcastSseEvent('heartbeat', event);
+
+      // 心跳处理完毕后记录日志（仅有实际操作时打印）
+      if (event.type === 'heartbeat:processed' && event.replySent) {
+        console.log(
+          `  💬 [heartbeat] Worker "${event.workerId}" 回复了会话 ${event.chatId.slice(0, 8)}…`,
+        );
+      } else if (event.type === 'heartbeat:error') {
+        console.error(`  ⚠️  [heartbeat] Worker "${event.workerId}" 心跳出错: ${event.error}`);
+      }
+    });
+
+    // 启动所有 Worker 的心跳
+    const workerIds = (this.config.workers ?? []).map(w => w.id);
+    this.heartbeatManager.startAll(workerIds);
+    console.log(
+      `  💓 Worker 心跳已启动（${workerIds.length} 个 Worker，间隔 30s）：${workerIds.join('、')}`,
+    );
+  }
+
+  /**
+   * 向所有 SSE 客户端广播一个事件。
+   */
+  private _broadcastSseEvent(eventName: string, data: unknown): void {
+    if (this.sseClients.size === 0) return;
+    const line = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const client of this.sseClients) {
+      try {
+        client.write(line);
+      } catch {
+        // 客户端已断开，从集合中移除
+        this.sseClients.delete(client);
+      }
+    }
   }
 
   // ── 路由分发 ────────────────────────────────────────────────────────────────
@@ -258,6 +334,12 @@ export class HttpServer {
     // ── GET /api/health
     if (method === 'GET' && path === '/api/health') {
       ok(res, { status: 'ok', timestamp: Date.now() });
+      return;
+    }
+
+    // ── GET /api/events  (SSE 全局事件流：心跳、消息、任务事件实时推送)
+    if (method === 'GET' && path === '/api/events') {
+      this.handleSseEvents(req, res);
       return;
     }
 
@@ -311,6 +393,15 @@ export class HttpServer {
     if (method === 'GET' && path === '/api/analytics/tokens') {
       this.handleGetAnalytics(res);
       return;
+    }
+
+    // ── POST /api/workers/:workerId/heartbeat  (手动触发一次心跳审视)
+    {
+      const m = matchRoute('/api/workers/:workerId/heartbeat', path);
+      if (m && method === 'POST') {
+        await this.handleTriggerHeartbeat(res, m.params['workerId']!);
+        return;
+      }
     }
 
     // ── POST /api/workers/:workerId/sessions
@@ -1173,6 +1264,9 @@ export class HttpServer {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
     }
 
+    // 为新 Worker 启动心跳
+    this.heartbeatManager?.start(newWorker.id);
+
     const apiWorker: ApiWorker = {
       id:          newWorker.id,
       name:        newWorker.name,
@@ -1260,7 +1354,8 @@ export class HttpServer {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
     }
 
-    // 清除已缓存的 Agent
+    // 清除已缓存的 Agent，停止心跳
+    this.heartbeatManager?.stop(workerId);
     this.evictAgent(workerId);
 
     cors(res);
@@ -1416,6 +1511,40 @@ export class HttpServer {
       },
     });
 
+    // 工具：向另一个 Worker 发送私信（直接消息）
+    // 这是心跳驱动的异步通信的核心工具：Worker 可以主动给同事发消息
+    engine.registerTool({
+      definition: {
+        name: 'send_direct_message',
+        description:
+          '向另一个 Worker 发送一条私信（直接消息）。' +
+          '对方 Worker 会在下一个心跳周期自动读取并回复。' +
+          '适合：请求协作、传递信息、触发另一个 Worker 执行任务。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            toWorkerId: { type: 'string', description: '收件方的 Worker ID' },
+            content:    { type: 'string', description: '消息正文' },
+          },
+          required: ['toWorkerId', 'content'],
+        },
+      },
+      handler: async (input: Record<string, unknown>) => {
+        const { toWorkerId, content } = input as { toWorkerId: string; content: string };
+        // 创建或打开两人之间的直聊会话（幂等）
+        const chat = await chatStore.createChat([selfWorkerId, toWorkerId], 'direct');
+        const msg = await chatStore.sendMessage(chat.id, selfWorkerId, content);
+        return [
+          `✅ 私信已发送`,
+          `   收件方：${toWorkerId}`,
+          `   会话 ID：${chat.id.slice(0, 8)}…`,
+          `   消息 ID：${msg.id}`,
+          `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
+          `   （对方将在下一个心跳周期读取并回复）`,
+        ].join('\n');
+      },
+    });
+
     // ── 注册任务管理工具（仅限具备 'todolist' 技能的 Worker）──────────────────
     if (workerCfg.skills?.includes('todolist')) {
       const taskMgr = this.getTaskManagerForWorker(workerCfg.id);
@@ -1527,8 +1656,78 @@ export class HttpServer {
     return tm;
   }
 
-  /** Worker 配置变更时调用，使其下次请求重新初始化 Agent */
+  /**
+   * Worker 配置变更时调用，使其下次请求重新初始化 Agent。
+   * 同时重启该 Worker 的心跳（确保新配置生效）。
+   */
   private evictAgent(workerId: string) {
     this.workerAgents.delete(workerId);
+    // 重启心跳（Worker 配置更新后，下次心跳使用新的 Agent）
+    if (this.heartbeatManager?.isRunning(workerId)) {
+      this.heartbeatManager.stop(workerId);
+      this.heartbeatManager.start(workerId);
+    }
+  }
+
+  // ─── 心跳 & SSE 事件流 ────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/events
+   *
+   * SSE 全局事件流，供前端实时订阅 Worker 的主动行为事件。
+   *
+   * 事件类型：
+   *   heartbeat  - Worker 心跳事件（tick / processed / idle / error）
+   *
+   * 使用示例（前端）：
+   *   const es = new EventSource('/api/events');
+   *   es.addEventListener('heartbeat', e => console.log(JSON.parse(e.data)));
+   */
+  private handleSseEvents(req: IncomingMessage, res: ServerResponse): void {
+    cors(res);
+    res.writeHead(200, {
+      'Content-Type':  'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection':    'keep-alive',
+    });
+
+    // 发送初始连接确认（让客户端知道连接成功）
+    res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n`);
+
+    // 注册客户端
+    this.sseClients.add(res);
+
+    // 客户端断开时清理
+    req.on('close', () => {
+      this.sseClients.delete(res);
+    });
+  }
+
+  /**
+   * POST /api/workers/:workerId/heartbeat
+   *
+   * 手动触发某个 Worker 的一次心跳审视。
+   * 可用于：测试心跳机制、在新消息到达时立即触发（无需等待下一个定时间隔）。
+   */
+  private async handleTriggerHeartbeat(res: ServerResponse, workerId: string): Promise<void> {
+    const workerCfg = (this.config.workers ?? []).find(w => w.id === workerId);
+    if (!workerCfg) {
+      notFound(res);
+      return;
+    }
+
+    if (!this.heartbeatManager) {
+      ok(res, { workerId, message: '心跳管理器未启动（无 Worker 配置）', triggered: false });
+      return;
+    }
+
+    try {
+      // 懒加载 Agent（确保心跳触发时 Agent 已初始化）
+      await this.getAgentForWorker(workerCfg);
+      await this.heartbeatManager.triggerHeartbeat(workerId);
+      ok(res, { workerId, message: '心跳审视已触发', triggered: true });
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : String(err));
+    }
   }
 }
