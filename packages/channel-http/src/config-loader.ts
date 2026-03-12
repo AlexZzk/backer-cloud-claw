@@ -33,6 +33,8 @@ export interface WorkerConfig {
   skills: string[];
   description: string;
   modelId: string;
+  /** 可选：心跳/收件箱审视用的轻量模型 ID */
+  reviewModelId?: string;
   primary?: boolean;
 }
 

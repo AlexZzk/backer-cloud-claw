@@ -478,6 +478,16 @@ async function buildWorkerRegistry(
       // 每个 Worker 拥有独立的 TaskManager（任务存储隔离）
       const taskManager = new TaskManager({ store: taskStore, workerId: def.id, eventBus: company.eventBus });
 
+      // 可选：审视引擎（心跳用，使用更便宜的模型降低后台成本）
+      let reviewEngineOptions;
+      if (def.reviewModelId) {
+        const reviewModelInstance = modelInstances.find(m => m.id === def.reviewModelId);
+        if (reviewModelInstance) {
+          const reviewAdapter = await createAdapter(reviewModelInstance);
+          reviewEngineOptions = { model: reviewAdapter, system: fullSystem };
+        }
+      }
+
       const worker = await Worker.create({
         profile: {
           id:          def.id,
@@ -486,6 +496,7 @@ async function buildWorkerRegistry(
           skills:      def.skills,
           description: def.description ?? '',
           modelId:     def.modelId,
+          ...(def.reviewModelId && { reviewModelId: def.reviewModelId }),
         },
         engineOptions: {
           model:  adapter,
@@ -493,6 +504,7 @@ async function buildWorkerRegistry(
           // 每个 Worker 使用独立 sessionId，历史文件互相隔离
           ...(memory !== undefined && { memory, sessionId: `worker-${def.id}` }),
         },
+        ...(reviewEngineOptions && { reviewEngineOptions }),
         tokenTracker:  company.tokenTracker,
         eventBus:      company.eventBus,
         inboxService:  messagingService,

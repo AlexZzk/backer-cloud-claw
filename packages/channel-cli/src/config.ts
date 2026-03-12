@@ -119,6 +119,8 @@ export interface WorkerConfig {
   description: string;
   /** 引用 config.models 中的实例 ID，例如 "claude"、"bailian" */
   modelId: string;
+  /** 可选：心跳/收件箱审视用的轻量模型 ID（比主模型便宜） */
+  reviewModelId?: string;
   /** 是否为默认 Worker（不传 --worker 参数时使用） */
   primary?: boolean;
 }

@@ -95,6 +95,10 @@
           <div class="detail-section">
             <h3>{{ t('workers.workerModel') }}</h3>
             <a-tag color="purple">{{ selectedWorker.modelId }}</a-tag>
+            <template v-if="selectedWorker.reviewModelId">
+              <span style="margin: 0 6px; color: var(--color-text-3); font-size: 12px">审视模型</span>
+              <a-tag color="arcoblue">{{ selectedWorker.reviewModelId }}</a-tag>
+            </template>
           </div>
 
           <div class="detail-section">
@@ -223,6 +227,25 @@
         </a-col>
       </a-row>
 
+      <a-row :gutter="16">
+        <a-col :span="24">
+          <a-form-item label="审视模型（可选）">
+            <a-select
+              v-model="form.reviewModelId"
+              placeholder="不设置则与主模型相同（心跳/收件箱处理用）"
+              allow-clear
+            >
+              <a-option value="">不使用独立审视模型</a-option>
+              <a-option
+                v-for="m in modelsStore.models"
+                :key="m.id"
+                :value="m.id"
+              >{{ m.displayName }}（{{ m.id }}）</a-option>
+            </a-select>
+          </a-form-item>
+        </a-col>
+      </a-row>
+
       <a-form-item :label="t('workers.workerDescription')">
         <a-input v-model="form.description" :placeholder="t('workers.descPlaceholder')" />
       </a-form-item>
@@ -293,6 +316,7 @@ const form = reactive({
   name: '',
   description: '',
   modelId: '',
+  reviewModelId: '',
   role: '',
   skills: [] as string[],
   tools: [] as string[],
@@ -332,7 +356,7 @@ function openCreate() {
   editingWorker.value = null;
   Object.assign(form, {
     id: '', name: '', description: '',
-    modelId: defaultModelId.value,
+    modelId: defaultModelId.value, reviewModelId: '',
     role: '', skills: [], tools: [], isPrimary: false, avatar: '🤖',
   });
   showModal.value = true;
@@ -345,6 +369,7 @@ function openEdit(worker: MockWorker) {
     name: worker.name,
     description: worker.description,
     modelId: worker.modelId,
+    reviewModelId: worker.reviewModelId ?? '',
     role: worker.role,
     skills: [...worker.skills],
     tools: [...worker.tools],
@@ -379,25 +404,27 @@ async function handleSave() {
   try {
     if (editingWorker.value) {
       await workersStore.updateWorker(editingWorker.value.id, {
-        name:        form.name.trim(),
-        description: form.description.trim(),
-        modelId:     form.modelId,
-        role:        form.role.trim(),
-        skills:      form.skills,
-        tools:       form.tools,
-        isPrimary:   form.isPrimary,
+        name:          form.name.trim(),
+        description:   form.description.trim(),
+        modelId:       form.modelId,
+        reviewModelId: form.reviewModelId || undefined,
+        role:          form.role.trim(),
+        skills:        form.skills,
+        tools:         form.tools,
+        isPrimary:     form.isPrimary,
       });
       Message.success('Worker 已更新');
     } else {
       await workersStore.createWorker({
-        id:          form.id.trim(),
-        name:        form.name.trim(),
-        description: form.description.trim(),
-        modelId:     form.modelId,
-        role:        form.role.trim(),
-        skills:      form.skills,
-        tools:       form.tools,
-        isPrimary:   form.isPrimary,
+        id:            form.id.trim(),
+        name:          form.name.trim(),
+        description:   form.description.trim(),
+        modelId:       form.modelId,
+        reviewModelId: form.reviewModelId || undefined,
+        role:          form.role.trim(),
+        skills:        form.skills,
+        tools:         form.tools,
+        isPrimary:     form.isPrimary,
       });
       Message.success('Worker 已创建');
     }

@@ -46,9 +46,9 @@ import type {
   WorkerConfig,
 } from './config-loader.js';
 import { saveConfig, loadConfig } from './config-loader.js';
-import { ChatStore } from '@bcc/messaging';
+import { ChatStore, MessagingService } from '@bcc/messaging';
 import { TaskStore, TaskManager } from '@bcc/task';
-import { WorkerHeartbeatManager, type HeartbeatEvent } from './worker-heartbeat.js';
+import { Company, Worker } from '@bcc/org';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -215,11 +215,12 @@ export class HttpServer {
   /** 每个 Worker 的 TaskManager（有 todolist 技能的 Worker 才创建） */
   private workerTaskManagers = new Map<string, TaskManager>();
   /**
-   * Worker 心跳调度器。
-   * 定期驱动每个 Worker 检查收件箱并处理未读消息，实现 Worker 的主动性。
-   * 对标 OpenClaw 的 heartbeat daemon。
+   * Company：核心业务逻辑层（与 CLI 模式共享同一实现）。
+   * 管理 Worker 实例、心跳调度（WorkerScheduler）和 Token 统计。
    */
-  private heartbeatManager: WorkerHeartbeatManager | null = null;
+  private company: Company | null = null;
+  /** 共享消息服务（与 company.eventBus 绑定） */
+  private messagingService: MessagingService | null = null;
   /**
    * SSE 全局事件流的客户端连接集合。
    * GET /api/events 的每个订阅者对应一个 ServerResponse 对象。
@@ -237,8 +238,8 @@ export class HttpServer {
     // 从磁盘恢复历史会话（元数据 + 消息，agent 按需重建）
     await this.store.loadFromDisk();
 
-    // ── 初始化 Worker 心跳调度器 ────────────────────────────────────────────────
-    this._initHeartbeatManager();
+    // ── 初始化 Company（核心业务逻辑层：Worker 实例 + 调度器 + 心跳）──────────
+    await this._initCompany();
 
     return new Promise(resolve => {
       const server = createServer((req, res) => {
@@ -253,44 +254,110 @@ export class HttpServer {
   }
 
   /**
-   * 初始化 WorkerHeartbeatManager：
-   * 为所有已配置的 Worker 注册心跳，启动定时审视。
-   * 心跳事件通过 SSE /api/events 推送给前端。
+   * 初始化 Company（核心业务逻辑层）：
+   * - 创建 Company 实例（含 EventBus、TokenTracker、WorkerScheduler）
+   * - 为所有已配置的 Worker 创建 Worker 实例并加入 Company
+   * - 订阅 org:event 事件，通过 SSE /api/events 推送给前端
+   * - 启动 WorkerScheduler（定期驱动 Worker.processInbox()）
+   *
+   * CLI 与 HTTP 共享同一套核心逻辑，只是展示层不同。
    */
-  private _initHeartbeatManager(): void {
+  private async _initCompany(): Promise<void> {
     const workerCount = this.config.workers?.length ?? 0;
     if (workerCount === 0) return;
 
-    this.heartbeatManager = new WorkerHeartbeatManager(
-      this.chatStore,
-      (workerId) => this.workerAgents.get(workerId),
-      (workerId) => {
-        const cfg = (this.config.workers ?? []).find(w => w.id === workerId);
-        return cfg?.name ?? workerId;
-      },
-      30_000, // 默认 30 秒心跳间隔
-    );
+    this.company = new Company({ name: 'BCC HTTP Server' });
+    this.messagingService = new MessagingService({
+      store: this.chatStore,
+      eventBus: this.company.eventBus,
+    });
 
-    // 订阅心跳事件，广播给所有 SSE 客户端
-    this.heartbeatManager.on((event: HeartbeatEvent) => {
-      this._broadcastSseEvent('heartbeat', event);
-
-      // 心跳处理完毕后记录日志（仅有实际操作时打印）
-      if (event.type === 'heartbeat:processed' && event.replySent) {
-        console.log(
-          `  💬 [heartbeat] Worker "${event.workerId}" 回复了会话 ${event.chatId.slice(0, 8)}…`,
-        );
-      } else if (event.type === 'heartbeat:error') {
-        console.error(`  ⚠️  [heartbeat] Worker "${event.workerId}" 心跳出错: ${event.error}`);
+    // 订阅 org:event 事件，广播给所有 SSE 客户端
+    this.company.onEvent((event) => {
+      this._broadcastSseEvent('org', event);
+      if (event.type === 'worker:inbox:checked' && event.pendingCount === -1) {
+        console.error(`  ⚠️  [heartbeat] Worker "${event.workerId}" 心跳出错`);
       }
     });
 
-    // 启动所有 Worker 的心跳
+    // 为所有 Worker 创建实例并加入 Company
+    for (const workerCfg of this.config.workers ?? []) {
+      try {
+        const worker = await this._createWorker(workerCfg);
+        this.company.addWorker(worker);
+      } catch (err) {
+        console.error(`  ⚠️  初始化 Worker "${workerCfg.id}" 失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // 启动所有 Worker 的定时心跳（间隔 30s）
     const workerIds = (this.config.workers ?? []).map(w => w.id);
-    this.heartbeatManager.startAll(workerIds);
+    this.company.scheduler.startAll(30_000);
     console.log(
       `  💓 Worker 心跳已启动（${workerIds.length} 个 Worker，间隔 30s）：${workerIds.join('、')}`,
     );
+  }
+
+  /**
+   * 为指定 WorkerConfig 创建 @bcc/org Worker 实例（用于 Company / 心跳调度）。
+   */
+  private async _createWorker(workerCfg: WorkerConfig): Promise<Worker> {
+    const modelInstance = this.config.models.find(m => m.id === workerCfg.modelId)
+      ?? this.config.models.find(m => m.primary)
+      ?? this.config.models[0];
+
+    if (!modelInstance) {
+      throw new Error(`Worker "${workerCfg.id}" 找不到可用的模型配置`);
+    }
+
+    const adapter = await createAdapter(modelInstance);
+
+    const identityHeader = workerCfg.description
+      ? `你的名字是「${workerCfg.name}」。${workerCfg.description}`
+      : `你的名字是「${workerCfg.name}」。`;
+
+    const skillPrompts: string[] = [];
+    for (const skillId of workerCfg.skills ?? []) {
+      const skill = findBuiltin(skillId);
+      if (skill?.system) skillPrompts.push(skill.system);
+    }
+    if (!workerCfg.skills?.includes('communicate')) {
+      const communicateSkill = findBuiltin('communicate');
+      if (communicateSkill?.system) skillPrompts.push(communicateSkill.system);
+    }
+    const system = [identityHeader, workerCfg.role || '', ...skillPrompts].filter(Boolean).join('\n\n');
+
+    // 可选：审视引擎（心跳用，更便宜的模型）
+    let reviewEngineOptions;
+    if (workerCfg.reviewModelId) {
+      const reviewModelInstance = this.config.models.find(m => m.id === workerCfg.reviewModelId);
+      if (reviewModelInstance) {
+        const reviewAdapter = await createAdapter(reviewModelInstance);
+        reviewEngineOptions = { model: reviewAdapter, system };
+      }
+    }
+
+    const taskService = workerCfg.skills?.includes('todolist')
+      ? this.getTaskManagerForWorker(workerCfg.id)
+      : undefined;
+
+    return Worker.create({
+      profile: {
+        id:          workerCfg.id,
+        name:        workerCfg.name,
+        role:        workerCfg.role,
+        skills:      workerCfg.skills,
+        description: workerCfg.description,
+        modelId:     workerCfg.modelId,
+        ...(workerCfg.reviewModelId && { reviewModelId: workerCfg.reviewModelId }),
+      },
+      engineOptions: { model: adapter, system },
+      ...(reviewEngineOptions && { reviewEngineOptions }),
+      tokenTracker:  this.company!.tokenTracker,
+      eventBus:      this.company!.eventBus,
+      inboxService:  this.messagingService!,
+      ...(taskService && { taskService }),
+    });
   }
 
   /**
@@ -549,6 +616,7 @@ export class HttpServer {
       description: w.description,
       skills:      w.skills,
       modelId:     w.modelId,
+      ...(w.reviewModelId && { reviewModelId: w.reviewModelId }),
       role:        w.role,
       tools:       w.tools ?? [],
       isPrimary:   w.primary ?? false,
@@ -1224,7 +1292,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id, name, modelId, role, description, skills, tools, primary } = body;
+    const { id, name, modelId, reviewModelId, role, description, skills, tools, primary } = body;
     if (!id?.trim())      { badRequest(res, '"id" is required'); return; }
     if (!name?.trim())    { badRequest(res, '"name" is required'); return; }
     if (!modelId?.trim()) { badRequest(res, '"modelId" is required'); return; }
@@ -1243,6 +1311,7 @@ export class HttpServer {
       id: id.trim(),
       name: name.trim(),
       modelId: modelId.trim(),
+      ...(reviewModelId?.trim() && { reviewModelId: reviewModelId.trim() }),
       role: role?.trim() ?? '',
       description: description?.trim() ?? '',
       skills: skills ?? [],
@@ -1264,8 +1333,16 @@ export class HttpServer {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
     }
 
-    // 为新 Worker 启动心跳
-    this.heartbeatManager?.start(newWorker.id);
+    // 若 Company 已初始化，动态加入新 Worker 并启动心跳
+    if (this.company && this.messagingService) {
+      try {
+        const worker = await this._createWorker(newWorker);
+        this.company.addWorker(worker);
+        this.company.scheduler.start(newWorker.id, 30_000);
+      } catch (err) {
+        console.error(`  ⚠️  注册 Worker "${newWorker.id}" 到 Company 失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     const apiWorker: ApiWorker = {
       id:          newWorker.id,
@@ -1273,6 +1350,7 @@ export class HttpServer {
       description: newWorker.description,
       skills:      newWorker.skills,
       modelId:     newWorker.modelId,
+      ...(newWorker.reviewModelId && { reviewModelId: newWorker.reviewModelId }),
       role:        newWorker.role,
       tools:       newWorker.tools ?? [],
       isPrimary:   newWorker.primary ?? false,
@@ -1294,10 +1372,15 @@ export class HttpServer {
     }
 
     const existing = workers[idx]!;
+    // reviewModelId: 传空字符串表示清除，undefined 表示不修改
+    const newReviewModelId = body.reviewModelId !== undefined
+      ? (body.reviewModelId.trim() || undefined)
+      : existing.reviewModelId;
     const updated: WorkerConfig = {
       id:          workerId,
       name:        body.name?.trim()        ?? existing.name,
       modelId:     body.modelId?.trim()     ?? existing.modelId,
+      ...(newReviewModelId && { reviewModelId: newReviewModelId }),
       role:        body.role?.trim()        ?? existing.role,
       description: body.description?.trim() ?? existing.description,
       skills:      body.skills              ?? existing.skills,
@@ -1317,8 +1400,20 @@ export class HttpServer {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
     }
 
-    // Worker 配置已变更，清除缓存的 Agent（下次请求会以新配置重建）
+    // Worker 配置已变更，清除缓存的会话 Agent（下次请求以新配置重建）
     this.evictAgent(workerId);
+
+    // 若 Company 已初始化，重新注册 Worker（配置可能已更改 model/reviewModelId 等）
+    if (this.company && this.messagingService) {
+      try {
+        this.company.removeWorker(workerId);
+        const worker = await this._createWorker(updated);
+        this.company.addWorker(worker);
+        this.company.scheduler.start(workerId, 30_000);
+      } catch (err) {
+        console.error(`  ⚠️  重新注册 Worker "${workerId}" 到 Company 失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     const apiWorker: ApiWorker = {
       id:          updated.id,
@@ -1326,6 +1421,7 @@ export class HttpServer {
       description: updated.description,
       skills:      updated.skills,
       modelId:     updated.modelId,
+      ...(updated.reviewModelId && { reviewModelId: updated.reviewModelId }),
       role:        updated.role,
       tools:       updated.tools ?? [],
       isPrimary:   updated.primary ?? false,
@@ -1354,9 +1450,9 @@ export class HttpServer {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
     }
 
-    // 清除已缓存的 Agent，停止心跳
-    this.heartbeatManager?.stop(workerId);
+    // 清除已缓存的会话 Agent，从 Company 移除（同时停止心跳调度）
     this.evictAgent(workerId);
+    this.company?.removeWorker(workerId);
 
     cors(res);
     res.writeHead(204);
@@ -1662,11 +1758,6 @@ export class HttpServer {
    */
   private evictAgent(workerId: string) {
     this.workerAgents.delete(workerId);
-    // 重启心跳（Worker 配置更新后，下次心跳使用新的 Agent）
-    if (this.heartbeatManager?.isRunning(workerId)) {
-      this.heartbeatManager.stop(workerId);
-      this.heartbeatManager.start(workerId);
-    }
   }
 
   // ─── 心跳 & SSE 事件流 ────────────────────────────────────────────────────────
@@ -1716,15 +1807,13 @@ export class HttpServer {
       return;
     }
 
-    if (!this.heartbeatManager) {
-      ok(res, { workerId, message: '心跳管理器未启动（无 Worker 配置）', triggered: false });
+    if (!this.company) {
+      ok(res, { workerId, message: '心跳调度器未启动（无 Worker 配置）', triggered: false });
       return;
     }
 
     try {
-      // 懒加载 Agent（确保心跳触发时 Agent 已初始化）
-      await this.getAgentForWorker(workerCfg);
-      await this.heartbeatManager.triggerHeartbeat(workerId);
+      await this.company.scheduler.triggerReview(workerId);
       ok(res, { workerId, message: '心跳审视已触发', triggered: true });
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : String(err));
