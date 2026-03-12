@@ -45,7 +45,7 @@ export class MessagingService {
   /**
    * 创建一个多人群聊会话。
    */
-  async createGroupChat(participants: string[], title: string): Promise<Chat> {
+  async createGroupChat(participants: string[], title?: string): Promise<Chat> {
     const chat = await this.store.createChat(participants, 'group', title);
     this.eventBus.emit('org:event', {
       type: 'chat:opened',

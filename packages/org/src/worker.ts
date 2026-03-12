@@ -33,12 +33,26 @@ export interface AsyncInboxService {
   /**
    * 打开（或创建）两人之间的私聊会话，返回会话信息。
    * 幂等：两人之间已有 active 会话时直接返回现有会话。
-   * Worker 发消息前必须先获取 chatId，此方法是标准入口。
    */
   openDirectChat(
     participant1: string,
     participant2: string,
   ): Promise<{ id: string; participants: string[] }>;
+
+  /**
+   * 创建群聊会话（三人及以上）。
+   */
+  createGroupChat(
+    participants: string[],
+    title?: string,
+  ): Promise<{ id: string; participants: string[]; title?: string }>;
+
+  /**
+   * 列出某参与者相关的所有会话。
+   */
+  listChats(participantId?: string): Promise<Array<{
+    id: string; type: string; participants: string[]; title?: string; status: string;
+  }>>;
 
   /** 异步发送一条消息（不等待接收方处理） */
   post(
@@ -532,137 +546,102 @@ export class Worker implements Participant {
 
   private _registerInboxTools(inboxService: AsyncInboxService): void {
     const workerId = this.id;
+    const workerName = this.profile.name;
 
-    // 工具：主动查收收件箱（Worker 最常用的自我感知工具）
+    // 工具：创建群聊
     this.engine.registerTool({
       definition: {
-        name: 'check_inbox',
-        description: '查看我的未读消息收件箱。当有人给我发消息（同事或老板），消息会存在这里，需要我主动查收。查收后消息会被标记为已读。',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            mark_as_read: {
-              type: 'boolean',
-              description: '是否将查看的消息标记为已读，默认 true',
-            },
-          },
-          required: [],
-        },
-      },
-      handler: async (input: Record<string, unknown>) => {
-        const markAsRead = (input['mark_as_read'] as boolean | undefined) ?? true;
-        const pending = await inboxService.getPendingMessages(workerId);
-
-        if (pending.length === 0) {
-          return '收件箱为空，暂无未读消息。';
-        }
-
-        // Group by chat
-        const byChatId = new Map<string, typeof pending>();
-        for (const item of pending) {
-          const group = byChatId.get(item.chat.id) ?? [];
-          group.push(item);
-          byChatId.set(item.chat.id, group);
-        }
-
-        const lines: string[] = [`共 ${pending.length} 条未读消息：\n`];
-        for (const [chatId, items] of byChatId) {
-          const firstItem = items[0];
-          const chatTitle = firstItem?.chat.title
-            ?? `与 ${firstItem?.chat.participants.filter(p => p !== workerId).join(', ') ?? '未知'} 的对话`;
-          lines.push(`【${chatTitle}】（会话 ID: ${chatId}）`);
-          for (const item of items) {
-            const time = new Date(item.message.timestamp).toLocaleString('zh-CN');
-            lines.push(`  [${time}] ${item.message.from}: ${item.message.content}`);
-            lines.push(`  消息 ID: ${item.message.id}`);
-          }
-          lines.push('');
-
-          if (markAsRead) {
-            await inboxService.markRead(chatId, workerId);
-          }
-        }
-
-        if (markAsRead) {
-          lines.push('（所有消息已标记为已读）');
-        }
-
-        return lines.join('\n');
-      },
-    });
-
-    // 工具：给指定同事发送异步消息（自动创建/打开会话）
-    //
-    // 设计关键点：
-    // - 参数是"收件人 ID"（to），不是 chatId，更符合人类直觉
-    // - 系统自动 openDirectChat() 确保会话存在，并在系统中留档
-    // - 消息发送方（from）永远是本 Worker 自己，保证溯源
-    this.engine.registerTool({
-      definition: {
-        name: 'send_message',
+        name: 'create_group_chat',
         description:
-          '给指定同事发送一条异步消息。系统会自动打开/创建你们之间的对话，消息永久存档可追溯。' +
-          '接收方会在他们的工作审视周期中看到这条消息——这是团队内部异步沟通的标准方式。',
+          '创建一个群聊，用于与 2 个或以上同事协作。' +
+          '主管（用户）会自动加入群聊，无需手动添加。' +
+          '返回 chatId，后续用 send_to_group 在群内发消息。',
         inputSchema: {
           type: 'object',
           properties: {
-            to: {
-              type: 'string',
-              description: '收件人的 Worker ID（例如 "worker2"、"worker3"）',
+            participants: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '参与者的 Worker ID 数组（不需要包含自己和主管，系统自动添加）',
             },
-            content: {
-              type: 'string',
-              description: '消息正文。请清晰说明：你是谁、为什么发这条消息、希望对方做什么。',
-            },
+            title: { type: 'string', description: '群聊名称（可选）' },
           },
-          required: ['to', 'content'],
+          required: ['participants'],
         },
       },
       handler: async (input: Record<string, unknown>) => {
-        const { to, content } = input as { to: string; content: string };
-
-        // 1. 自动打开/创建与收件人的私聊会话（幂等）
-        const chat = await inboxService.openDirectChat(workerId, to);
-
-        // 2. 以本 Worker 身份发送消息，from 字段永远是 workerId
-        const msg = await inboxService.post(chat.id, workerId, content);
-
+        const { participants, title } = input as { participants: string[]; title?: string };
+        // 自动加入自己和 "user"（人类主管），去重
+        const allParticipants = [...new Set([workerId, ...(participants as string[]), 'user'])];
+        const chat = await inboxService.createGroupChat(allParticipants, title);
         return [
-          `✅ 消息已发送给 ${to}`,
-          `   发件人：${workerId}（我）`,
-          `   会话 ID：${chat.id}`,
-          `   消息 ID：${msg.id}`,
-          `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
-          `   对方会在他们的工作时间查收。`,
+          `✅ 群聊已创建`,
+          `   群聊 ID：${chat.id}`,
+          `   群聊名称：${chat.title ?? '（无标题）'}`,
+          `   参与成员：${allParticipants.join('、')}`,
+          `   （主管已自动加入，确保透明可查）`,
+          `   提示：使用 send_to_group 发送消息，用 @workerID 指派任务`,
         ].join('\n');
       },
     });
 
-    // 工具：查看某个聊天会话的历史消息
+    // 工具：在群聊中发送消息
     this.engine.registerTool({
       definition: {
-        name: 'get_chat_history',
-        description: '获取指定聊天会话的最近消息历史，用于了解对话背景。',
+        name: 'send_to_group',
+        description:
+          '在群聊中发送消息，可用 @workerID 格式指派任务给特定成员。' +
+          '例如：@worker2，请完成需求文档；@worker3，请评估技术方案。',
         inputSchema: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '聊天会话 ID' },
-            limit: { type: 'number', description: '最多返回的消息条数，默认 10' },
+            chatId:  { type: 'string', description: '群聊 ID（由 create_group_chat 返回）' },
+            content: { type: 'string', description: '消息内容，可包含 @workerID 指派任务' },
           },
-          required: ['chatId'],
+          required: ['chatId', 'content'],
         },
       },
       handler: async (input: Record<string, unknown>) => {
-        const { chatId, limit = 10 } = input as { chatId: string; limit?: number };
-        const messages = await inboxService.getMessages(chatId, limit);
-        if (messages.length === 0) return '该会话暂无消息记录。';
-        return messages
-          .map(m => {
-            const sender = m.from === workerId ? '我' : m.from;
-            const time = new Date(m.timestamp).toLocaleString('zh-CN');
-            return `[${time}] ${sender}: ${m.content}`;
-          })
-          .join('\n');
+        const { chatId, content } = input as { chatId: string; content: string };
+        const msg = await inboxService.post(chatId, workerId, content);
+        return [
+          `✅ 消息已发送`,
+          `   发件人：${workerId}（${workerName}）`,
+          `   会话 ID：${(chatId as string).slice(0, 8)}…`,
+          `   消息 ID：${msg.id}`,
+          `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
+        ].join('\n');
+      },
+    });
+
+    // 工具：查找 @提及了我的消息
+    this.engine.registerTool({
+      definition: {
+        name: 'check_my_mentions',
+        description:
+          '扫描所有群聊，查找 @提及了我的消息。' +
+          '看到任务指派后，应使用任务工具记录到自己的待办列表。',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+      },
+      handler: async () => {
+        const chats = await inboxService.listChats(workerId);
+        const mentions: string[] = [];
+
+        for (const chat of chats) {
+          if (chat.status === 'archived') continue;
+          const messages = await inboxService.getMessages(chat.id);
+          for (const m of messages) {
+            if (m.from === workerId) continue;  // 自己发的不算
+            if (m.content.includes(`@${workerId}`) || m.content.includes(`@${workerName}`)) {
+              const time = new Date(m.timestamp).toLocaleString('zh-CN');
+              const groupLabel = chat.title ?? `${chat.id.slice(0, 8)}…`;
+              mentions.push(`[${time}] 群聊「${groupLabel}」来自 ${m.from}：${m.content}`);
+            }
+          }
+        }
+
+        if (mentions.length === 0) return '📭 没有找到 @提及了我的消息。';
+        return `📬 找到 ${mentions.length} 条 @提及消息：\n\n` + mentions.join('\n\n');
       },
     });
   }

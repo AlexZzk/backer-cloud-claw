@@ -32,7 +32,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { AgentEngine } from '@bcc/agent-engine';
-import { getBuiltinTool } from '@bcc/skills';
+import { getBuiltinTool, findBuiltin } from '@bcc/skills';
 import type { AgentInterface } from '@bcc/foundation';
 import { SessionStore } from './session-store.js';
 import type { ApiWorker, ApiModel, TokenStats, SseEvent } from './types.js';
@@ -1177,7 +1177,19 @@ export class HttpServer {
       ? `你的名字是「${workerCfg.name}」。${workerCfg.description}`
       : `你的名字是「${workerCfg.name}」。`;
 
-    const system = [identityHeader, workerCfg.role || ''].filter(Boolean).join('\n\n');
+    // 注入技能系统提示（skills 数组中列出的每个技能若有 system 字段则追加）
+    const skillPrompts: string[] = [];
+    for (const skillId of workerCfg.skills ?? []) {
+      const skill = findBuiltin(skillId);
+      if (skill?.system) skillPrompts.push(skill.system);
+    }
+    // communicate 技能是核心通信能力，所有 Worker 默认具备
+    if (!workerCfg.skills?.includes('communicate')) {
+      const communicateSkill = findBuiltin('communicate');
+      if (communicateSkill?.system) skillPrompts.push(communicateSkill.system);
+    }
+
+    const system = [identityHeader, workerCfg.role || '', ...skillPrompts].filter(Boolean).join('\n\n');
 
     const engine = await AgentEngine.create({
       model:  adapter,
@@ -1189,33 +1201,69 @@ export class HttpServer {
       if (tool) engine.registerTool(tool);
     }
 
-    // ── 注册消息传递工具（与 CLI 模式共享同一 ChatStore，持久化到 ~/.bcc/chats）──
+    // ── 注册群组沟通工具（与 CLI 模式共享同一 ChatStore，持久化到 ~/.bcc/chats）──
     const selfWorkerId = workerCfg.id;
+    const selfWorkerName = workerCfg.name;
     const chatStore = this.chatStore;
 
     engine.registerTool({
       definition: {
-        name: 'send_message',
+        name: 'create_group_chat',
         description:
-          '给指定同事发送一条异步消息。系统会自动打开/创建你们之间的对话，消息永久存档可追溯。' +
-          '接收方会在他们工作时看到这条消息——这是团队内部异步沟通的标准方式。',
+          '创建一个群聊，用于与 2 个或以上同事协作。' +
+          '主管（用户）会自动加入群聊，无需手动添加。' +
+          '返回 chatId，后续用 send_to_group 在群内发消息。',
         inputSchema: {
           type: 'object',
           properties: {
-            to:      { type: 'string',  description: '收件人的 Worker ID（例如 "worker2"、"worker3"）' },
-            content: { type: 'string',  description: '消息正文。请清晰说明：你是谁、为什么发这条消息、希望对方做什么。' },
+            participants: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '参与者的 Worker ID 数组（不需要包含自己和主管，系统自动添加）',
+            },
+            title: { type: 'string', description: '群聊名称（可选）' },
           },
-          required: ['to', 'content'],
+          required: ['participants'],
         },
       },
       handler: async (input: Record<string, unknown>) => {
-        const { to, content } = input as { to: string; content: string };
-        const chat = await chatStore.createChat([selfWorkerId, to], 'direct');
-        const msg  = await chatStore.sendMessage(chat.id, selfWorkerId, content);
+        const { participants, title } = input as { participants: string[]; title?: string };
+        // 自动加入自己和 "user"（人类主管），去重
+        const allParticipants = [...new Set([selfWorkerId, ...(participants as string[]), 'user'])];
+        const chat = await chatStore.createChat(allParticipants, 'group', title);
         return [
-          `✅ 消息已发送给 ${to}`,
-          `   发件人：${selfWorkerId}（我）`,
-          `   会话 ID：${chat.id}`,
+          `✅ 群聊已创建`,
+          `   群聊 ID：${chat.id}`,
+          `   群聊名称：${chat.title ?? '（无标题）'}`,
+          `   参与成员：${allParticipants.join('、')}`,
+          `   （主管已自动加入，确保透明可查）`,
+          `   提示：使用 send_to_group 发送消息，用 @workerID 指派任务`,
+        ].join('\n');
+      },
+    });
+
+    engine.registerTool({
+      definition: {
+        name: 'send_to_group',
+        description:
+          '在群聊中发送消息，可用 @workerID 格式指派任务给特定成员。' +
+          '例如：@worker2，请完成需求文档；@worker3，请评估技术方案。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            chatId:  { type: 'string', description: '群聊 ID（由 create_group_chat 返回）' },
+            content: { type: 'string', description: '消息内容，可包含 @workerID 指派任务' },
+          },
+          required: ['chatId', 'content'],
+        },
+      },
+      handler: async (input: Record<string, unknown>) => {
+        const { chatId, content } = input as { chatId: string; content: string };
+        const msg = await chatStore.sendMessage(chatId, selfWorkerId, content);
+        return [
+          `✅ 消息已发送`,
+          `   发件人：${selfWorkerId}（${selfWorkerName}）`,
+          `   会话 ID：${(chatId as string).slice(0, 8)}…`,
           `   消息 ID：${msg.id}`,
           `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
         ].join('\n');
@@ -1224,42 +1272,31 @@ export class HttpServer {
 
     engine.registerTool({
       definition: {
-        name: 'check_inbox',
-        description: '查看我的所有未读消息（来自同事的异步消息）。',
+        name: 'check_my_mentions',
+        description:
+          '扫描所有群聊，查找 @提及了我的消息。' +
+          '看到任务指派后，应使用任务工具记录到自己的待办列表。',
         inputSchema: { type: 'object', properties: {}, required: [] },
       },
       handler: async () => {
-        const items = await chatStore.getAllUnread(selfWorkerId);
-        if (items.length === 0) return '📭 当前没有未读消息。';
-        return items.map((item: { chat: { id: string }; message: { from: string; timestamp: number; content: string } }) => {
-          const time = new Date(item.message.timestamp).toLocaleString('zh-CN');
-          return `[${time}] 来自 ${item.message.from}（会话 ${item.chat.id.slice(0, 8)}…）：${item.message.content}`;
-        }).join('\n');
-      },
-    });
+        const chats = await chatStore.listChats(selfWorkerId);
+        const mentions: string[] = [];
 
-    engine.registerTool({
-      definition: {
-        name: 'get_chat_history',
-        description: '获取指定聊天会话的最近消息历史，用于了解对话背景。',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            chatId: { type: 'string', description: '聊天会话 ID' },
-            limit:  { type: 'number', description: '最多返回的消息条数，默认 10' },
-          },
-          required: ['chatId'],
-        },
-      },
-      handler: async (input: Record<string, unknown>) => {
-        const { chatId, limit = 10 } = input as { chatId: string; limit?: number };
-        const messages = await chatStore.getMessages(chatId, limit);
-        if (messages.length === 0) return '该会话暂无消息记录。';
-        return messages.map((m: { from: string; timestamp: number; content: string }) => {
-          const sender = m.from === selfWorkerId ? '我' : m.from;
-          const time   = new Date(m.timestamp).toLocaleString('zh-CN');
-          return `[${time}] ${sender}: ${m.content}`;
-        }).join('\n');
+        for (const chat of chats) {
+          if (chat.status === 'archived') continue;
+          const messages = await chatStore.getMessages(chat.id);
+          for (const m of messages) {
+            if (m.from === selfWorkerId) continue;  // 自己发的不算
+            if (m.content.includes(`@${selfWorkerId}`) || m.content.includes(`@${selfWorkerName}`)) {
+              const time = new Date(m.timestamp).toLocaleString('zh-CN');
+              const groupLabel = chat.title ?? `${chat.id.slice(0, 8)}…`;
+              mentions.push(`[${time}] 群聊「${groupLabel}」来自 ${m.from}：${m.content}`);
+            }
+          }
+        }
+
+        if (mentions.length === 0) return '📭 没有找到 @提及了我的消息。';
+        return `📬 找到 ${mentions.length} 条 @提及消息：\n\n` + mentions.join('\n\n');
       },
     });
 
