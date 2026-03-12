@@ -348,6 +348,12 @@ export const useChatStore = defineStore('chat', () => {
     activeSession.value.messageCount = 0;
   }
 
+  async function renameSession(sessionId: string, title: string): Promise<void> {
+    await sessionsApi.rename(sessionId, title);
+    const s = sessions.value.find(x => x.id === sessionId);
+    if (s) s.title = title;
+  }
+
   function openWorkerChat(workerId: string) {
     void selectWorker(workerId);
   }
@@ -380,7 +386,7 @@ export const useChatStore = defineStore('chat', () => {
     isThinking, loading, sessionsLoaded, contactList, dmList, groupSessionList,
     asyncChats, asyncChatList, activeAsyncChatId, activeAsyncChatMessages,
     getWorkerSessions, selectWorker, selectSession,
-    newSession, newDmSession, newGroupSession, deleteSession, sendMessage, clearSession, openWorkerChat,
+    newSession, newDmSession, newGroupSession, deleteSession, sendMessage, clearSession, renameSession, openWorkerChat,
     fetchAllSessions, loadSessionMessages,
     fetchAsyncChats, selectAsyncChat,
   };

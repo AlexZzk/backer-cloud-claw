@@ -340,6 +340,15 @@ export class HttpServer {
       }
     }
 
+    // ── PATCH /api/sessions/:sessionId  (更新会话标题)
+    {
+      const m = matchRoute('/api/sessions/:sessionId', path);
+      if (m && method === 'PATCH') {
+        await this.handlePatchSession(req, res, m.params['sessionId']!);
+        return;
+      }
+    }
+
     // ── DELETE /api/sessions/:sessionId
     {
       const m = matchRoute('/api/sessions/:sessionId', path);
@@ -513,6 +522,17 @@ export class HttpServer {
     const entry = this.store.get(sessionId);
     if (!entry) { notFound(res); return; }
     ok(res, { ...this.store.toApiSession(entry), messages: entry.messages });
+  }
+
+  private async handlePatchSession(req: IncomingMessage, res: ServerResponse, sessionId: string) {
+    const entry = this.store.get(sessionId);
+    if (!entry) { notFound(res); return; }
+    let body: { title?: string };
+    try { body = JSON.parse(await readBody(req)) as typeof body; } catch { badRequest(res, 'Invalid JSON'); return; }
+    if (typeof body.title === 'string' && body.title.trim()) {
+      this.store.updateTitle(sessionId, body.title.trim());
+    }
+    ok(res, this.store.toApiSession(entry));
   }
 
   private handleDeleteSession(res: ServerResponse, sessionId: string) {

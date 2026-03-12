@@ -167,6 +167,16 @@ export class SessionStore {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  /** 更新会话标题（持久化到磁盘） */
+  updateTitle(id: string, title: string): boolean {
+    const entry = this.sessions.get(id);
+    if (!entry) return false;
+    entry.title = title;
+    entry.updatedAt = Date.now();
+    void this._save(entry);
+    return true;
+  }
+
   delete(id: string): boolean {
     const existed = this.sessions.delete(id);
     if (existed) {
