@@ -762,7 +762,10 @@ export class HttpServer {
         if (cfg) agentMap.set(wid, await this.getAgentForWorker(cfg));
       }
       entry.groupAgents = agentMap;
-      if (!entry.agent) entry.agent = agentMap.get(entry.workerId);
+      if (!entry.agent) {
+        const primaryAgent = agentMap.get(entry.workerId);
+        if (primaryAgent) entry.agent = primaryAgent;
+      }
     }
 
     if (entry.messages.length === 0) {
@@ -790,6 +793,7 @@ export class HttpServer {
       const workerCfg = (this.config.workers ?? []).find(w => w.id === workerId);
       const workerName = workerCfg?.name ?? workerId;
       const agent = entry.groupAgents?.get(workerId) ?? entry.agent;
+      if (!agent) continue; // agent 未找到时跳过该 worker
 
       writeSse(res, { event: 'speaker', data: { workerId, workerName } });
 
