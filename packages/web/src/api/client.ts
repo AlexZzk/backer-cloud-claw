@@ -120,7 +120,10 @@ export const sessionsApi = {
       service.get<ApiSessionDetail>(`/sessions/${sessionId}`),
 
   delete: (sessionId: string) =>
-      service.delete(`/sessions/${sessionId}`)
+      service.delete(`/sessions/${sessionId}`),
+
+  rename: (sessionId: string, title: string) =>
+      service.patch<ApiSession>(`/sessions/${sessionId}`, { title })
 }
 
 export const dmApi = {

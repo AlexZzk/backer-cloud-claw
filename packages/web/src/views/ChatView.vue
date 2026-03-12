@@ -220,11 +220,13 @@
               class="message-wrapper assistant"
             >
               <div class="msg-avatar" :title="getWorkerName(msg.from)">🤖</div>
-              <div class="message-bubble assistant">
-                <div class="dm-speaker-label">{{ getWorkerName(msg.from) }}</div>
-                <div class="message-content" v-html="renderMarkdownWithMentions(msg.content)"></div>
-                <div class="message-footer">
-                  <span class="token-info" style="opacity: 0.5;">{{ formatTime(msg.timestamp) }}</span>
+              <div class="message-column">
+                <div class="speaker-name">{{ getWorkerName(msg.from) }}</div>
+                <div class="message-bubble assistant">
+                  <div class="message-content" v-html="renderMarkdownWithMentions(msg.content)"></div>
+                  <div class="message-footer">
+                    <span class="token-info" style="opacity: 0.5;">{{ formatTime(msg.timestamp) }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -266,6 +268,7 @@
                 <div class="worker-name-row">
                   <span class="worker-name">{{ activeGroupSession.title }}</span>
                   <a-tag color="orange" size="small">群聊</a-tag>
+                  <span class="group-member-count">{{ (activeGroupSession.workerIds ?? []).length }} 人</span>
                 </div>
                 <div class="worker-model">
                   {{ (activeGroupSession.workerIds ?? []).map(id => getWorkerName(id)).join(' · ') }}
@@ -288,6 +291,12 @@
             </template>
           </div>
           <div class="chat-header-right">
+            <!-- 群聊信息按钮 -->
+            <a-tooltip v-if="activeSessionType === 'group'" content="群聊信息">
+              <a-button type="text" @click="openGroupInfo">
+                <template #icon><icon-info-circle /></template>
+              </a-button>
+            </a-tooltip>
             <a-tooltip :content="t('chat.clearHistory')">
               <a-button type="text" @click="chatStore.clearSession()">
                 <template #icon><icon-delete /></template>
@@ -327,22 +336,25 @@
               class="message-wrapper"
               :class="msg.role"
             >
-              <div v-if="msg.role === 'assistant'" class="msg-avatar" :title="getDmSpeakerName(msg.speakerId)">
-                🤖
+              <!-- 头像 -->
+              <div
+                class="msg-avatar"
+                :class="{ 'user-av': msg.role === 'user' }"
+                :title="getMsgSpeakerName(msg)"
+              >
+                {{ msg.role === 'user' ? (authStore.user?.avatar || '👤') : '🤖' }}
               </div>
-              <div class="message-bubble" :class="msg.role">
-                <div v-if="activeSessionType === 'dm' && msg.role === 'assistant' && msg.speakerId" class="dm-speaker-label">
-                  {{ getDmSpeakerName(msg.speakerId) }}
+              <!-- 名称 + 气泡 纵向排列 -->
+              <div class="message-column">
+                <div class="speaker-name">{{ getMsgSpeakerName(msg) }}</div>
+                <div class="message-bubble" :class="msg.role">
+                  <div class="message-content" v-html="renderMarkdownWithMentions(msg.content)"></div>
+                  <div class="message-footer" v-if="msg.tokenUsage">
+                    <span class="token-info">
+                      ↑{{ msg.tokenUsage.inputTokens }} ↓{{ msg.tokenUsage.outputTokens }} tokens
+                    </span>
+                  </div>
                 </div>
-                <div class="message-content" v-html="renderMarkdownWithMentions(msg.content)"></div>
-                <div class="message-footer" v-if="msg.tokenUsage">
-                  <span class="token-info">
-                    ↑{{ msg.tokenUsage.inputTokens }} ↓{{ msg.tokenUsage.outputTokens }} tokens
-                  </span>
-                </div>
-              </div>
-              <div v-if="msg.role === 'user'" class="msg-avatar user-av">
-                {{ authStore.user?.avatar || '👤' }}
               </div>
             </div>
           </template>
@@ -350,23 +362,41 @@
           <!-- Thinking -->
           <div v-if="chatStore.isThinking" class="message-wrapper assistant">
             <div class="msg-avatar">🤖</div>
-            <div class="message-bubble assistant thinking">
-              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <div class="message-column">
+              <div class="speaker-name">{{ activeWorker?.name ?? '员工' }}</div>
+              <div class="message-bubble assistant thinking">
+                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              </div>
             </div>
           </div>
         </div>
 
         <!-- Input -->
         <div class="input-area">
+          <!-- @mention 自动补全下拉框（群聊专用） -->
+          <div v-if="showMentionDropdown && filteredMentionWorkers.length > 0" class="mention-dropdown">
+            <div class="mention-dropdown-title">选择 @ 成员</div>
+            <div
+              v-for="w in filteredMentionWorkers"
+              :key="w.id"
+              class="mention-dropdown-item"
+              @mousedown.prevent="selectMention(w)"
+            >
+              <span class="mention-item-avatar">🤖</span>
+              <span class="mention-item-name">{{ w.name }}</span>
+            </div>
+          </div>
           <div class="input-box" :class="{ focused: inputFocused }">
             <a-textarea
               v-model="inputText"
-              :placeholder="t('chat.placeholder')"
+              :placeholder="activeSessionType === 'group' ? '发消息，输入 @ 提及成员...' : t('chat.placeholder')"
               :auto-size="{ minRows: 1, maxRows: 5 }"
               @keydown.enter.exact.prevent="handleSend"
               @keydown.enter.shift.exact="() => {}"
+              @keydown.escape="showMentionDropdown = false"
               @focus="inputFocused = true"
               @blur="inputFocused = false"
+              @input="handleInputForMention"
               :disabled="chatStore.isThinking"
             />
             <div class="input-footer">
@@ -528,6 +558,54 @@
         </div>
       </div>
     </a-modal>
+
+    <!-- 群聊信息 Modal -->
+    <a-modal
+      v-model:visible="showGroupInfo"
+      title="群聊信息"
+      :footer="false"
+      width="400px"
+    >
+      <div v-if="activeGroupSession" class="group-info-panel">
+        <!-- 群名称编辑 -->
+        <div class="group-info-section">
+          <div class="group-info-label">群名称</div>
+          <div class="group-info-name-row">
+            <a-input
+              v-model="editGroupTitle"
+              placeholder="输入群名称"
+              :max-length="30"
+              allow-clear
+            />
+            <a-button
+              type="primary"
+              :disabled="!editGroupTitle.trim() || editGroupTitle.trim() === activeGroupSession.title"
+              :loading="groupRenaming"
+              @click="saveGroupTitle"
+            >保存</a-button>
+          </div>
+        </div>
+        <!-- 成员列表 -->
+        <div class="group-info-section">
+          <div class="group-info-label">
+            群成员 · {{ (activeGroupSession.workerIds ?? []).length }} 人
+          </div>
+          <div class="group-info-members">
+            <div
+              v-for="wid in (activeGroupSession.workerIds ?? [])"
+              :key="wid"
+              class="group-member-item"
+            >
+              <span class="group-member-avatar">🤖</span>
+              <div class="group-member-info">
+                <div class="group-member-name">{{ getWorkerName(wid) }}</div>
+                <div class="group-member-desc">{{ allWorkers.find(w => w.id === wid)?.description }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -562,6 +640,16 @@ const dmFromWorkerId = ref('');
 const dmToWorkerId = ref('');
 const dmCreating = ref(false);
 
+// 群聊信息弹窗
+const showGroupInfo = ref(false);
+const editGroupTitle = ref('');
+const groupRenaming = ref(false);
+
+// @mention 自动补全
+const showMentionDropdown = ref(false);
+const mentionQuery = ref('');
+const mentionAtIndex = ref(-1);
+
 const allWorkers = computed(() => workersStore.workers);
 const hasWorkers = computed(() => workersStore.workers.length > 0);
 const hasModels = computed(() => modelsStore.models.length > 0);
@@ -593,6 +681,24 @@ const activeDmToWorker = computed(() => {
 const activeGroupSession = computed(() => {
   const s = chatStore.activeSession;
   return s?.type === 'group' ? s : null;
+});
+
+// 当前群聊可 @提及 的成员（仅群聊时有效）
+const groupMentionWorkers = computed(() => {
+  const session = chatStore.activeSession;
+  if (!session || session.type !== 'group') return [];
+  return (session.workerIds ?? [])
+    .map(id => workersStore.getWorker(id))
+    .filter((w): w is NonNullable<typeof w> => !!w);
+});
+
+// 根据输入的查询词过滤成员
+const filteredMentionWorkers = computed(() => {
+  if (!mentionQuery.value) return groupMentionWorkers.value;
+  const q = mentionQuery.value.toLowerCase();
+  return groupMentionWorkers.value.filter(w =>
+    w.name.toLowerCase().includes(q) || w.id.toLowerCase().includes(q)
+  );
 });
 
 const filteredContacts = computed(() => {
@@ -763,6 +869,68 @@ function getDmLastMessage(dm: ChatSession): string {
 function getDmSpeakerName(speakerId: string | undefined): string {
   if (!speakerId) return '员工';
   return workersStore.getWorker(speakerId)?.name ?? speakerId;
+}
+
+/** 获取消息发送者显示名称（用于气泡上方） */
+function getMsgSpeakerName(msg: { role: string; speakerId?: string }): string {
+  if (msg.role === 'user') return authStore.user?.name ?? '我';
+  if (msg.speakerId) return workersStore.getWorker(msg.speakerId)?.name ?? msg.speakerId;
+  if (activeWorker.value && activeSessionType.value === 'chat') return activeWorker.value.name;
+  return '员工';
+}
+
+/** 打开群聊信息面板 */
+function openGroupInfo() {
+  if (!activeGroupSession.value) return;
+  editGroupTitle.value = activeGroupSession.value.title;
+  showGroupInfo.value = true;
+}
+
+/** 保存群聊名称 */
+async function saveGroupTitle() {
+  if (!activeGroupSession.value || !editGroupTitle.value.trim()) return;
+  groupRenaming.value = true;
+  try {
+    await chatStore.renameSession(activeGroupSession.value.id, editGroupTitle.value.trim());
+    Message.success('群名称已更新');
+    showGroupInfo.value = false;
+  } catch {
+    Message.error('更新失败，请重试');
+  } finally {
+    groupRenaming.value = false;
+  }
+}
+
+/** 处理输入事件：检测 @mention 并显示补全列表 */
+function handleInputForMention(e: Event) {
+  if (activeSessionType.value !== 'group') {
+    showMentionDropdown.value = false;
+    return;
+  }
+  const target = e.target as HTMLTextAreaElement;
+  const cursor = target.selectionStart ?? inputText.value.length;
+  const textBeforeCursor = inputText.value.slice(0, cursor);
+  const lastAt = textBeforeCursor.lastIndexOf('@');
+
+  if (lastAt >= 0) {
+    const query = textBeforeCursor.slice(lastAt + 1);
+    // 只在 @ 后没有空格/换行时才显示
+    if (!query.includes(' ') && !query.includes('\n')) {
+      mentionAtIndex.value = lastAt;
+      mentionQuery.value = query;
+      showMentionDropdown.value = groupMentionWorkers.value.length > 0;
+      return;
+    }
+  }
+  showMentionDropdown.value = false;
+}
+
+/** 点击补全列表中的成员，将其插入到输入框（mousedown.prevent 阻止 blur，光标保持在输入框） */
+function selectMention(worker: { id: string; name: string }) {
+  const before = inputText.value.slice(0, mentionAtIndex.value);
+  const after = inputText.value.slice(mentionAtIndex.value + 1 + mentionQuery.value.length);
+  inputText.value = `${before}@${worker.name} ${after}`;
+  showMentionDropdown.value = false;
 }
 
 async function createDmSession() {
@@ -1036,15 +1204,15 @@ onMounted(async () => {
 
 .message-wrapper {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;  /* 头像顶部对齐 */
   gap: 10px;
 }
 
 .message-wrapper.user { flex-direction: row-reverse; }
 
 .msg-avatar {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: 10px;
   background: var(--bg-base);
   display: flex;
@@ -1053,16 +1221,39 @@ onMounted(async () => {
   font-size: 18px;
   flex-shrink: 0;
   border: 1px solid var(--border-color);
+  margin-top: 2px; /* 与 speaker-name 对齐 */
 }
 
 .user-av { background: rgba(22, 93, 255, 0.08); border-color: rgba(22, 93, 255, 0.2); }
 
-.message-bubble {
+/* 名称 + 气泡的纵向容器 */
+.message-column {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   max-width: 65%;
-  padding: 12px 16px;
+}
+
+/* 发送者名称 */
+.speaker-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  line-height: 1;
+  padding: 0 4px;
+}
+
+/* 用户名右对齐（与右侧气泡对齐） */
+.message-wrapper.user .message-column {
+  align-items: flex-end;
+}
+
+.message-bubble {
+  padding: 10px 14px;
   border-radius: 14px;
   font-size: 14px;
   line-height: 1.6;
+  max-width: 100%; /* 父级 message-column 控制最大宽度 */
 }
 
 .message-bubble.assistant {
@@ -1117,6 +1308,142 @@ onMounted(async () => {
   padding: 1px 5px;
   font-weight: 500;
   font-size: 0.92em;
+}
+
+/* 蓝色气泡内的 @mention 用白色显示 */
+.message-bubble.user :deep(.mention) {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+/* ─── @Mention 自动补全下拉 ──────────────────────────────────────────── */
+
+.mention-dropdown {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.mention-dropdown-title {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 8px 12px 4px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mention-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mention-dropdown-item:hover {
+  background: var(--bg-base);
+}
+
+.mention-item-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.mention-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* ─── 群聊信息面板 ───────────────────────────────────────────────────── */
+
+.group-info-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.group-info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-info-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.group-info-name-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.group-info-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.group-member-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border-radius: 10px;
+}
+
+.group-member-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+}
+
+.group-member-info { flex: 1; min-width: 0; }
+
+.group-member-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.group-member-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-member-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-weight: 400;
 }
 
 /* ─── Group Chat Notice ──────────────────────────────────────────────── */
