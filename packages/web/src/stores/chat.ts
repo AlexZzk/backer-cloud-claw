@@ -179,6 +179,13 @@ export const useChatStore = defineStore('chat', () => {
     loading.value = true;
     try {
       const apiSession = await sessionsApi.create(workerId);
+      // 幂等：如果后端返回的是已有会话，直接复用本地记录
+      const existing = sessions.value.find(s => s.id === apiSession.id);
+      if (existing) {
+        activeWorkerId.value = workerId;
+        activeSessionId.value = existing.id;
+        return existing;
+      }
       const session = fromApiSession(apiSession);
       sessions.value.unshift(session);
       activeWorkerId.value = workerId;

@@ -98,6 +98,14 @@ export class SessionStore {
     return entry;
   }
 
+  /** 查找某个 Worker 已有的 chat 会话（用户↔Worker 1对1，幂等创建用） */
+  findChat(workerId: string): SessionEntry | undefined {
+    for (const s of this.sessions.values()) {
+      if (s.type === 'chat' && s.workerId === workerId) return s;
+    }
+    return undefined;
+  }
+
   /** 查找两个 Worker 之间已有的 DM 会话（双向匹配） */
   findDm(workerIdA: string, workerIdB: string): SessionEntry | undefined {
     for (const s of this.sessions.values()) {

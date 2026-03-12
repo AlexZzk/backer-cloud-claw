@@ -43,6 +43,7 @@ import type {
 } from './config-loader.js';
 import { saveConfig, loadConfig } from './config-loader.js';
 import { ChatStore } from '@bcc/messaging';
+import { TaskStore, TaskManager } from '@bcc/task';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -204,6 +205,10 @@ export class HttpServer {
   private workerAgents = new Map<string, AgentInterface>();
   /** Worker 间异步聊天存储（与 CLI 模式共享同一 ~/.bcc/chats 目录） */
   private chatStore = new ChatStore();
+  /** 任务存储（持久化到 ~/.bcc/tasks，所有 Worker 共享一个 TaskStore） */
+  private taskStore = new TaskStore();
+  /** 每个 Worker 的 TaskManager（有 todolist 技能的 Worker 才创建） */
+  private workerTaskManagers = new Map<string, TaskManager>();
 
   constructor(
     private config: BccConfig,
@@ -480,6 +485,13 @@ export class HttpServer {
       return;
     }
 
+    // 幂等：用户与同一 Worker 只有一个 1对1 会话，存在则直接返回
+    const existing = this.store.findChat(workerId);
+    if (existing) {
+      ok(res, this.store.toApiSession(existing));
+      return;
+    }
+
     try {
       const agent = await this.getAgentForWorker(workerCfg);
       const entry = this.store.create(workerId, agent);
@@ -661,7 +673,33 @@ export class HttpServer {
     res.end();
   }
 
-  /** group 会话：用户 → 多 Worker，每个 Worker 依次以自己身份回复 */
+  /**
+   * 解析消息中 @提及的 Worker ID 列表。
+   * - 包含 @all 或 @所有人 → 返回 null（表示全部响应）
+   * - 包含 @workerID 或 @workerName → 返回对应 ID 列表
+   * - 无任何 @mention → 返回空数组（无人响应）
+   */
+  private parseMentions(
+    content: string,
+    workerIds: string[],
+  ): string[] | null {
+    if (content.includes('@all') || content.includes('@所有人')) return null;
+
+    const mentioned: string[] = [];
+    for (const workerId of workerIds) {
+      const workerCfg = (this.config.workers ?? []).find(w => w.id === workerId);
+      const workerName = workerCfg?.name ?? '';
+      if (
+        content.includes(`@${workerId}`) ||
+        (workerName && content.includes(`@${workerName}`))
+      ) {
+        mentioned.push(workerId);
+      }
+    }
+    return mentioned;
+  }
+
+  /** group 会话：用户 → 多 Worker，仅被 @提及的 Worker 回复 */
   private async handleGroupMessage(
     res: ServerResponse,
     entry: import('./session-store.js').SessionEntry,
@@ -675,7 +713,21 @@ export class HttpServer {
     entry.messages.push({ id: randomUUID(), role: 'user', content, timestamp: Date.now() });
     entry.updatedAt = Date.now();
 
+    // 根据 @mention 决定哪些 Worker 需要回复
+    // null = 全部（@all/@所有人），[] = 无人响应，[...ids] = 指定 Worker
+    const mentionedIds = this.parseMentions(content, workerIds);
+
+    if (mentionedIds !== null && mentionedIds.length === 0) {
+      // 没有 @mention，消息存档但无 Worker 回复
+      writeSse(res, { event: 'done', data: {} });
+      res.end();
+      return;
+    }
+
     for (const workerId of workerIds) {
+      // 跳过未被 @提及的 Worker（null 表示全部参与）
+      if (mentionedIds !== null && !mentionedIds.includes(workerId)) continue;
+
       const workerCfg = (this.config.workers ?? []).find(w => w.id === workerId);
       const workerName = workerCfg?.name ?? workerId;
       const agent = entry.groupAgents?.get(workerId) ?? entry.agent;
@@ -1300,8 +1352,115 @@ export class HttpServer {
       },
     });
 
+    // ── 注册任务管理工具（仅限具备 'todolist' 技能的 Worker）──────────────────
+    if (workerCfg.skills?.includes('todolist')) {
+      const taskMgr = this.getTaskManagerForWorker(workerCfg.id);
+
+      engine.registerTool({
+        definition: {
+          name: 'create_task',
+          description: '在我的待办列表中创建一个新任务。收到 @指派 后调用此工具记录任务。',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title:       { type: 'string', description: '任务标题（简短）' },
+              description: { type: 'string', description: '任务详细描述与要求' },
+              priority: {
+                type: 'string',
+                enum: ['low', 'medium', 'high', 'urgent'],
+                description: '优先级，默认 medium',
+              },
+              chatId:    { type: 'string', description: '（可选）关联的群聊 ID，用于溯源' },
+              messageId: { type: 'string', description: '（可选）触发此任务的消息 ID' },
+            },
+            required: ['title', 'description'],
+          },
+        },
+        handler: async (input: Record<string, unknown>) => {
+          const { title, description, priority, chatId, messageId } = input as {
+            title: string; description: string; priority?: string; chatId?: string; messageId?: string;
+          };
+          const task = await taskMgr.create({
+            title, description,
+            priority: (priority ?? 'medium') as 'low' | 'medium' | 'high' | 'urgent',
+            createdBy: selfWorkerId,
+            ...(chatId    && { chatId }),
+            ...(messageId && { messageId }),
+          });
+          return [
+            `✅ 任务已创建`,
+            `   ID：${task.id}`,
+            `   标题：${task.title}`,
+            `   优先级：${task.priority}`,
+            `   状态：${task.status}`,
+          ].join('\n');
+        },
+      });
+
+      engine.registerTool({
+        definition: {
+          name: 'update_task_status',
+          description: '更新我的待办任务状态。',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: '任务 ID' },
+              status: {
+                type: 'string',
+                enum: ['todo', 'in_progress', 'done', 'blocked', 'cancelled'],
+                description: '新状态',
+              },
+            },
+            required: ['taskId', 'status'],
+          },
+        },
+        handler: async (input: Record<string, unknown>) => {
+          const { taskId, status } = input as { taskId: string; status: string };
+          const task = await taskMgr.updateStatus(taskId, status as 'todo' | 'in_progress' | 'done' | 'blocked' | 'cancelled');
+          if (!task) return `⚠ 未找到任务 ${taskId}`;
+          return `✅ 任务「${task.title}」状态已更新为 ${task.status}`;
+        },
+      });
+
+      engine.registerTool({
+        definition: {
+          name: 'list_tasks',
+          description: '查看我的待办任务列表，可按状态过滤。',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              statusFilter: {
+                type: 'array',
+                items: { type: 'string', enum: ['todo', 'in_progress', 'done', 'blocked', 'cancelled'] },
+                description: '按状态过滤（不填则返回全部）',
+              },
+            },
+            required: [],
+          },
+        },
+        handler: async (input: Record<string, unknown>) => {
+          const { statusFilter } = input as { statusFilter?: string[] };
+          const tasks = await taskMgr.list(statusFilter as Array<'todo' | 'in_progress' | 'done' | 'blocked' | 'cancelled'> | undefined);
+          if (tasks.length === 0) return '📋 当前没有符合条件的任务。';
+          return tasks.map((t: { priority: string; status: string; title: string; description: string }) =>
+            `[${t.priority.toUpperCase()}] [${t.status}] ${t.title}\n  ${t.description}`
+          ).join('\n\n');
+        },
+      });
+    }
+
     this.workerAgents.set(workerCfg.id, engine);
     return engine;
+  }
+
+  /** 获取或创建某 Worker 的 TaskManager（有 todolist 技能才会调用） */
+  private getTaskManagerForWorker(workerId: string): TaskManager {
+    let tm = this.workerTaskManagers.get(workerId);
+    if (!tm) {
+      tm = new TaskManager({ store: this.taskStore, workerId });
+      this.workerTaskManagers.set(workerId, tm);
+    }
+    return tm;
   }
 
   /** Worker 配置变更时调用，使其下次请求重新初始化 Agent */
