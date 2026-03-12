@@ -98,6 +98,16 @@ export interface WorkerOptions {
   profile: WorkerProfile;
   /** AgentEngine 构造参数（model、system、tools、memory 等） */
   engineOptions: AgentEngineOptions;
+  /**
+   * 可选：用于后台心跳/收件箱审视的轻量 AgentEngine 选项。
+   *
+   * 设置后，Worker.processInbox()（由 WorkerScheduler 定期触发）
+   * 使用此独立引擎处理未读消息，而非主对话引擎（engineOptions）。
+   *
+   * 典型用法：主模型用 claude-opus（贵），审视模型用 claude-haiku（便宜），
+   * 心跳处理不消耗主模型 Token，大幅降低后台审视成本。
+   */
+  reviewEngineOptions?: AgentEngineOptions;
   /** 共享的 TokenTracker（通常来自所属 Company） */
   tokenTracker?: TokenTracker;
   /** 共享的事件总线（通常来自所属 Company） */
@@ -140,6 +150,8 @@ export class Worker implements Participant {
   readonly inbox: Mailbox;
 
   private engine: AgentEngine;
+  /** 可选的审视引擎（心跳/收件箱处理用），用更便宜的模型降低后台成本 */
+  private reviewEngine: AgentEngine | undefined;
   private tokenTracker: TokenTracker;
   private eventBus: EventEmitter;
   private inboxService: AsyncInboxService | undefined;
@@ -152,9 +164,11 @@ export class Worker implements Participant {
     eventBus: EventEmitter,
     inboxService?: AsyncInboxService,
     taskService?: AsyncTaskService,
+    reviewEngine?: AgentEngine,
   ) {
     this.profile = profile;
     this.engine = engine;
+    this.reviewEngine = reviewEngine;
     this.tokenTracker = tokenTracker;
     this.eventBus = eventBus;
     this.inboxService = inboxService;
@@ -173,6 +187,9 @@ export class Worker implements Participant {
    */
   static async create(options: WorkerOptions): Promise<Worker> {
     const engine = await AgentEngine.create(options.engineOptions);
+    const reviewEngine = options.reviewEngineOptions
+      ? await AgentEngine.create(options.reviewEngineOptions)
+      : undefined;
     const tokenTracker = options.tokenTracker ?? new TokenTracker();
     const eventBus = options.eventBus ?? new EventEmitter();
 
@@ -183,6 +200,7 @@ export class Worker implements Participant {
       eventBus,
       options.inboxService,
       options.taskService,
+      reviewEngine,
     );
 
     // 自动注册 inbox / task 工具
@@ -420,7 +438,8 @@ export class Worker implements Participant {
     let response = '';
     let tokenUsage: TokenUsage | undefined;
 
-    for await (const chunk of this.engine.stream(userInput)) {
+    // 优先使用审视引擎（更便宜），无则回退到主引擎
+    for await (const chunk of (this.reviewEngine ?? this.engine).stream(userInput)) {
       if (chunk.type === 'text' && chunk.text) {
         response += chunk.text;
       }

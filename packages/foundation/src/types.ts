@@ -192,6 +192,8 @@ export interface WorkerProfile {
   description: string;
   /** 引用的模型适配器 ID，例如 "claude"、"qwen-plus" */
   modelId: string;
+  /** 可选：心跳/收件箱审视用的轻量模型 ID（比主模型便宜） */
+  reviewModelId?: string;
 }
 
 /**
