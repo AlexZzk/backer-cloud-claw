@@ -151,7 +151,7 @@ export async function sendMessageStream(
     callbacks: StreamCallbacks
 ): Promise<void> {
 
-  const res = await fetch(`/sessions/${sessionId}/messages`, {
+  const res = await fetch(`/api/sessions/${sessionId}/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
