@@ -388,6 +388,7 @@
           </div>
           <div class="input-box" :class="{ focused: inputFocused }">
             <a-textarea
+              ref="textareaEl"
               v-model="inputText"
               :placeholder="activeSessionType === 'group' ? '发消息，输入 @ 提及成员...' : t('chat.placeholder')"
               :auto-size="{ minRows: 1, maxRows: 5 }"
@@ -649,6 +650,7 @@ const groupRenaming = ref(false);
 const showMentionDropdown = ref(false);
 const mentionQuery = ref('');
 const mentionAtIndex = ref(-1);
+const textareaEl = ref<any>(null);
 
 const allWorkers = computed(() => workersStore.workers);
 const hasWorkers = computed(() => workersStore.workers.length > 0);
@@ -902,13 +904,15 @@ async function saveGroupTitle() {
 }
 
 /** 处理输入事件：检测 @mention 并显示补全列表 */
-function handleInputForMention(e: Event) {
+function handleInputForMention(_value: string) {
   if (activeSessionType.value !== 'group') {
     showMentionDropdown.value = false;
     return;
   }
-  const target = e.target as HTMLTextAreaElement;
-  const cursor = target.selectionStart ?? inputText.value.length;
+  // Arco Design 的 a-textarea @input 事件传递 value 字符串而非原生 Event
+  // 通过模板 ref 获取底层 textarea 元素读取光标位置
+  const nativeTextarea = textareaEl.value?.$el?.querySelector?.('textarea') as HTMLTextAreaElement | null;
+  const cursor = nativeTextarea?.selectionStart ?? inputText.value.length;
   const textBeforeCursor = inputText.value.slice(0, cursor);
   const lastAt = textBeforeCursor.lastIndexOf('@');
 
