@@ -163,6 +163,37 @@ export const BUILTIN_SKILLS: Skill[] = [
     prompt: '',
     source: 'builtin',
   },
+
+  // ── 任务管理 ──────────────────────────────────────────────────────────────
+
+  {
+    name: 'todolist',
+    description: '个人任务管理：将分配给自己的工作记录为待办任务，追踪状态与进度',
+    system: `# 任务管理规范
+
+你拥有个人待办任务列表（TodoList），用于追踪分配给你的工作：
+
+## 1. 创建任务
+- 收到 @提及 或任务指派后，使用 \`create_task\` 记录任务
+- 字段：title（简短标题）、description（完整描述与要求）、priority（low/medium/high/urgent）
+- 关联来源：可附上 chatId 和 messageId 便于溯源
+
+## 2. 更新任务状态
+- 开始工作前：\`update_task_status\` → in_progress
+- 完成后：\`update_task_status\` → done
+- 遇到阻塞：\`update_task_status\` → blocked（并在群聊中说明原因）
+
+## 3. 查看任务
+- 使用 \`list_tasks\` 查看当前待办
+- 按优先级处理：urgent > high > medium > low
+
+## 4. 任务原则
+- **只有自己能维护自己的任务列表**，其他人的任务由他们自己管理
+- 任务来自 @提及，不来自自我臆想
+- 定期汇报进度，及时更新状态`,
+    prompt: '',
+    source: 'builtin',
+  },
 ];
 
 /** 通过名称查找内置技能 */

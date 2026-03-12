@@ -665,9 +665,16 @@ function renderMarkdownWithMentions(text: string): string {
 
 async function handleSend() {
   if (!inputText.value.trim() || chatStore.isThinking) return;
-  // If no active session, create one first
+  // If no active session, create one first (newSession is idempotent via backend)
   if (!chatStore.activeSessionId && chatStore.activeWorkerId) {
-    await chatStore.newSession(chatStore.activeWorkerId);
+    // Prefer existing chat session before creating a new one
+    const existingSession = chatStore.getWorkerSessions(chatStore.activeWorkerId)
+      .find(s => s.type === 'chat');
+    if (existingSession) {
+      chatStore.selectSession(existingSession.id);
+    } else {
+      await chatStore.newSession(chatStore.activeWorkerId);
+    }
   }
   const text = inputText.value;
   inputText.value = '';
