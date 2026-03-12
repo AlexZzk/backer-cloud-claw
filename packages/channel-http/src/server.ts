@@ -217,7 +217,10 @@ export class HttpServer {
 
   // ── 对外入口 ────────────────────────────────────────────────────────────────
 
-  start(): Promise<void> {
+  async start(): Promise<void> {
+    // 从磁盘恢复历史会话（元数据 + 消息，agent 按需重建）
+    await this.store.loadFromDisk();
+
     return new Promise(resolve => {
       const server = createServer((req, res) => {
         void this.dispatch(req, res);
@@ -555,6 +558,16 @@ export class HttpServer {
     entry: import('./session-store.js').SessionEntry,
     content: string,
   ) {
+    // 懒加载：会话从磁盘恢复时 agent 为 undefined，按需重建
+    if (!entry.agent) {
+      const workerCfg = (this.config.workers ?? []).find(w => w.id === entry.workerId);
+      if (!workerCfg) {
+        writeSse(res, { event: 'error', data: { message: `Worker "${entry.workerId}" 配置不存在` } });
+        res.end(); return;
+      }
+      entry.agent = await this.getAgentForWorker(workerCfg);
+    }
+
     // 记录用户消息
     entry.messages.push({ id: randomUUID(), role: 'user', content, timestamp: Date.now() });
     if (entry.messages.length === 1) entry.title = content.slice(0, 30);
@@ -596,6 +609,7 @@ export class HttpServer {
     this.accumulateTokens(entry.workerId, tokenUsage);
     writeSse(res, { event: 'done', data: tokenUsage ? { tokenUsage } : {} });
     res.end();
+    void this.store.persistEntry(entry.id);
   }
 
   /** DM 会话：fromWorker → toWorker（两轮 LLM 调用） */
@@ -608,6 +622,18 @@ export class HttpServer {
     const toWorkerCfg   = (this.config.workers ?? []).find(w => w.id === entry.toWorkerId);
     const fromName = fromWorkerCfg?.name ?? entry.workerId;
     const toName   = toWorkerCfg?.name   ?? (entry.toWorkerId ?? 'Worker B');
+
+    // 懒加载：会话从磁盘恢复时 agent/toAgent 为 undefined，按需重建
+    if (!entry.agent && fromWorkerCfg) {
+      entry.agent = await this.getAgentForWorker(fromWorkerCfg);
+    }
+    if (!entry.toAgent && toWorkerCfg) {
+      entry.toAgent = await this.getAgentForWorker(toWorkerCfg);
+    }
+    if (!entry.agent) {
+      writeSse(res, { event: 'error', data: { message: `Worker "${entry.workerId}" 配置不存在` } });
+      res.end(); return;
+    }
 
     // 记录用户指令（可选：仅在首条消息时更新标题）
     if (entry.messages.length === 0) {
@@ -671,6 +697,7 @@ export class HttpServer {
 
     writeSse(res, { event: 'done', data: {} });
     res.end();
+    void this.store.persistEntry(entry.id);
   }
 
   /**
@@ -707,6 +734,17 @@ export class HttpServer {
   ) {
     const workerIds = entry.workerIds ?? [entry.workerId];
 
+    // 懒加载：会话从磁盘恢复时 groupAgents 为 undefined，按需重建整个 Map
+    if (!entry.groupAgents) {
+      const agentMap = new Map<string, AgentInterface>();
+      for (const wid of workerIds) {
+        const cfg = (this.config.workers ?? []).find(w => w.id === wid);
+        if (cfg) agentMap.set(wid, await this.getAgentForWorker(cfg));
+      }
+      entry.groupAgents = agentMap;
+      if (!entry.agent) entry.agent = agentMap.get(entry.workerId);
+    }
+
     if (entry.messages.length === 0) {
       entry.title = `群聊：${content.slice(0, 20)}`;
     }
@@ -721,6 +759,7 @@ export class HttpServer {
       // 没有 @mention，消息存档但无 Worker 回复
       writeSse(res, { event: 'done', data: {} });
       res.end();
+      void this.store.persistEntry(entry.id);
       return;
     }
 
@@ -758,6 +797,7 @@ export class HttpServer {
 
     writeSse(res, { event: 'done', data: {} });
     res.end();
+    void this.store.persistEntry(entry.id);
   }
 
   /** POST /api/group-sessions — 创建用户↔多 Worker 群聊 */

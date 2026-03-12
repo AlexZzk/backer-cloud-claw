@@ -97,10 +97,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function getWorkerSessions(workerId: string): ChatSession[] {
     return sessions.value
-      .filter(s =>
-        (s.type === 'chat' && s.workerId === workerId) ||
-        (s.type === 'group' && s.workerIds?.includes(workerId))
-      )
+      .filter(s => s.type === 'chat' && s.workerId === workerId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
