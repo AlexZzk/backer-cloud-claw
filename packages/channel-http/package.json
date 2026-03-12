@@ -27,7 +27,8 @@
     "@bcc/messaging": "workspace:*",
     "@bcc/model-core": "workspace:*",
     "@bcc/org": "workspace:*",
-    "@bcc/skills": "workspace:*"
+    "@bcc/skills": "workspace:*",
+    "@bcc/task": "workspace:*"
   },
   "peerDependencies": {
     "@bcc/protocol-anthropic": "workspace:*",
