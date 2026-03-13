@@ -165,6 +165,9 @@ importers:
       '@bcc/skills':
         specifier: workspace:*
         version: link:../skills
+      '@bcc/task':
+        specifier: workspace:*
+        version: link:../task
     devDependencies:
       '@bcc/protocol-anthropic':
         specifier: workspace:*

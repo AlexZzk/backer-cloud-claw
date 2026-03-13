@@ -852,8 +852,13 @@ export class HttpServer {
 
     writeSse(res, { event: 'speaker', data: { workerId: entry.toWorkerId!, workerName: toName } });
 
-    // 构建发给 toWorker 的提示（带发送方身份）
-    const promptForTo = `[来自 ${fromName} 的消息]\n${fromText}`;
+    // 构建发给 toWorker 的提示（带发送方身份 + 人称转换提醒）
+    const promptForTo = [
+      `【来自同事「${entry.workerId}」（${fromName}）的消息】`,
+      `（注意：消息中的"我"指「${entry.workerId}」，若你需要委托其他人，请将代词替换为具体的 Worker ID）`,
+      '',
+      fromText,
+    ].join('\n');
     let toText = '';
     try {
       for await (const chunk of entry.toAgent.stream(promptForTo)) {
@@ -1512,6 +1517,9 @@ export class HttpServer {
     const selfWorkerId = workerCfg.id;
     const selfWorkerName = workerCfg.name;
     const chatStore = this.chatStore;
+    // 捕获 server 引用，用于工具 handler 中触发对方心跳（按需审视）
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const server = this;
 
     engine.registerTool({
       definition: {
@@ -1566,7 +1574,20 @@ export class HttpServer {
       },
       handler: async (input: Record<string, unknown>) => {
         const { chatId, content } = input as { chatId: string; content: string };
-        const msg = await chatStore.sendMessage(chatId, selfWorkerId, content);
+        // 优先通过 messagingService 发送（会触发 chat:message:sent 事件），降级到 chatStore
+        const msg = server.messagingService
+          ? await server.messagingService.post(chatId, selfWorkerId, content)
+          : await chatStore.sendMessage(chatId, selfWorkerId, content);
+        // 发送后立即触发群成员（非自己、非 user）的心跳，让对方尽快处理消息
+        if (server.company) {
+          const chat = await chatStore.getChat(chatId);
+          const recipients = (chat?.participants ?? []).filter(p => p !== selfWorkerId && p !== 'user');
+          for (const recipientId of recipients) {
+            if (server.company.scheduler.isRunning(recipientId)) {
+              void server.company.scheduler.triggerReview(recipientId).catch(() => {});
+            }
+          }
+        }
         return [
           `✅ 消息已发送`,
           `   发件人：${selfWorkerId}（${selfWorkerName}）`,
@@ -1628,16 +1649,43 @@ export class HttpServer {
       handler: async (input: Record<string, unknown>) => {
         const { toWorkerId, content } = input as { toWorkerId: string; content: string };
         // 创建或打开两人之间的直聊会话（幂等）
-        const chat = await chatStore.createChat([selfWorkerId, toWorkerId], 'direct');
-        const msg = await chatStore.sendMessage(chat.id, selfWorkerId, content);
+        const chat = await chatStore.createChat([selfWorkerId, toWorkerId as string], 'direct');
+        const msg = server.messagingService
+          ? await server.messagingService.post(chat.id, selfWorkerId, content)
+          : await chatStore.sendMessage(chat.id, selfWorkerId, content);
+        // 立即触发收件方心跳，让对方尽快处理消息
+        if (server.company?.scheduler.isRunning(toWorkerId as string)) {
+          void server.company.scheduler.triggerReview(toWorkerId as string).catch(() => {});
+        }
         return [
           `✅ 私信已发送`,
           `   收件方：${toWorkerId}`,
           `   会话 ID：${chat.id.slice(0, 8)}…`,
           `   消息 ID：${msg.id}`,
           `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
-          `   （对方将在下一个心跳周期读取并回复）`,
+          `   （已触发对方即时处理）`,
         ].join('\n');
+      },
+    });
+
+    // 工具：查看自己的未读消息收件箱
+    engine.registerTool({
+      definition: {
+        name: 'read_inbox',
+        description:
+          '查看我的未读消息收件箱，获取其他 Worker 或用户发给我但尚未处理的消息。' +
+          '可用于：了解有哪些新任务、跟进协作进展、回应别人的提问。',
+        inputSchema: { type: 'object', properties: {}, required: [] },
+      },
+      handler: async () => {
+        const allUnread = await chatStore.getAllUnread(selfWorkerId);
+        if (allUnread.length === 0) return '📭 收件箱没有未读消息。';
+        const lines = allUnread.map(({ chat, message }) => {
+          const time = new Date(message.timestamp).toLocaleString('zh-CN');
+          const chatLabel = chat.title ?? `${chat.id.slice(0, 8)}…`;
+          return `[${time}] 来自「${message.from}」，会话「${chatLabel}」：${message.content}`;
+        });
+        return `📬 你有 ${allUnread.length} 条未读消息：\n\n` + lines.join('\n\n');
       },
     });
 
