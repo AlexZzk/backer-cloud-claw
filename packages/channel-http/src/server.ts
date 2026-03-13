@@ -1653,20 +1653,23 @@ export class HttpServer {
       },
     });
 
-    // 工具：向另一个 Worker 发送私信（直接消息）
-    // 这是心跳驱动的异步通信的核心工具：Worker 可以主动给同事发消息
+    // 工具：向另一个 Worker 或用户发送私信（直接消息）
     engine.registerTool({
       definition: {
         name: 'send_direct_message',
         description:
-          '向另一个 Worker 发送一条私信（直接消息）。' +
-          '对方 Worker 会在下一个心跳周期自动读取并回复。' +
-          '适合：请求协作、传递信息、触发另一个 Worker 执行任务。',
+          '向另一个 Worker 或用户发送一条私信（直接消息）。' +
+          '收件方为 Worker 时，对方会在下一个心跳周期自动处理。' +
+          '收件方填 "user" 可直接给用户（主管）发通知。' +
+          '适合：请求协作、传递信息、任务完成后通知用户。',
         inputSchema: {
           type: 'object',
           properties: {
-            toWorkerId: { type: 'string', description: '收件方的 Worker ID' },
-            content:    { type: 'string', description: '消息正文' },
+            toWorkerId: {
+              type: 'string',
+              description: '收件方的 Worker ID，或 "user"（表示发消息给用户/主管）',
+            },
+            content: { type: 'string', description: '消息正文' },
           },
           required: ['toWorkerId', 'content'],
         },
@@ -1678,8 +1681,8 @@ export class HttpServer {
         const msg = server.messagingService
           ? await server.messagingService.post(chat.id, selfWorkerId, content)
           : await chatStore.sendMessage(chat.id, selfWorkerId, content);
-        // 立即触发收件方心跳，让对方尽快处理消息
-        if (server.company?.scheduler.isRunning(toWorkerId as string)) {
+        // 触发收件方心跳（'user' 没有心跳，跳过）
+        if (toWorkerId !== 'user' && server.company?.scheduler.isRunning(toWorkerId as string)) {
           void server.company.scheduler.triggerReview(toWorkerId as string).catch(() => {});
         }
         return [
@@ -1688,7 +1691,7 @@ export class HttpServer {
           `   会话 ID：${chat.id.slice(0, 8)}…`,
           `   消息 ID：${msg.id}`,
           `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
-          `   （已触发对方即时处理）`,
+          toWorkerId !== 'user' ? `   （已触发对方即时处理）` : `   （已存入用户收件箱）`,
         ].join('\n');
       },
     });
