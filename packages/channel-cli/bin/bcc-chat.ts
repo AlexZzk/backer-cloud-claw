@@ -16,6 +16,7 @@
 import { ModelRouter } from '@bcc/model-core';
 import { FileMemoryStore } from '@bcc/memory-fs';
 import { FileEpisodicStore, EpisodeGenerator } from '@bcc/memory-episodic';
+import { buildConsolidationPrompt } from '@bcc/org';
 import { getBuiltinTool } from '@bcc/skills';
 import { CliChannel } from '../src/index.js';
 import {
@@ -443,6 +444,26 @@ async function buildWorkerRegistry(
           }
         : undefined;
 
+      // 长期记忆提炼函数（需要 episodicStore + capabilities.memory.longTerm 时注入）
+      const hasLongTerm = (() => {
+        const mem = def.capabilities?.memory;
+        if (!mem) return false;
+        if (mem === true) return false;
+        return mem.longTerm === true;
+      })();
+      const longTermConsolidatorFn = (episodicStore && hasLongTerm)
+        ? async (workerId: string, existingMemory: string, recentEpisodes: import('@bcc/foundation').Episode[]) => {
+            const prompt = buildConsolidationPrompt(existingMemory, recentEpisodes);
+            try {
+              return await adapter.complete({
+                messages: [{ role: 'user', content: prompt }],
+              });
+            } catch {
+              return null;
+            }
+          }
+        : undefined;
+
       const worker = await Worker.create({
         profile: {
           id:             def.id,
@@ -467,8 +488,9 @@ async function buildWorkerRegistry(
         inboxService:      messagingService,
         taskService:       taskManager,
         // ── 能力配套服务 ─────────────────────────────────────────────────────
-        ...(episodicStore     && { episodicStore }),
-        ...(episodeGeneratorFn && { episodeGeneratorFn }),
+        ...(episodicStore            && { episodicStore }),
+        ...(episodeGeneratorFn       && { episodeGeneratorFn }),
+        ...(longTermConsolidatorFn   && { longTermConsolidatorFn }),
         sessionId:  `worker-${def.id}`,
         configDir:  process.cwd(),
       });
@@ -589,12 +611,21 @@ async function main(): Promise<void> {
       const cli = await CliChannel.create({ agent: initialSession, workerRegistry });
       await cli.start();
 
-      // 会话结束后，为每个 Worker 生成情节摘要（最多等 5 秒，超时静默忽略）
+      // 会话结束后的收尾工作（最多等 10 秒，超时静默忽略）
       if (episodicStore) {
-        const summaryTasks = allWorkers.map(w => w.generateAndPersistEpisode());
+        const postSessionTasks = allWorkers.flatMap(w => {
+          const tasks: Promise<unknown>[] = [w.generateAndPersistEpisode()];
+          // 若该 Worker 开启了长期记忆，会话结束时顺便触发一次提炼
+          const mem = w.profile.capabilities?.memory;
+          const hasLongTerm = mem && mem !== true && mem.longTerm === true;
+          if (hasLongTerm) {
+            tasks.push(w.consolidateLongTermMemory());
+          }
+          return tasks;
+        });
         await Promise.race([
-          Promise.allSettled(summaryTasks),
-          new Promise(r => setTimeout(r, 5000)),
+          Promise.allSettled(postSessionTasks),
+          new Promise(r => setTimeout(r, 10000)),
         ]);
       }
       return;

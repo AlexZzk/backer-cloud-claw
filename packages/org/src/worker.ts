@@ -19,6 +19,7 @@ import { Mailbox } from './mailbox.js';
 import { TokenTracker } from './token-tracker.js';
 import { AuditLog } from './audit-log.js';
 import { assertCapabilities } from './capability-registry.js';
+import { LongTermMemory, buildConsolidationPrompt } from './long-term-memory.js';
 
 // ─── 异步消息 & 任务服务的轻量接口（避免在 @bcc/org 中直接依赖 @bcc/messaging / @bcc/task）────
 
@@ -161,6 +162,21 @@ export interface WorkerOptions {
   ) => Promise<Episode | null>;
 
   /**
+   * 长期记忆提炼函数（可选）。
+   * 调用时机：consolidateLongTermMemory() 被触发时（定时或手动）。
+   *
+   * @param workerId       Worker ID
+   * @param existingMemory 当前 MEMORY.md 的内容（空字符串表示首次生成）
+   * @param recentEpisodes 最近 N 条情节记忆
+   * @returns 新的 MEMORY.md 内容；返回 null 时跳过写入
+   */
+  longTermConsolidatorFn?: (
+    workerId: string,
+    existingMemory: string,
+    recentEpisodes: Episode[],
+  ) => Promise<string | null>;
+
+  /**
    * 会话 ID（用于情节记忆归档）。
    * 不提供时使用 `{profile.id}-{timestamp}` 作为默认值。
    */
@@ -220,6 +236,8 @@ export class Worker implements Participant {
   private _episodicStore: EpisodicStore | undefined;
   private _episodeGeneratorFn: ((workerId: string, sessionId: string, history: Message[]) => Promise<Episode | null>) | undefined;
   private _sessionId: string;
+  private _longTermMemory: LongTermMemory | undefined;
+  private _longTermConsolidatorFn: ((workerId: string, existingMemory: string, recentEpisodes: Episode[]) => Promise<string | null>) | undefined;
 
   private constructor(
     profile: WorkerProfile,
@@ -233,6 +251,8 @@ export class Worker implements Participant {
     episodicStore?: EpisodicStore,
     episodeGeneratorFn?: (workerId: string, sessionId: string, history: Message[]) => Promise<Episode | null>,
     sessionId?: string,
+    longTermMemory?: LongTermMemory,
+    longTermConsolidatorFn?: (workerId: string, existingMemory: string, recentEpisodes: Episode[]) => Promise<string | null>,
   ) {
     this.profile = profile;
     this.engine = engine;
@@ -245,6 +265,8 @@ export class Worker implements Participant {
     this._episodicStore = episodicStore;
     this._episodeGeneratorFn = episodeGeneratorFn;
     this._sessionId = sessionId ?? `${profile.id}-${Date.now()}`;
+    this._longTermMemory = longTermMemory;
+    this._longTermConsolidatorFn = longTermConsolidatorFn;
     this.inbox = new Mailbox();
 
     // Mailbox 串行化处理：消息入队后依次调用 _process，丢弃返回值
@@ -334,7 +356,20 @@ export class Worker implements Participant {
       if (userContent) systemParts.push(`## 关于用户\n\n${userContent}`);
     }
 
-    // 2d. 情节记忆：启动时注入最近 N 条情节摘要
+    // ── 2d. 长期记忆：加载 MEMORY.md（提炼的精华，比情节摘要更稳定）
+    let longTermMemoryInstance: LongTermMemory | undefined;
+    if (capabilities?.memory) {
+      const memConfig = typeof capabilities.memory === 'object' ? capabilities.memory : {};
+      if (memConfig.longTerm) {
+        longTermMemoryInstance = new LongTermMemory(profile.id);
+        const ltContent = await longTermMemoryInstance.load();
+        if (ltContent.trim()) {
+          systemParts.push(`## 长期记忆\n\n${ltContent.trim()}`);
+        }
+      }
+    }
+
+    // 2e. 情节记忆：启动时注入最近 N 条情节摘要
     if (capabilities?.memory && options.episodicStore) {
       const memConfig = typeof capabilities.memory === 'object' ? capabilities.memory : {};
       if (memConfig.episodic !== false) {
@@ -370,6 +405,8 @@ export class Worker implements Participant {
       options.episodicStore,
       options.episodeGeneratorFn,
       options.sessionId,
+      longTermMemoryInstance,
+      options.longTermConsolidatorFn,
     );
 
     // 自动注册 inbox / task 工具
@@ -552,6 +589,42 @@ export class Worker implements Participant {
       await this._episodicStore.append(episode);
     }
     return episode;
+  }
+
+  /**
+   * 提炼长期记忆：从 EpisodicStore 中读取最近情节摘要，调用 LLM 生成/更新 MEMORY.md。
+   *
+   * 调用时机：
+   *   - 每日定时（由 WorkerScheduler 或外部 Cron 触发）
+   *   - 手动调用（调试 / 强制更新）
+   *
+   * 需要同时满足以下条件才会生效：
+   *   - capabilities.memory.longTerm === true
+   *   - longTermConsolidatorFn 已注入
+   *   - episodicStore 已注入
+   *
+   * @returns 新的 MEMORY.md 内容；条件不满足或生成失败时返回 null
+   */
+  async consolidateLongTermMemory(): Promise<string | null> {
+    if (!this._longTermMemory || !this._longTermConsolidatorFn || !this._episodicStore) {
+      return null;
+    }
+
+    // 读取最近 30 条情节记忆（提炼用，比启动注入的窗口更大）
+    const episodes = await this._episodicStore.recent(this.profile.id, 30);
+    if (episodes.length === 0) return null;
+
+    const existingMemory = await this._longTermMemory.load();
+    const newContent = await this._longTermConsolidatorFn(
+      this.profile.id,
+      existingMemory,
+      episodes,
+    );
+
+    if (newContent) {
+      await this._longTermMemory.save(newContent);
+    }
+    return newContent;
   }
 
   // ─── Morning Routine 内部方法 ─────────────────────────────────────────────
