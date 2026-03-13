@@ -194,6 +194,16 @@ export interface WorkerProfile {
   modelId: string;
   /** 可选：心跳/收件箱审视用的轻量模型 ID（比主模型便宜） */
   reviewModelId?: string;
+  /**
+   * Worker 特权等级（默认 'normal'）。
+   * auditor 级别有特殊限制：不允许开启 reflection / skillEvolution。
+   */
+  privilegeLevel?: WorkerPrivilegeLevel;
+  /**
+   * 可选能力配置。未设置任何能力时，Worker 仅具备 Base Layer 能力
+   * （身份 + 大脑 + 通信 + 状态机 + 可观测性）。
+   */
+  capabilities?: WorkerCapabilityConfig;
 }
 
 /**
@@ -280,7 +290,9 @@ export type OrgEvent =
   | { type: 'task:completed'; task: WorkerTask }
   // ─── Worker 定期审视事件 ──────────────────────────────────────────────────────
   | { type: 'worker:inbox:checked'; workerId: string; pendingCount: number }
-  | { type: 'worker:tasks:reviewed'; workerId: string; taskSummary: { todo: number; inProgress: number; done: number } };
+  | { type: 'worker:tasks:reviewed'; workerId: string; taskSummary: { todo: number; inProgress: number; done: number } }
+  // ─── Worker 生命周期状态变化 ──────────────────────────────────────────────────
+  | { type: 'worker:state:changed'; workerId: string; previousState: WorkerLifecycleState; newState: WorkerLifecycleState; timestamp: number };
 
 // ─── Chat（异步会话通信系统）──────────────────────────────────────────────────
 
@@ -439,4 +451,136 @@ export interface EpisodicStore {
   recent(workerId: string, limit: number): Promise<Episode[]>;
   /** 清空指定 Worker 的全部情节记忆 */
   clear(workerId: string): Promise<void>;
+}
+
+// ─── Worker 生命周期与治理 ────────────────────────────────────────────────────
+
+/**
+ * WorkerLifecycleState：Worker 当前的运行状态。
+ *
+ * - idle       空闲，可立即处理消息
+ * - processing 正在处理消息/任务（新消息会进入 Mailbox 队列）
+ * - sleeping   主动休眠（仅心跳或外部唤醒可激活）
+ * - blocked    等待审批（高危操作挂起，审批通过后继续）
+ */
+export type WorkerLifecycleState = 'idle' | 'processing' | 'sleeping' | 'blocked';
+
+/**
+ * WorkerPrivilegeLevel：Worker 的特权等级。
+ *
+ * - normal   普通 Worker，只能执行白名单工具
+ * - elevated 高级 Worker，可自主审批低风险申请
+ * - auditor  审核员，可审批中/高风险，上报 Admin；不得开启 reflection/skillEvolution
+ */
+export type WorkerPrivilegeLevel = 'normal' | 'elevated' | 'auditor';
+
+// ─── 能力插件配置 ─────────────────────────────────────────────────────────────
+
+/** 主动性（Proactivity）配置。 */
+export interface ProactivityCapabilityConfig {
+  /** Cron 表达式，定时心跳唤醒（如 "0 9 * * *"） */
+  heartbeat?: string;
+  /** 唤醒后执行的晨检步骤（顺序执行） */
+  routine?: Array<'checkInbox' | 'reviewTasks' | 'planDay' | 'notify'>;
+}
+
+/** 记忆（Memory）能力配置。 */
+export interface MemoryCapabilityConfig {
+  /** 开启情节记忆（每次对话结束后自动摘要） */
+  episodic?: boolean;
+  /** 开启长期记忆（MEMORY.md 精华提炼；依赖 episodic） */
+  longTerm?: boolean;
+  /** 启动时注入最近 N 条情节摘要（默认 10） */
+  contextWindow?: number;
+  /** 提炼长期记忆的 Cron 表达式（如 "0 23 * * *"） */
+  consolidateInterval?: string;
+}
+
+/** 灵魂（Soul）能力配置。 */
+export interface SoulCapabilityConfig {
+  /** SOUL.md 文件路径（相对于 config 目录或绝对路径） */
+  file?: string;
+  /** USER.md 文件路径（记录用户/雇主背景） */
+  userContext?: string;
+}
+
+/** 反思（Reflection）能力配置。 */
+export interface ReflectionCapabilityConfig {
+  /** 任务结束后自主反思（依赖 memory.episodic） */
+  selfReflect?: boolean;
+  /** 接受外部反馈并决策是否采纳（更新 SOUL.md） */
+  feedbackInbox?: boolean;
+}
+
+/** 技能进化（SkillEvolution）能力配置。 */
+export interface SkillEvolutionCapabilityConfig {
+  /** 允许生成私有技能（仅本 Worker 可见） */
+  privateSkills?: boolean;
+  /** 允许向 Admin 提建议，申请将私有技能晋升为团队技能 */
+  canShareRequest?: boolean;
+}
+
+/**
+ * WorkerCapabilityConfig：Worker 可选能力的配置集合。
+ *
+ * 每项能力均可设为 `true`（使用默认配置）或具体配置对象。
+ * 未设置或设为 `false` / `undefined` 表示禁用。
+ *
+ * 依赖关系（启动时自动校验）：
+ *   memory.longTerm  →  memory.episodic
+ *   reflection       →  memory.episodic
+ *   skillEvolution   →  reflection
+ *   proactivity.routine（包含 reviewTasks）  →  task
+ */
+export interface WorkerCapabilityConfig {
+  /** 主动性：定时心跳 + 晨检流程 */
+  proactivity?: ProactivityCapabilityConfig | boolean;
+  /** 任务管理：TaskList + Scheduler */
+  task?: boolean;
+  /** 记忆体系：情节记忆 + 长期记忆 */
+  memory?: MemoryCapabilityConfig | boolean;
+  /** 灵魂/个性：SOUL.md 注入 system prompt */
+  soul?: SoulCapabilityConfig | boolean;
+  /** 反思：自主反思 + 接受外部反馈 */
+  reflection?: ReflectionCapabilityConfig | boolean;
+  /** 技能进化：私有技能 + 晋升申请 */
+  skillEvolution?: SkillEvolutionCapabilityConfig | boolean;
+}
+
+// ─── 审计日志 ─────────────────────────────────────────────────────────────────
+
+/**
+ * AuditAction：审计日志中记录的操作类型。
+ */
+export type AuditAction =
+  | 'message:received'    // 收到消息
+  | 'message:sent'        // 发出消息
+  | 'tool:called'         // 调用了一个工具
+  | 'tool:result'         // 工具执行完成
+  | 'inbox:checked'       // 收件箱审视完成
+  | 'state:changed'       // 生命周期状态变化
+  | 'approval:requested'; // 发起了一个审批申请
+
+/**
+ * AuditEntry：一条不可篡改的审计记录。
+ *
+ * 所有 Worker 的重要操作都会写入对应的 ~/.bcc/audit/{workerId}.jsonl 文件。
+ */
+export interface AuditEntry {
+  /** 记录唯一 ID */
+  id: string;
+  /** 写入时间戳（ms） */
+  timestamp: number;
+  /** 操作归属的 Worker ID */
+  workerId: string;
+  /** 关联 Thread ID（同步通信路径） */
+  threadId?: string;
+  /** 关联 Chat ID（异步通信路径） */
+  chatId?: string;
+  /** 操作类型 */
+  action: AuditAction;
+  /** 操作详情（自由结构，记录关键参数） */
+  details: Record<string, unknown>;
+  /** 本次操作产生的 token 消耗（如有） */
+  tokenUsage?: TokenUsage;
 }

@@ -7,10 +7,13 @@ import type {
   Tool,
   TokenUsage,
   WorkerProfile,
+  WorkerLifecycleState,
 } from '@bcc/foundation';
 import { AgentEngine, type AgentEngineOptions } from '@bcc/agent-engine';
 import { Mailbox } from './mailbox.js';
 import { TokenTracker } from './token-tracker.js';
+import { AuditLog } from './audit-log.js';
+import { assertCapabilities } from './capability-registry.js';
 
 // ─── 异步消息 & 任务服务的轻量接口（避免在 @bcc/org 中直接依赖 @bcc/messaging / @bcc/task）────
 
@@ -122,6 +125,12 @@ export interface WorkerOptions {
    * 注入后 Worker 会自动注册 create_task / update_task / list_tasks 工具。
    */
   taskService?: AsyncTaskService;
+  /**
+   * 审计日志实例（可选）。
+   * 不提供时自动创建一个默认实例（写入 ~/.bcc/audit/{id}.jsonl）。
+   * 多个 Worker 可以共享同一个 AuditLog 实例（日志按 workerId 分文件写入）。
+   */
+  auditLog?: AuditLog;
 }
 
 /**
@@ -157,6 +166,16 @@ export class Worker implements Participant {
   private inboxService: AsyncInboxService | undefined;
   private taskService: AsyncTaskService | undefined;
 
+  // ── 生命周期状态机 ─────────────────────────────────────────────────────────
+  private _state: WorkerLifecycleState = 'idle';
+  /** 只读外部访问当前状态 */
+  get state(): WorkerLifecycleState {
+    return this._state;
+  }
+
+  // ── 审计日志 ───────────────────────────────────────────────────────────────
+  readonly auditLog: AuditLog;
+
   private constructor(
     profile: WorkerProfile,
     engine: AgentEngine,
@@ -165,6 +184,7 @@ export class Worker implements Participant {
     inboxService?: AsyncInboxService,
     taskService?: AsyncTaskService,
     reviewEngine?: AgentEngine,
+    auditLog?: AuditLog,
   ) {
     this.profile = profile;
     this.engine = engine;
@@ -173,6 +193,7 @@ export class Worker implements Participant {
     this.eventBus = eventBus;
     this.inboxService = inboxService;
     this.taskService = taskService;
+    this.auditLog = auditLog ?? new AuditLog();
     this.inbox = new Mailbox();
 
     // Mailbox 串行化处理：消息入队后依次调用 _process，丢弃返回值
@@ -181,26 +202,76 @@ export class Worker implements Participant {
     });
   }
 
+  // ── 状态机操作（公开 API）─────────────────────────────────────────────────
+
+  /**
+   * 将 Worker 置为休眠状态（sleeping）。
+   * 休眠中的 Worker 仍会接收消息，但放入队列直到 wake() 被调用。
+   */
+  async sleep(): Promise<void> {
+    if (this._state !== 'idle') return;
+    await this._setState('sleeping');
+  }
+
+  /**
+   * 唤醒 Worker，从 sleeping 恢复到 idle。
+   */
+  async wake(): Promise<void> {
+    if (this._state !== 'sleeping') return;
+    await this._setState('idle');
+  }
+
+  /**
+   * 暂停 Worker（手动挂起，等待恢复）。
+   * 与 sleeping 的区别：sleeping 由心跳自动恢复，pause 需显式 resume。
+   */
+  async pause(): Promise<void> {
+    if (this._state !== 'idle') return;
+    await this._setState('blocked');
+  }
+
+  /**
+   * 恢复 Worker，从 blocked 恢复到 idle。
+   */
+  async resume(): Promise<void> {
+    if (this._state !== 'blocked') return;
+    await this._setState('idle');
+  }
+
   /**
    * 工厂方法：异步创建 Worker（等待 AgentEngine 初始化完成）。
    * 若注入了 inboxService / taskService，会自动注册对应的 LLM 工具。
    */
   static async create(options: WorkerOptions): Promise<Worker> {
+    const { profile } = options;
+
+    // ── 1. 能力依赖校验（启动时断言，配置错误直接报错）──────────────────────
+    if (profile.capabilities) {
+      assertCapabilities(
+        profile.id,
+        profile.capabilities,
+        profile.privilegeLevel ?? 'normal',
+      );
+    }
+
+    // ── 2. 初始化引擎 ─────────────────────────────────────────────────────────
     const engine = await AgentEngine.create(options.engineOptions);
     const reviewEngine = options.reviewEngineOptions
       ? await AgentEngine.create(options.reviewEngineOptions)
       : undefined;
     const tokenTracker = options.tokenTracker ?? new TokenTracker();
     const eventBus = options.eventBus ?? new EventEmitter();
+    const auditLog = options.auditLog ?? new AuditLog();
 
     const worker = new Worker(
-      options.profile,
+      profile,
       engine,
       tokenTracker,
       eventBus,
       options.inboxService,
       options.taskService,
       reviewEngine,
+      auditLog,
     );
 
     // 自动注册 inbox / task 工具
@@ -231,6 +302,10 @@ export class Worker implements Participant {
       message,
     } satisfies OrgEvent);
 
+    void this.auditLog.recordMessageReceived(
+      this.id, message.id, message.from, message.threadId,
+    );
+
     return this._process(message);
   }
 
@@ -240,6 +315,11 @@ export class Worker implements Participant {
   async *receiveStream(
     message: OrgMessage,
   ): AsyncIterable<{ type: 'chunk'; text: string } | { type: 'done'; reply: OrgMessage }> {
+    await this._setState('processing');
+    void this.auditLog.recordMessageReceived(
+      this.id, message.id, message.from, message.threadId,
+    );
+
     this.eventBus.emit('org:event', {
       type: 'worker:thinking',
       workerId: this.id,
@@ -249,18 +329,25 @@ export class Worker implements Participant {
     let accumulatedText = '';
     let tokenUsage: TokenUsage | undefined;
 
-    for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
-      if (chunk.type === 'text' && chunk.text) {
-        accumulatedText += chunk.text;
-        yield { type: 'chunk', text: chunk.text };
+    try {
+      for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
+        if (chunk.type === 'text' && chunk.text) {
+          accumulatedText += chunk.text;
+          yield { type: 'chunk', text: chunk.text };
+        }
+        if (chunk.type === 'done') {
+          tokenUsage = chunk.tokenUsage;
+        }
       }
-      if (chunk.type === 'done') {
-        tokenUsage = chunk.tokenUsage;
-      }
+    } finally {
+      await this._setState('idle');
     }
 
     const reply = this._buildReply(message, accumulatedText, tokenUsage);
     this._recordAndEmit(message.threadId, tokenUsage, reply);
+    void this.auditLog.recordMessageSent(
+      this.id, reply.id, String(reply.to), reply.threadId, undefined, tokenUsage,
+    );
     yield { type: 'done', reply };
   }
 
@@ -281,6 +368,8 @@ export class Worker implements Participant {
    */
   async processInbox(): Promise<void> {
     if (!this.inboxService) return;
+    // sleeping / blocked 状态下跳过（不主动处理，等状态恢复后下次心跳再试）
+    if (this._state === 'sleeping' || this._state === 'blocked') return;
 
     const pending = await this.inboxService.getPendingMessages(this.id);
 
@@ -290,6 +379,7 @@ export class Worker implements Participant {
         workerId: this.id,
         pendingCount: 0,
       } satisfies OrgEvent);
+      void this.auditLog.recordInboxChecked(this.id, 0, []);
       return;
     }
 
@@ -307,9 +397,20 @@ export class Worker implements Participant {
       byChat.set(item.chat.id, group);
     }
 
-    for (const [chatId, items] of byChat) {
-      await this._processChatMessages(chatId, items);
+    await this._setState('processing');
+    try {
+      for (const [chatId, items] of byChat) {
+        await this._processChatMessages(chatId, items);
+      }
+    } finally {
+      await this._setState('idle');
     }
+
+    void this.auditLog.recordInboxChecked(
+      this.id,
+      pending.length,
+      [...byChat.keys()],
+    );
   }
 
   // ─── 工具注册（运行时追加技能）──────────────────────────────────────────────
@@ -317,6 +418,26 @@ export class Worker implements Participant {
   /** 注册工具（运行时追加技能） */
   registerTool(tool: Tool): void {
     this.engine.registerTool(tool);
+  }
+
+  // ─── 状态机内部方法 ──────────────────────────────────────────────────────────
+
+  /**
+   * 内部状态切换：更新 _state、发布事件、写审计日志。
+   * 对外用 sleep/wake/pause/resume；receive/processInbox 内部直接调用此方法。
+   */
+  private async _setState(newState: WorkerLifecycleState): Promise<void> {
+    const previousState = this._state;
+    if (previousState === newState) return;
+    this._state = newState;
+    this.eventBus.emit('org:event', {
+      type: 'worker:state:changed',
+      workerId: this.id,
+      previousState,
+      newState,
+      timestamp: Date.now(),
+    } satisfies OrgEvent);
+    void this.auditLog.recordStateChange(this.id, previousState, newState);
   }
 
   // ─── 辅助方法 ────────────────────────────────────────────────────────────────
