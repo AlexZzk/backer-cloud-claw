@@ -6,6 +6,11 @@ export { MessageRouter } from './router.js';
 export { ThreadManager } from './thread.js';
 export { TokenTracker } from './token-tracker.js';
 export { WorkerScheduler } from './worker-scheduler.js';
+export { AuditLog } from './audit-log.js';
+
+// 能力校验
+export { validateCapabilities, assertCapabilities } from './capability-registry.js';
+export type { CapabilityValidationError } from './capability-registry.js';
 
 // 类型导出
 export type { WorkerOptions, AsyncInboxService, AsyncTaskService } from './worker.js';

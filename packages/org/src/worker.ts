@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { resolve, dirname } from 'node:path';
 import type {
   OrgEvent,
   OrgMessage,
@@ -7,10 +9,16 @@ import type {
   Tool,
   TokenUsage,
   WorkerProfile,
+  WorkerLifecycleState,
+  EpisodicStore,
+  Episode,
+  Message,
 } from '@bcc/foundation';
 import { AgentEngine, type AgentEngineOptions } from '@bcc/agent-engine';
 import { Mailbox } from './mailbox.js';
 import { TokenTracker } from './token-tracker.js';
+import { AuditLog } from './audit-log.js';
+import { assertCapabilities } from './capability-registry.js';
 
 // ─── 异步消息 & 任务服务的轻量接口（避免在 @bcc/org 中直接依赖 @bcc/messaging / @bcc/task）────
 
@@ -122,6 +130,47 @@ export interface WorkerOptions {
    * 注入后 Worker 会自动注册 create_task / update_task / list_tasks 工具。
    */
   taskService?: AsyncTaskService;
+  /**
+   * 审计日志实例（可选）。
+   * 不提供时自动创建一个默认实例（写入 ~/.bcc/audit/{id}.jsonl）。
+   * 多个 Worker 可以共享同一个 AuditLog 实例（日志按 workerId 分文件写入）。
+   */
+  auditLog?: AuditLog;
+
+  // ── Capability 配套服务 ────────────────────────────────────────────────────
+
+  /**
+   * 情节记忆存储（可选）。
+   * 配合 capabilities.memory.episodic 使用：
+   * - 启动时注入最近 N 条情节摘要到 system prompt
+   * - generateAndPersistEpisode() 被调用时将新摘要写入此存储
+   */
+  episodicStore?: EpisodicStore;
+
+  /**
+   * 情节摘要生成函数（可选）。
+   * 签名与 EpisodeGenerator.generate() 一致，通过注入避免循环依赖。
+   *
+   * 典型用法：
+   *   episodeGeneratorFn: (wid, sid, history) => generator.generate(wid, sid, history)
+   */
+  episodeGeneratorFn?: (
+    workerId: string,
+    sessionId: string,
+    history: Message[],
+  ) => Promise<Episode | null>;
+
+  /**
+   * 会话 ID（用于情节记忆归档）。
+   * 不提供时使用 `{profile.id}-{timestamp}` 作为默认值。
+   */
+  sessionId?: string;
+
+  /**
+   * 配置文件所在目录（用于解析 SOUL.md / USER.md 等相对路径）。
+   * 不提供时使用当前工作目录 process.cwd()。
+   */
+  configDir?: string;
 }
 
 /**
@@ -157,6 +206,21 @@ export class Worker implements Participant {
   private inboxService: AsyncInboxService | undefined;
   private taskService: AsyncTaskService | undefined;
 
+  // ── 生命周期状态机 ─────────────────────────────────────────────────────────
+  private _state: WorkerLifecycleState = 'idle';
+  /** 只读外部访问当前状态 */
+  get state(): WorkerLifecycleState {
+    return this._state;
+  }
+
+  // ── 审计日志 ───────────────────────────────────────────────────────────────
+  readonly auditLog: AuditLog;
+
+  // ── 记忆能力 ───────────────────────────────────────────────────────────────
+  private _episodicStore: EpisodicStore | undefined;
+  private _episodeGeneratorFn: ((workerId: string, sessionId: string, history: Message[]) => Promise<Episode | null>) | undefined;
+  private _sessionId: string;
+
   private constructor(
     profile: WorkerProfile,
     engine: AgentEngine,
@@ -165,6 +229,10 @@ export class Worker implements Participant {
     inboxService?: AsyncInboxService,
     taskService?: AsyncTaskService,
     reviewEngine?: AgentEngine,
+    auditLog?: AuditLog,
+    episodicStore?: EpisodicStore,
+    episodeGeneratorFn?: (workerId: string, sessionId: string, history: Message[]) => Promise<Episode | null>,
+    sessionId?: string,
   ) {
     this.profile = profile;
     this.engine = engine;
@@ -173,6 +241,10 @@ export class Worker implements Participant {
     this.eventBus = eventBus;
     this.inboxService = inboxService;
     this.taskService = taskService;
+    this.auditLog = auditLog ?? new AuditLog();
+    this._episodicStore = episodicStore;
+    this._episodeGeneratorFn = episodeGeneratorFn;
+    this._sessionId = sessionId ?? `${profile.id}-${Date.now()}`;
     this.inbox = new Mailbox();
 
     // Mailbox 串行化处理：消息入队后依次调用 _process，丢弃返回值
@@ -181,26 +253,123 @@ export class Worker implements Participant {
     });
   }
 
+  // ── 状态机操作（公开 API）─────────────────────────────────────────────────
+
+  /**
+   * 将 Worker 置为休眠状态（sleeping）。
+   * 休眠中的 Worker 仍会接收消息，但放入队列直到 wake() 被调用。
+   */
+  async sleep(): Promise<void> {
+    if (this._state !== 'idle') return;
+    await this._setState('sleeping');
+  }
+
+  /**
+   * 唤醒 Worker，从 sleeping 恢复到 idle。
+   */
+  async wake(): Promise<void> {
+    if (this._state !== 'sleeping') return;
+    await this._setState('idle');
+  }
+
+  /**
+   * 暂停 Worker（手动挂起，等待恢复）。
+   * 与 sleeping 的区别：sleeping 由心跳自动恢复，pause 需显式 resume。
+   */
+  async pause(): Promise<void> {
+    if (this._state !== 'idle') return;
+    await this._setState('blocked');
+  }
+
+  /**
+   * 恢复 Worker，从 blocked 恢复到 idle。
+   */
+  async resume(): Promise<void> {
+    if (this._state !== 'blocked') return;
+    await this._setState('idle');
+  }
+
   /**
    * 工厂方法：异步创建 Worker（等待 AgentEngine 初始化完成）。
    * 若注入了 inboxService / taskService，会自动注册对应的 LLM 工具。
    */
   static async create(options: WorkerOptions): Promise<Worker> {
-    const engine = await AgentEngine.create(options.engineOptions);
+    const { profile } = options;
+    const capabilities = profile.capabilities;
+    const configDir = options.configDir ?? process.cwd();
+
+    // ── 1. 能力依赖校验（启动时断言，配置错误直接报错）──────────────────────
+    if (capabilities) {
+      assertCapabilities(
+        profile.id,
+        capabilities,
+        profile.privilegeLevel ?? 'normal',
+      );
+    }
+
+    // ── 2. 构建系统提示词（Soul → 原始 system → USER.md → 情节记忆）────────
+    const engineOptions = { ...options.engineOptions };
+    const systemParts: string[] = [];
+
+    // 2a. Soul：SOUL.md 个性文件（最优先，定义 Worker 的核心身份）
+    if (capabilities?.soul) {
+      const soulConfig = typeof capabilities.soul === 'object' ? capabilities.soul : {};
+
+      if (soulConfig.file) {
+        const soulPath = resolve(configDir, soulConfig.file);
+        const soulContent = await loadFile(soulPath);
+        if (soulContent) systemParts.push(soulContent);
+      }
+    }
+
+    // 2b. 调用方构建的系统提示词（身份 + 同事 + 通信指南）
+    if (engineOptions.system) {
+      systemParts.push(engineOptions.system);
+    }
+
+    // 2c. USER.md：用户/雇主背景信息
+    if (capabilities?.soul && typeof capabilities.soul === 'object' && capabilities.soul.userContext) {
+      const userPath = resolve(configDir, capabilities.soul.userContext);
+      const userContent = await loadFile(userPath);
+      if (userContent) systemParts.push(`## 关于用户\n\n${userContent}`);
+    }
+
+    // 2d. 情节记忆：启动时注入最近 N 条情节摘要
+    if (capabilities?.memory && options.episodicStore) {
+      const memConfig = typeof capabilities.memory === 'object' ? capabilities.memory : {};
+      if (memConfig.episodic !== false) {
+        const contextWindow = memConfig.contextWindow ?? 10;
+        const episodes = await options.episodicStore.recent(profile.id, contextWindow);
+        if (episodes.length > 0) {
+          const episodeText = formatEpisodesForPrompt(episodes);
+          systemParts.push(episodeText);
+        }
+      }
+    }
+
+    engineOptions.system = systemParts.filter(Boolean).join('\n\n---\n\n') || undefined;
+
+    // ── 3. 初始化引擎 ─────────────────────────────────────────────────────────
+    const engine = await AgentEngine.create(engineOptions);
     const reviewEngine = options.reviewEngineOptions
       ? await AgentEngine.create(options.reviewEngineOptions)
       : undefined;
     const tokenTracker = options.tokenTracker ?? new TokenTracker();
     const eventBus = options.eventBus ?? new EventEmitter();
+    const auditLog = options.auditLog ?? new AuditLog();
 
     const worker = new Worker(
-      options.profile,
+      profile,
       engine,
       tokenTracker,
       eventBus,
       options.inboxService,
       options.taskService,
       reviewEngine,
+      auditLog,
+      options.episodicStore,
+      options.episodeGeneratorFn,
+      options.sessionId,
     );
 
     // 自动注册 inbox / task 工具
@@ -231,6 +400,10 @@ export class Worker implements Participant {
       message,
     } satisfies OrgEvent);
 
+    void this.auditLog.recordMessageReceived(
+      this.id, message.id, message.from, message.threadId,
+    );
+
     return this._process(message);
   }
 
@@ -240,6 +413,11 @@ export class Worker implements Participant {
   async *receiveStream(
     message: OrgMessage,
   ): AsyncIterable<{ type: 'chunk'; text: string } | { type: 'done'; reply: OrgMessage }> {
+    await this._setState('processing');
+    void this.auditLog.recordMessageReceived(
+      this.id, message.id, message.from, message.threadId,
+    );
+
     this.eventBus.emit('org:event', {
       type: 'worker:thinking',
       workerId: this.id,
@@ -249,18 +427,25 @@ export class Worker implements Participant {
     let accumulatedText = '';
     let tokenUsage: TokenUsage | undefined;
 
-    for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
-      if (chunk.type === 'text' && chunk.text) {
-        accumulatedText += chunk.text;
-        yield { type: 'chunk', text: chunk.text };
+    try {
+      for await (const chunk of this.engine.stream(this._buildEngineInput(message))) {
+        if (chunk.type === 'text' && chunk.text) {
+          accumulatedText += chunk.text;
+          yield { type: 'chunk', text: chunk.text };
+        }
+        if (chunk.type === 'done') {
+          tokenUsage = chunk.tokenUsage;
+        }
       }
-      if (chunk.type === 'done') {
-        tokenUsage = chunk.tokenUsage;
-      }
+    } finally {
+      await this._setState('idle');
     }
 
     const reply = this._buildReply(message, accumulatedText, tokenUsage);
     this._recordAndEmit(message.threadId, tokenUsage, reply);
+    void this.auditLog.recordMessageSent(
+      this.id, reply.id, String(reply.to), reply.threadId, undefined, tokenUsage,
+    );
     yield { type: 'done', reply };
   }
 
@@ -281,8 +466,11 @@ export class Worker implements Participant {
    */
   async processInbox(): Promise<void> {
     if (!this.inboxService) return;
+    // sleeping / blocked 状态下跳过（不主动处理，等状态恢复后下次心跳再试）
+    if (this._state === 'sleeping' || this._state === 'blocked') return;
 
     const pending = await this.inboxService.getPendingMessages(this.id);
+    const routineSteps = this._getRoutineSteps();
 
     if (pending.length === 0) {
       this.eventBus.emit('org:event', {
@@ -290,6 +478,12 @@ export class Worker implements Participant {
         workerId: this.id,
         pendingCount: 0,
       } satisfies OrgEvent);
+      void this.auditLog.recordInboxChecked(this.id, 0, []);
+
+      // 即使没有未读消息，若配置了 planDay 则执行晨检流程
+      if (routineSteps.includes('planDay')) {
+        await this._runMorningRoutine([], routineSteps);
+      }
       return;
     }
 
@@ -307,9 +501,24 @@ export class Worker implements Participant {
       byChat.set(item.chat.id, group);
     }
 
-    for (const [chatId, items] of byChat) {
-      await this._processChatMessages(chatId, items);
+    await this._setState('processing');
+    try {
+      // 有未读消息时：先处理消息，若 planDay 则在末尾补一次规划
+      for (const [chatId, items] of byChat) {
+        await this._processChatMessages(chatId, items);
+      }
+      if (routineSteps.includes('planDay')) {
+        await this._runMorningRoutine(pending, routineSteps);
+      }
+    } finally {
+      await this._setState('idle');
     }
+
+    void this.auditLog.recordInboxChecked(
+      this.id,
+      pending.length,
+      [...byChat.keys()],
+    );
   }
 
   // ─── 工具注册（运行时追加技能）──────────────────────────────────────────────
@@ -317,6 +526,138 @@ export class Worker implements Participant {
   /** 注册工具（运行时追加技能） */
   registerTool(tool: Tool): void {
     this.engine.registerTool(tool);
+  }
+
+  // ── 记忆管理（公开 API）─────────────────────────────────────────────────────
+
+  /**
+   * 生成本次对话的情节记忆摘要并持久化到 EpisodicStore。
+   *
+   * 调用时机：一次完整的用户交互结束后（CLI 退出、HTTP 会话关闭等）。
+   * 需要同时配置 episodicStore 和 episodeGeneratorFn 才会生效。
+   *
+   * @returns 生成的 Episode，若配置缺失或历史太短则返回 null
+   */
+  async generateAndPersistEpisode(): Promise<Episode | null> {
+    if (!this._episodicStore || !this._episodeGeneratorFn) return null;
+
+    const history = this.engine.getHistory();
+    const episode = await this._episodeGeneratorFn(
+      this.profile.id,
+      this._sessionId,
+      history,
+    );
+
+    if (episode) {
+      await this._episodicStore.append(episode);
+    }
+    return episode;
+  }
+
+  // ─── Morning Routine 内部方法 ─────────────────────────────────────────────
+
+  /**
+   * 获取 proactivity.routine 配置中启用的步骤列表。
+   * 若未配置主动性能力则返回空数组。
+   */
+  private _getRoutineSteps(): string[] {
+    const pro = this.profile.capabilities?.proactivity;
+    if (!pro) return [];
+    if (pro === true) return [];
+    return pro.routine ?? [];
+  }
+
+  /**
+   * 执行晨检流程（Morning Routine）。
+   *
+   * 根据 routine 步骤配置，构建综合上下文并交由 LLM 自主规划当日工作。
+   * LLM 可以通过已注册工具（call_worker、create_task、send_direct_message 等）
+   * 主动推进工作，无需等待外部触发。
+   *
+   * @param pendingMessages  当前未读消息（已知但未处理，作为上下文参考）
+   * @param steps            routine 步骤列表
+   */
+  private async _runMorningRoutine(
+    pendingMessages: Array<{ chat: { id: string }; message: { from: string; content: string } }>,
+    steps: string[],
+  ): Promise<void> {
+    const engine = this.reviewEngine ?? this.engine;
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    const contextParts: string[] = [
+      `## 晨检报告 — ${now}`,
+      `你是「${this.profile.name}」，现在开始每日晨检流程。`,
+    ];
+
+    // checkInbox：汇报未读消息数量
+    if (steps.includes('checkInbox') || steps.includes('planDay')) {
+      if (pendingMessages.length > 0) {
+        const preview = pendingMessages
+          .slice(0, 5)
+          .map(p => `  • ${p.message.from}：${p.message.content.slice(0, 60)}`)
+          .join('\n');
+        contextParts.push(`### 已有未读消息（${pendingMessages.length} 条）\n${preview}`);
+      } else {
+        contextParts.push('### 收件箱：无新消息');
+      }
+    }
+
+    // reviewTasks：注入任务摘要
+    if ((steps.includes('reviewTasks') || steps.includes('planDay')) && this.taskService) {
+      const taskSummary = await this.taskService.formatSummaryForPrompt();
+      if (taskSummary) {
+        contextParts.push(`### 任务状态\n${taskSummary}`);
+      } else {
+        contextParts.push('### 任务状态：无待处理任务');
+      }
+    }
+
+    // planDay：请 LLM 规划当日工作
+    if (steps.includes('planDay')) {
+      contextParts.push(
+        '### 请规划今天的工作重点',
+        '基于以上信息，请：\n' +
+        '1. 列出今天最重要的 2-3 个工作重点\n' +
+        '2. 如有需要，使用工具创建任务、委托给同事、或发送通知\n' +
+        '3. 如一切正常且无需操作，回复「今日无新安排」',
+      );
+    }
+
+    const prompt = contextParts.join('\n\n');
+    let tokenUsage: TokenUsage | undefined;
+
+    try {
+      for await (const chunk of engine.stream(prompt)) {
+        if (chunk.type === 'done') {
+          tokenUsage = chunk.tokenUsage;
+        }
+      }
+    } catch {
+      // 晨检失败静默处理，不影响正常消息处理
+    }
+
+    if (tokenUsage) {
+      this.tokenTracker.record(this.id, 'morning-routine', tokenUsage);
+    }
+  }
+
+  // ─── 状态机内部方法 ──────────────────────────────────────────────────────────
+
+  /**
+   * 内部状态切换：更新 _state、发布事件、写审计日志。
+   * 对外用 sleep/wake/pause/resume；receive/processInbox 内部直接调用此方法。
+   */
+  private async _setState(newState: WorkerLifecycleState): Promise<void> {
+    const previousState = this._state;
+    if (previousState === newState) return;
+    this._state = newState;
+    this.eventBus.emit('org:event', {
+      type: 'worker:state:changed',
+      workerId: this.id,
+      previousState,
+      newState,
+      timestamp: Date.now(),
+    } satisfies OrgEvent);
+    void this.auditLog.recordStateChange(this.id, previousState, newState);
   }
 
   // ─── 辅助方法 ────────────────────────────────────────────────────────────────
@@ -819,4 +1160,44 @@ export class Worker implements Participant {
       },
     });
   }
+}
+
+// ─── 模块级工具函数 ───────────────────────────────────────────────────────────
+
+/**
+ * 安全读取文件内容，文件不存在时返回 null（不抛错）。
+ */
+async function loadFile(path: string): Promise<string | null> {
+  try {
+    const content = await readFile(path, 'utf-8');
+    return content.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 将情节记忆列表格式化为可注入 system prompt 的文本块。
+ * 最新的记忆排在最后（靠近对话上下文，LLM 更容易关注）。
+ */
+function formatEpisodesForPrompt(episodes: Episode[]): string {
+  if (episodes.length === 0) return '';
+
+  const lines = ['## 过往记忆（最近 ' + episodes.length + ' 条）'];
+  // episodes 来自 recent()，是倒序返回的，这里反转为时间升序
+  const ordered = [...episodes].reverse();
+
+  for (const ep of ordered) {
+    const date = new Date(ep.createdAt).toLocaleDateString('zh-CN');
+    lines.push(`\n### ${date}（${ep.turnCount} 轮对话）`);
+    lines.push(ep.summary);
+    if (ep.keyPoints.length > 0) {
+      lines.push('关键结论：');
+      for (const point of ep.keyPoints) {
+        lines.push(`- ${point}`);
+      }
+    }
+  }
+
+  return lines.join('\n');
 }

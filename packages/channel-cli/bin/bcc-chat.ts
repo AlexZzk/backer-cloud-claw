@@ -13,7 +13,6 @@
  *   2. 多 Agent 模式：config.agents 有内容 → 使用 BccAgent Orchestrator
  *   3. 普通模式：ModelRouter 单对话（默认）
  */
-import { randomUUID } from 'node:crypto';
 import { ModelRouter } from '@bcc/model-core';
 import { FileMemoryStore } from '@bcc/memory-fs';
 import { FileEpisodicStore, EpisodeGenerator } from '@bcc/memory-episodic';
@@ -283,56 +282,6 @@ async function buildAgentRegistry(
   return registry;
 }
 
-// ─── 情节摘要辅助 ────────────────────────────────────────────────────────────
-
-/**
- * 为情节摘要生成找一个可用的模型适配器。
- * 优先使用当前活跃 WorkerSession 绑定的模型实例。
- */
-async function getAdapterForSession(
-  session: WorkerSession,
-  modelInstances: ModelInstanceConfig[],
-) {
-  const modelId = session.currentModel;
-  const instance = modelInstances.find(m => m.id === modelId)
-    ?? modelInstances.find(m => m.primary)
-    ?? modelInstances[0];
-  if (!instance) return null;
-  try {
-    return await createAdapter(instance);
-  } catch {
-    return null;
-  }
-}
-
-// ─── 情节记忆注入 ─────────────────────────────────────────────────────────────
-
-/**
- * 从 EpisodicStore 加载 Worker 最近 N 条情节摘要，格式化为 system prompt 片段。
- * 若 store 为 undefined 或无记忆，返回空字符串。
- */
-async function buildMemorySection(
-  store: FileEpisodicStore | undefined,
-  workerId: string,
-  limit = 5,
-): Promise<string> {
-  if (!store) return '';
-
-  const episodes = await store.recent(workerId, limit);
-  if (episodes.length === 0) return '';
-
-  const lines: string[] = ['## 过往记忆（按时间倒序）'];
-  for (const ep of episodes) {
-    const date = new Date(ep.createdAt).toLocaleDateString('zh-CN');
-    lines.push(`- [${date}] ${ep.summary}`);
-    if (ep.keyPoints.length > 0) {
-      for (const kp of ep.keyPoints) {
-        lines.push(`  • ${kp}`);
-      }
-    }
-  }
-  return lines.join('\n');
-}
 
 // ─── 跨 Worker 委托工具 ──────────────────────────────────────────────────────
 
@@ -417,6 +366,7 @@ function buildAsyncCommsGuide(): string {
 interface WorkerBuildResult {
   registry: WorkerRegistry;
   company: Company;
+  workers: Worker[];
 }
 
 async function buildWorkerRegistry(
@@ -452,25 +402,22 @@ async function buildWorkerRegistry(
     try {
       const adapter = await createAdapter(modelInstance);
 
-      // ── 构建 system prompt（四个层次）──────────────────────────────────────
+      // ── 构建 system prompt（身份 + 同事 + 通信指南）─────────────────────────
+      // 注意：SOUL.md、USER.md、情节记忆现在由 Worker.create() 负责注入
       // 1. 身份头部：告诉 Worker 自己是谁
       const identityHeader = def.description
         ? `你的名字是「${def.name}」。${def.description}`
         : `你的名字是「${def.name}」。`;
 
-      // 2. 情节记忆：跨会话长期记忆（过去的工作摘要）
-      const memorySection = await buildMemorySection(episodicStore, def.id);
-
-      // 3. 同事名录：让 Worker 知道团队成员，可以主动沟通
+      // 2. 同事名录：让 Worker 知道团队成员，可以主动沟通
       const colleagueSection = buildColleagueSection(workerDefs, def.id);
 
-      // 4. 工作方式：异步沟通协议（消息 / 任务 / 汇报）
+      // 3. 工作方式：异步沟通协议（消息 / 任务 / 汇报）
       const asyncCommsGuide = workerDefs.length > 1 ? buildAsyncCommsGuide() : '';
 
-      const fullSystem = [
+      const baseSystem = [
         identityHeader,
         def.role || '',
-        memorySection,
         colleagueSection,
         asyncCommsGuide,
       ].filter(Boolean).join('\n\n').trim();
@@ -484,31 +431,46 @@ async function buildWorkerRegistry(
         const reviewModelInstance = modelInstances.find(m => m.id === def.reviewModelId);
         if (reviewModelInstance) {
           const reviewAdapter = await createAdapter(reviewModelInstance);
-          reviewEngineOptions = { model: reviewAdapter, system: fullSystem };
+          reviewEngineOptions = { model: reviewAdapter, system: baseSystem };
         }
       }
 
+      // 情节摘要生成函数（需要 episodicStore 时注入）
+      const episodeGeneratorFn = episodicStore
+        ? async (workerId: string, sessionId: string, history: import('@bcc/foundation').Message[]) => {
+            const gen = new EpisodeGenerator(adapter);
+            return gen.generate(workerId, sessionId, history);
+          }
+        : undefined;
+
       const worker = await Worker.create({
         profile: {
-          id:          def.id,
-          name:        def.name,
-          role:        def.description || def.name,  // 职位描述（非 system prompt）
-          skills:      def.skills,
-          description: def.description ?? '',
-          modelId:     def.modelId,
-          ...(def.reviewModelId && { reviewModelId: def.reviewModelId }),
+          id:             def.id,
+          name:           def.name,
+          role:           def.description || def.name,
+          skills:         def.skills,
+          description:    def.description ?? '',
+          modelId:        def.modelId,
+          ...(def.reviewModelId   && { reviewModelId:   def.reviewModelId }),
+          ...(def.privilegeLevel  && { privilegeLevel:  def.privilegeLevel }),
+          ...(def.capabilities    && { capabilities:    def.capabilities }),
         },
         engineOptions: {
           model:  adapter,
-          system: fullSystem,
+          system: baseSystem,
           // 每个 Worker 使用独立 sessionId，历史文件互相隔离
           ...(memory !== undefined && { memory, sessionId: `worker-${def.id}` }),
         },
         ...(reviewEngineOptions && { reviewEngineOptions }),
-        tokenTracker:  company.tokenTracker,
-        eventBus:      company.eventBus,
-        inboxService:  messagingService,
-        taskService:   taskManager,
+        tokenTracker:      company.tokenTracker,
+        eventBus:          company.eventBus,
+        inboxService:      messagingService,
+        taskService:       taskManager,
+        // ── 能力配套服务 ─────────────────────────────────────────────────────
+        ...(episodicStore     && { episodicStore }),
+        ...(episodeGeneratorFn && { episodeGeneratorFn }),
+        sessionId:  `worker-${def.id}`,
+        configDir:  process.cwd(),
       });
 
       // 注册配置的工具
@@ -551,7 +513,7 @@ async function buildWorkerRegistry(
   }
   console.log();
 
-  return { registry, company };
+  return { registry, company, workers: allWorkers };
 }
 
 function resolveInitialWorkerSession(
@@ -622,24 +584,18 @@ async function main(): Promise<void> {
   if (workerDefs.length > 0) {
     const buildResult = await buildWorkerRegistry(workerDefs, config.models, memory, episodicStore);
     if (buildResult) {
-      const { registry: workerRegistry } = buildResult;
+      const { registry: workerRegistry, workers: allWorkers } = buildResult;
       const initialSession = resolveInitialWorkerSession(workerRegistry, workerDefs, args.worker);
       const cli = await CliChannel.create({ agent: initialSession, workerRegistry });
       await cli.start();
 
-      // 会话结束后，生成情节摘要（最多等 5 秒，超时静默忽略）
+      // 会话结束后，为每个 Worker 生成情节摘要（最多等 5 秒，超时静默忽略）
       if (episodicStore) {
-        const modelAdapter = await getAdapterForSession(initialSession, config.models);
-        if (modelAdapter) {
-          const generator = new EpisodeGenerator(modelAdapter);
-          const summaryTasks = workerRegistry.list().map(s =>
-            s.summarize(episodicStore, generator, `worker-${s.workerId}`)
-          );
-          await Promise.race([
-            Promise.allSettled(summaryTasks),
-            new Promise(r => setTimeout(r, 5000)),
-          ]);
-        }
+        const summaryTasks = allWorkers.map(w => w.generateAndPersistEpisode());
+        await Promise.race([
+          Promise.allSettled(summaryTasks),
+          new Promise(r => setTimeout(r, 5000)),
+        ]);
       }
       return;
     }
