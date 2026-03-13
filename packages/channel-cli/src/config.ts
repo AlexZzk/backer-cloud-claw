@@ -123,6 +123,16 @@ export interface WorkerConfig {
   reviewModelId?: string;
   /** 是否为默认 Worker（不传 --worker 参数时使用） */
   primary?: boolean;
+  /**
+   * Worker 特权等级（默认 'normal'）。
+   * auditor 级别有特殊限制，不允许开启 reflection / skillEvolution。
+   */
+  privilegeLevel?: import('@bcc/foundation').WorkerPrivilegeLevel;
+  /**
+   * Worker 可选能力配置（Soul / Memory / Proactivity / Task / Reflection / SkillEvolution）。
+   * 不填表示仅使用 Base Layer 能力（对话、状态机、审计）。
+   */
+  capabilities?: import('@bcc/foundation').WorkerCapabilityConfig;
 }
 
 export interface BccConfig {
