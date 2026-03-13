@@ -99,6 +99,15 @@
               <span style="margin: 0 6px; color: var(--color-text-3); font-size: 12px">审视模型</span>
               <a-tag color="arcoblue">{{ selectedWorker.reviewModelId }}</a-tag>
             </template>
+            <span style="margin: 0 8px; color: var(--color-text-3); font-size: 12px">心跳</span>
+            <template v-if="selectedWorker.heartbeatIntervalMs === 0">
+              <a-tag color="gray">被动唤起</a-tag>
+            </template>
+            <template v-else>
+              <a-tag color="green">
+                主动轮询 · {{ ((selectedWorker.heartbeatIntervalMs ?? 30000) / 1000) }}s
+              </a-tag>
+            </template>
           </div>
 
           <div class="detail-section">
@@ -246,6 +255,32 @@
         </a-col>
       </a-row>
 
+      <a-row :gutter="16">
+        <a-col :span="12">
+          <a-form-item label="心跳模式">
+            <a-radio-group v-model="form.heartbeatMode" type="button">
+              <a-radio value="active">主动轮询</a-radio>
+              <a-radio value="passive">被动唤起</a-radio>
+            </a-radio-group>
+          </a-form-item>
+        </a-col>
+        <a-col :span="12">
+          <a-form-item v-if="form.heartbeatMode === 'active'" label="轮询间隔（秒）">
+            <a-input-number
+              v-model="form.heartbeatIntervalSec"
+              :min="1"
+              :max="3600"
+              :step="5"
+              placeholder="默认 30"
+              style="width: 100%"
+            />
+          </a-form-item>
+          <a-form-item v-else label=" " style="padding-top: 8px">
+            <span style="font-size: 12px; color: var(--color-text-3)">仅在收到消息时处理，不启动定时器</span>
+          </a-form-item>
+        </a-col>
+      </a-row>
+
       <a-form-item :label="t('workers.workerDescription')">
         <a-input v-model="form.description" :placeholder="t('workers.descPlaceholder')" />
       </a-form-item>
@@ -317,6 +352,10 @@ const form = reactive({
   description: '',
   modelId: '',
   reviewModelId: '',
+  /** 'active' = 主动轮询，'passive' = 被动唤起 */
+  heartbeatMode: 'active' as 'active' | 'passive',
+  /** 主动轮询间隔（秒），仅 heartbeatMode === 'active' 时生效 */
+  heartbeatIntervalSec: 30,
   role: '',
   skills: [] as string[],
   tools: [] as string[],
@@ -357,6 +396,7 @@ function openCreate() {
   Object.assign(form, {
     id: '', name: '', description: '',
     modelId: defaultModelId.value, reviewModelId: '',
+    heartbeatMode: 'active', heartbeatIntervalSec: 30,
     role: '', skills: [], tools: [], isPrimary: false, avatar: '🤖',
   });
   showModal.value = true;
@@ -370,6 +410,10 @@ function openEdit(worker: MockWorker) {
     description: worker.description,
     modelId: worker.modelId,
     reviewModelId: worker.reviewModelId ?? '',
+    heartbeatMode: worker.heartbeatIntervalMs === 0 ? 'passive' : 'active',
+    heartbeatIntervalSec: (worker.heartbeatIntervalMs && worker.heartbeatIntervalMs > 0)
+      ? Math.round(worker.heartbeatIntervalMs / 1000)
+      : 30,
     role: worker.role,
     skills: [...worker.skills],
     tools: [...worker.tools],
@@ -400,31 +444,37 @@ async function handleSave() {
     return;
   }
 
+  const heartbeatIntervalMs = form.heartbeatMode === 'passive'
+    ? 0
+    : form.heartbeatIntervalSec * 1000;
+
   saving.value = true;
   try {
     if (editingWorker.value) {
       await workersStore.updateWorker(editingWorker.value.id, {
-        name:          form.name.trim(),
-        description:   form.description.trim(),
-        modelId:       form.modelId,
-        reviewModelId: form.reviewModelId || undefined,
-        role:          form.role.trim(),
-        skills:        form.skills,
-        tools:         form.tools,
-        isPrimary:     form.isPrimary,
+        name:               form.name.trim(),
+        description:        form.description.trim(),
+        modelId:            form.modelId,
+        reviewModelId:      form.reviewModelId || undefined,
+        heartbeatIntervalMs,
+        role:               form.role.trim(),
+        skills:             form.skills,
+        tools:              form.tools,
+        isPrimary:          form.isPrimary,
       });
       Message.success('Worker 已更新');
     } else {
       await workersStore.createWorker({
-        id:            form.id.trim(),
-        name:          form.name.trim(),
-        description:   form.description.trim(),
-        modelId:       form.modelId,
-        reviewModelId: form.reviewModelId || undefined,
-        role:          form.role.trim(),
-        skills:        form.skills,
-        tools:         form.tools,
-        isPrimary:     form.isPrimary,
+        id:                 form.id.trim(),
+        name:               form.name.trim(),
+        description:        form.description.trim(),
+        modelId:            form.modelId,
+        reviewModelId:      form.reviewModelId || undefined,
+        heartbeatIntervalMs,
+        role:               form.role.trim(),
+        skills:             form.skills,
+        tools:              form.tools,
+        isPrimary:          form.isPrimary,
       });
       Message.success('Worker 已创建');
     }

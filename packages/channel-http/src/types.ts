@@ -13,6 +13,15 @@ export interface ApiWorker {
   description: string;
   skills: string[];
   modelId: string;
+  /** 可选：心跳/收件箱审视用的轻量模型 ID */
+  reviewModelId?: string;
+  /**
+   * 心跳检测间隔（毫秒）。
+   * - undefined：默认 30 秒主动轮询
+   * - 0：被动模式，不启动定时器
+   * - >0：主动轮询，按指定间隔
+   */
+  heartbeatIntervalMs?: number;
   role: string;
   tools: string[];
   isPrimary: boolean;
