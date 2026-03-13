@@ -339,6 +339,11 @@ export interface ChatMessage {
   /** 发送时间戳（ms） */
   timestamp: number;
   status: ChatMessageStatus;
+  /**
+   * 已读参与者列表（每个参与者独立标记已读，解决多人群聊中"一人已读影响其他人"的问题）。
+   * 新消息创建时为空数组，每个参与者调用 markRead 后将自己加入此列表。
+   */
+  readBy: string[];
   /** 引用回复的消息 ID（对某条消息的回复） */
   replyToId?: string;
   /** 关联的任务 ID（消息触发或完成了某个任务） */

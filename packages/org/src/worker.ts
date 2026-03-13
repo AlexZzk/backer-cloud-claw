@@ -415,7 +415,7 @@ export class Worker implements Participant {
     contextLines.push(`【聊天会话：${chatTitle}】`);
     contextLines.push('以下是最近的对话记录：');
     for (const msg of history) {
-      const sender = msg.from === this.id ? '我' : msg.from;
+      const sender = msg.from === this.id ? `我（${this.id}）` : msg.from;
       const time = new Date(msg.timestamp).toLocaleString('zh-CN');
       contextLines.push(`[${time}] ${sender}: ${msg.content}`);
     }
@@ -424,6 +424,16 @@ export class Worker implements Participant {
     for (const item of items) {
       const time = new Date(item.message.timestamp).toLocaleString('zh-CN');
       contextLines.push(`[${time}] ${item.message.from}: ${item.message.content}`);
+    }
+    contextLines.push('');
+    // 人称转换提示：帮助 LLM 在转发/委托时正确替换人称词
+    const senders = [...new Set(items.map(i => i.message.from).filter(f => f !== 'user'))];
+    if (senders.length > 0) {
+      contextLines.push(
+        `【人称说明】消息中的"我"指发送者本人（如「${senders.join('」/「')}」）。`,
+        `若你需要进一步委托给其他 Worker，请将"我""通知我""提醒我"等替换为具体的 Worker ID，`,
+        `不要原样照搬代词，避免接收方不知道"我"是谁。`,
+      );
     }
 
     const userInput = contextLines.join('\n');
@@ -504,22 +514,21 @@ export class Worker implements Participant {
   /**
    * 将 OrgMessage 转化为 AgentEngine 的输入字符串。
    *
-   * 核心：保留消息溯源（发件人）。
+   * 核心：保留消息溯源（发件人）并提示人称转换规则。
    * 当消息来自其他 Worker（非用户）时，明确标注发件人 ID，
-   * 确保 LLM 知道"这条消息是谁说的"，实现完整的消息追溯链。
-   *
-   * 示例输出（Worker 间委托）：
-   *   【来自同事「worker2」的消息】
-   *   请在中午12点提醒用户吃饭
-   *
-   * 示例输出（用户直接发消息）：
-   *   请在中午12点提醒用户吃饭（原样，无前缀）
+   * 并提醒 LLM：转发或委托时须将"我"等人称替换为具体的人名/ID。
    */
   private _buildEngineInput(message: OrgMessage): string {
     if (message.from === 'user') {
       return message.content;
     }
-    return `【来自同事「${message.from}」的消息】\n${message.content}`;
+    return [
+      `【来自同事「${message.from}」的消息】`,
+      `（注意：消息中的"我"指「${message.from}」，若你需要转发或委托给他人，`,
+      `请将人称词替换为具体的 Worker ID，不要原样照搬"我""你"等代词）`,
+      '',
+      message.content,
+    ].join('\n');
   }
 
   private _buildReply(

@@ -122,6 +122,7 @@ export class ChatStore {
       content,
       timestamp: Date.now(),
       status: 'sent' as ChatMessageStatus,
+      readBy: [],
       ...(options.replyToId ? { replyToId: options.replyToId } : {}),
       ...(options.taskId ? { taskId: options.taskId } : {}),
       ...(options.metadata ? { metadata: options.metadata } : {}),
@@ -148,11 +149,18 @@ export class ChatStore {
 
   /**
    * 获取指定参与者在某个会话中的未读消息。
-   * 未读 = status 不是 'read' 且发送方不是自己。
+   * 未读 = 发送方不是自己 且 自己不在 readBy 列表中。
+   *
+   * 使用 readBy 数组实现每人独立的已读状态，避免一人已读影响群聊中其他人。
+   * 兼容旧数据：若消息无 readBy 字段，退回旧逻辑（status !== 'read'）。
    */
   async getUnreadMessages(chatId: string, participantId: string): Promise<ChatMessage[]> {
     const messages = await this.getMessages(chatId);
-    return messages.filter(m => m.from !== participantId && m.status !== 'read');
+    return messages.filter(m => {
+      if (m.from === participantId) return false;            // 自己发的不算未读
+      if (Array.isArray(m.readBy)) return !m.readBy.includes(participantId);
+      return m.status !== 'read';                            // 兼容旧数据
+    });
   }
 
   /**
@@ -175,6 +183,9 @@ export class ChatStore {
 
   /**
    * 将某个会话中某参与者的所有未读消息标记为已读。
+   *
+   * 使用 readBy 数组实现每人独立的已读状态：
+   * 将 participantId 加入每条非自发消息的 readBy 列表，不影响其他参与者的未读状态。
    */
   async markRead(chatId: string, participantId: string): Promise<void> {
     const file = await this._load(chatId);
@@ -182,8 +193,10 @@ export class ChatStore {
 
     let changed = false;
     for (const msg of file.messages) {
-      if (msg.from !== participantId && msg.status !== 'read') {
-        msg.status = 'read';
+      if (msg.from === participantId) continue;   // 自己发的消息跳过
+      if (!Array.isArray(msg.readBy)) msg.readBy = [];
+      if (!msg.readBy.includes(participantId)) {
+        msg.readBy.push(participantId);
         changed = true;
       }
     }
