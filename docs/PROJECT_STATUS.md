@@ -1,8 +1,9 @@
 # backer-cloud-claw 项目状态归档
 
-> 归档日期：2026-03-10
-> 当前版本：**v0.3.0**
-> 当前分支：`claude/review-requirements-5chc6`
+> 归档日期：2026-03-13
+> 当前版本：**v0.4.0-dev**（Worker 架构重构第一阶段进行中）
+> 当前分支：`claude/review-openclaw-comparison-tYcD5`
+> 架构设计文档：`docs/worker-architecture-v2.md`
 
 ---
 
