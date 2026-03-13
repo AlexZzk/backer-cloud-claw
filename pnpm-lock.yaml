@@ -142,6 +142,40 @@ importers:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
 
+  packages/channel-discord:
+    dependencies:
+      '@bcc/agent-engine':
+        specifier: workspace:*
+        version: link:../agent-engine
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+      '@bcc/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+      '@bcc/org':
+        specifier: workspace:*
+        version: link:../org
+      '@bcc/skills':
+        specifier: workspace:*
+        version: link:../skills
+    devDependencies:
+      '@bcc/protocol-anthropic':
+        specifier: workspace:*
+        version: link:../protocol-anthropic
+      '@bcc/protocol-openai':
+        specifier: workspace:*
+        version: link:../protocol-openai
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      tsx:
+        specifier: '*'
+        version: 4.21.0
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+
   packages/channel-http:
     dependencies:
       '@bcc/agent-engine':
@@ -168,6 +202,40 @@ importers:
       '@bcc/task':
         specifier: workspace:*
         version: link:../task
+    devDependencies:
+      '@bcc/protocol-anthropic':
+        specifier: workspace:*
+        version: link:../protocol-anthropic
+      '@bcc/protocol-openai':
+        specifier: workspace:*
+        version: link:../protocol-openai
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      tsx:
+        specifier: '*'
+        version: 4.21.0
+      typescript:
+        specifier: '*'
+        version: 5.9.3
+
+  packages/channel-telegram:
+    dependencies:
+      '@bcc/agent-engine':
+        specifier: workspace:*
+        version: link:../agent-engine
+      '@bcc/foundation':
+        specifier: workspace:*
+        version: link:../foundation
+      '@bcc/model-core':
+        specifier: workspace:*
+        version: link:../model-core
+      '@bcc/org':
+        specifier: workspace:*
+        version: link:../org
+      '@bcc/skills':
+        specifier: workspace:*
+        version: link:../skills
     devDependencies:
       '@bcc/protocol-anthropic':
         specifier: workspace:*
