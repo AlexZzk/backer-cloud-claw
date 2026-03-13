@@ -426,15 +426,30 @@ export class Worker implements Participant {
       contextLines.push(`[${time}] ${item.message.from}: ${item.message.content}`);
     }
     contextLines.push('');
+
     // 人称转换提示：帮助 LLM 在转发/委托时正确替换人称词
-    const senders = [...new Set(items.map(i => i.message.from).filter(f => f !== 'user'))];
-    if (senders.length > 0) {
-      contextLines.push(
-        `【人称说明】消息中的"我"指发送者本人（如「${senders.join('」/「')}」）。`,
-        `若你需要进一步委托给其他 Worker，请将"我""通知我""提醒我"等替换为具体的 Worker ID，`,
-        `不要原样照搬代词，避免接收方不知道"我"是谁。`,
+    const allSenders = [...new Set(items.map(i => i.message.from).filter(f => f !== this.id))];
+    if (allSenders.length > 0) {
+      const senderDescs = allSenders.map(s =>
+        s === 'user'
+          ? '"user"（用户/主管）：其说的"我"= 用户本人，不是你'
+          : `"${s}"：其说的"我"= ${s} 本人`,
       );
+      contextLines.push(
+        `【人称说明】各发送方说的"我"指其自身，不是你：`,
+        ...senderDescs.map(d => `  - ${d}`),
+        `转发或委托时，必须将"我"替换为具体人名，绝不能替换成你自己的 ID。`,
+      );
+      contextLines.push('');
     }
+
+    // 回复规范：引导 LLM 判断是否需要回复，避免无效循环
+    contextLines.push(
+      '【回复规范】请判断是否有实质内容需要回复：',
+      '- 对方提问、任务完成/受阻通知、需要你决策 → 正常回复，可调用工具',
+      '- 对方只是简单确认（"好的""收到""已了解"）且无提问 → 只输出 [SKIP]，不发消息',
+      '⚠️ 输出 [SKIP] 时请勿添加其他文字，勿调用任何工具。',
+    );
 
     const userInput = contextLines.join('\n');
 
@@ -458,8 +473,9 @@ export class Worker implements Participant {
       }
     }
 
-    // 回复消息（如果有内容）
-    if (response.trim()) {
+    // 回复消息（如果有内容，且不是 [SKIP] 信号）
+    const isSkip = /^\s*\[SKIP\]/i.test(response);
+    if (!isSkip && response.trim()) {
       const lastItem = items[items.length - 1];
       const replyToId = lastItem?.message.id;
       await this.inboxService.post(
@@ -638,6 +654,38 @@ export class Worker implements Participant {
           `   会话 ID：${(chatId as string).slice(0, 8)}…`,
           `   消息 ID：${msg.id}`,
           `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
+        ].join('\n');
+      },
+    });
+
+    // 工具：发送私信（支持 Worker ID 或 'user'）
+    this.engine.registerTool({
+      definition: {
+        name: 'send_direct_message',
+        description:
+          '向指定 Worker 或用户（"user"）发送私信。会自动创建或复用已有的 1 对 1 会话。' +
+          '用途：任务完成后通知委托人、向用户（主管）汇报结果、请求同事协助。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            to: {
+              type: 'string',
+              description: '接收方的 Worker ID，或 "user"（表示发消息给用户/主管）',
+            },
+            content: { type: 'string', description: '消息内容' },
+          },
+          required: ['to', 'content'],
+        },
+      },
+      handler: async (input: Record<string, unknown>) => {
+        const { to, content } = input as { to: string; content: string };
+        const chat = await inboxService.openDirectChat(workerId, to);
+        const msg = await inboxService.post(chat.id, workerId, content);
+        return [
+          `✅ 私信已发送`,
+          `   收件人：${to}`,
+          `   会话 ID：${chat.id.slice(0, 8)}…`,
+          `   消息 ID：${msg.id}`,
         ].join('\n');
       },
     });

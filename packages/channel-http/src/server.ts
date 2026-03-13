@@ -290,12 +290,24 @@ export class HttpServer {
       }
     }
 
-    // 启动所有 Worker 的定时心跳（间隔 30s）
-    const workerIds = (this.config.workers ?? []).map(w => w.id);
-    this.company.scheduler.startAll(30_000);
-    console.log(
-      `  💓 Worker 心跳已启动（${workerIds.length} 个 Worker，间隔 30s）：${workerIds.join('、')}`,
-    );
+    // 按各 Worker 独立配置启动心跳（heartbeatIntervalMs === 0 为被动模式，不启动定时器）
+    const activeWorkers: string[] = [];
+    const passiveWorkers: string[] = [];
+    for (const workerCfg of this.config.workers ?? []) {
+      if (workerCfg.heartbeatIntervalMs === 0) {
+        passiveWorkers.push(workerCfg.id);
+      } else {
+        const interval = workerCfg.heartbeatIntervalMs ?? 30_000;
+        this.company.scheduler.start(workerCfg.id, interval);
+        activeWorkers.push(`${workerCfg.id}(${interval / 1000}s)`);
+      }
+    }
+    if (activeWorkers.length > 0) {
+      console.log(`  💓 Worker 心跳已启动：${activeWorkers.join('、')}`);
+    }
+    if (passiveWorkers.length > 0) {
+      console.log(`  💤 被动 Worker（仅事件触发）：${passiveWorkers.join('、')}`);
+    }
   }
 
   /**
@@ -617,6 +629,7 @@ export class HttpServer {
       skills:      w.skills,
       modelId:     w.modelId,
       ...(w.reviewModelId && { reviewModelId: w.reviewModelId }),
+      ...(w.heartbeatIntervalMs !== undefined && { heartbeatIntervalMs: w.heartbeatIntervalMs }),
       role:        w.role,
       tools:       w.tools ?? [],
       isPrimary:   w.primary ?? false,
@@ -1297,7 +1310,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id, name, modelId, reviewModelId, role, description, skills, tools, primary } = body;
+    const { id, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary } = body;
     if (!id?.trim())      { badRequest(res, '"id" is required'); return; }
     if (!name?.trim())    { badRequest(res, '"name" is required'); return; }
     if (!modelId?.trim()) { badRequest(res, '"modelId" is required'); return; }
@@ -1317,6 +1330,7 @@ export class HttpServer {
       name: name.trim(),
       modelId: modelId.trim(),
       ...(reviewModelId?.trim() && { reviewModelId: reviewModelId.trim() }),
+      ...(heartbeatIntervalMs !== undefined && { heartbeatIntervalMs }),
       role: role?.trim() ?? '',
       description: description?.trim() ?? '',
       skills: skills ?? [],
@@ -1343,7 +1357,9 @@ export class HttpServer {
       try {
         const worker = await this._createWorker(newWorker);
         this.company.addWorker(worker);
-        this.company.scheduler.start(newWorker.id, 30_000);
+        if (newWorker.heartbeatIntervalMs !== 0) {
+          this.company.scheduler.start(newWorker.id, newWorker.heartbeatIntervalMs ?? 30_000);
+        }
       } catch (err) {
         console.error(`  ⚠️  注册 Worker "${newWorker.id}" 到 Company 失败: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1356,6 +1372,7 @@ export class HttpServer {
       skills:      newWorker.skills,
       modelId:     newWorker.modelId,
       ...(newWorker.reviewModelId && { reviewModelId: newWorker.reviewModelId }),
+      ...(newWorker.heartbeatIntervalMs !== undefined && { heartbeatIntervalMs: newWorker.heartbeatIntervalMs }),
       role:        newWorker.role,
       tools:       newWorker.tools ?? [],
       isPrimary:   newWorker.primary ?? false,
@@ -1381,11 +1398,16 @@ export class HttpServer {
     const newReviewModelId = body.reviewModelId !== undefined
       ? (body.reviewModelId.trim() || undefined)
       : existing.reviewModelId;
+    // heartbeatIntervalMs: undefined 表示不修改，0 表示被动模式，>0 为主动轮询间隔
+    const newHeartbeatIntervalMs = body.heartbeatIntervalMs !== undefined
+      ? body.heartbeatIntervalMs
+      : existing.heartbeatIntervalMs;
     const updated: WorkerConfig = {
       id:          workerId,
       name:        body.name?.trim()        ?? existing.name,
       modelId:     body.modelId?.trim()     ?? existing.modelId,
       ...(newReviewModelId && { reviewModelId: newReviewModelId }),
+      ...(newHeartbeatIntervalMs !== undefined && { heartbeatIntervalMs: newHeartbeatIntervalMs }),
       role:        body.role?.trim()        ?? existing.role,
       description: body.description?.trim() ?? existing.description,
       skills:      body.skills              ?? existing.skills,
@@ -1408,13 +1430,15 @@ export class HttpServer {
     // Worker 配置已变更，清除缓存的会话 Agent（下次请求以新配置重建）
     this.evictAgent(workerId);
 
-    // 若 Company 已初始化，重新注册 Worker（配置可能已更改 model/reviewModelId 等）
+    // 若 Company 已初始化，重新注册 Worker（配置可能已更改 model/reviewModelId/heartbeatIntervalMs 等）
     if (this.company && this.messagingService) {
       try {
         this.company.removeWorker(workerId);
         const worker = await this._createWorker(updated);
         this.company.addWorker(worker);
-        this.company.scheduler.start(workerId, 30_000);
+        if (updated.heartbeatIntervalMs !== 0) {
+          this.company.scheduler.start(workerId, updated.heartbeatIntervalMs ?? 30_000);
+        }
       } catch (err) {
         console.error(`  ⚠️  重新注册 Worker "${workerId}" 到 Company 失败: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1427,6 +1451,7 @@ export class HttpServer {
       skills:      updated.skills,
       modelId:     updated.modelId,
       ...(updated.reviewModelId && { reviewModelId: updated.reviewModelId }),
+      ...(updated.heartbeatIntervalMs !== undefined && { heartbeatIntervalMs: updated.heartbeatIntervalMs }),
       role:        updated.role,
       tools:       updated.tools ?? [],
       isPrimary:   updated.primary ?? false,
@@ -1628,20 +1653,23 @@ export class HttpServer {
       },
     });
 
-    // 工具：向另一个 Worker 发送私信（直接消息）
-    // 这是心跳驱动的异步通信的核心工具：Worker 可以主动给同事发消息
+    // 工具：向另一个 Worker 或用户发送私信（直接消息）
     engine.registerTool({
       definition: {
         name: 'send_direct_message',
         description:
-          '向另一个 Worker 发送一条私信（直接消息）。' +
-          '对方 Worker 会在下一个心跳周期自动读取并回复。' +
-          '适合：请求协作、传递信息、触发另一个 Worker 执行任务。',
+          '向另一个 Worker 或用户发送一条私信（直接消息）。' +
+          '收件方为 Worker 时，对方会在下一个心跳周期自动处理。' +
+          '收件方填 "user" 可直接给用户（主管）发通知。' +
+          '适合：请求协作、传递信息、任务完成后通知用户。',
         inputSchema: {
           type: 'object',
           properties: {
-            toWorkerId: { type: 'string', description: '收件方的 Worker ID' },
-            content:    { type: 'string', description: '消息正文' },
+            toWorkerId: {
+              type: 'string',
+              description: '收件方的 Worker ID，或 "user"（表示发消息给用户/主管）',
+            },
+            content: { type: 'string', description: '消息正文' },
           },
           required: ['toWorkerId', 'content'],
         },
@@ -1653,8 +1681,8 @@ export class HttpServer {
         const msg = server.messagingService
           ? await server.messagingService.post(chat.id, selfWorkerId, content)
           : await chatStore.sendMessage(chat.id, selfWorkerId, content);
-        // 立即触发收件方心跳，让对方尽快处理消息
-        if (server.company?.scheduler.isRunning(toWorkerId as string)) {
+        // 触发收件方心跳（'user' 没有心跳，跳过）
+        if (toWorkerId !== 'user' && server.company?.scheduler.isRunning(toWorkerId as string)) {
           void server.company.scheduler.triggerReview(toWorkerId as string).catch(() => {});
         }
         return [
@@ -1663,7 +1691,7 @@ export class HttpServer {
           `   会话 ID：${chat.id.slice(0, 8)}…`,
           `   消息 ID：${msg.id}`,
           `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
-          `   （已触发对方即时处理）`,
+          toWorkerId !== 'user' ? `   （已触发对方即时处理）` : `   （已存入用户收件箱）`,
         ].join('\n');
       },
     });

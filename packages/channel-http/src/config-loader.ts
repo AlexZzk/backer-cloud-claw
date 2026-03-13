@@ -35,6 +35,13 @@ export interface WorkerConfig {
   modelId: string;
   /** 可选：心跳/收件箱审视用的轻量模型 ID */
   reviewModelId?: string;
+  /**
+   * 心跳检测间隔（毫秒）。
+   * - 未设置：默认 30 秒主动轮询
+   * - 0：被动模式，不启动定时器，仅在收到消息时被唤起
+   * - >0：主动轮询，按指定间隔定时审视收件箱
+   */
+  heartbeatIntervalMs?: number;
   primary?: boolean;
 }
 
