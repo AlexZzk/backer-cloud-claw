@@ -61,6 +61,7 @@ const navItems = [
   { to: '/workers',   icon: '🤖', labelKey: 'nav.workers' },
   { to: '/org',       icon: '🏢', labelKey: 'nav.org' },
   { to: '/analytics', icon: '📊', labelKey: 'nav.analytics' },
+  { to: '/skills',    icon: '🧩', labelKey: 'nav.skills' },
   { to: '/settings',  icon: '⚙️', labelKey: 'nav.settings' },
 ];
 

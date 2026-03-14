@@ -14,3 +14,5 @@ export {
   USER_SKILLS_DIR,
   PROJECT_SKILLS_DIR,
 } from './loader.js';
+export { SkillHub, defaultHub } from './hub.js';
+export type { HubSkill, HubSearchResult } from './hub.js';

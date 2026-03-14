@@ -20,6 +20,7 @@ import {
   loadUserSkill,
   validateSkillName,
   USER_SKILLS_DIR,
+  SkillHub,
   type Skill,
 } from '@bcc/skills';
 import {
@@ -51,6 +52,9 @@ bcc skill — 技能管理工具 v${VERSION}
   edit <名称>           编辑已有用户技能
   delete <名称>         删除用户技能
   test <名称> [内容]    预览技能提示词展开效果（不发送给模型）
+  search <关键词>       在 SkillHub 搜索技能
+  install <名称>        从 SkillHub 安装技能到本地
+  publish <名称>        发布本地技能到 SkillHub（需要 BCC_HUB_TOKEN）
 
 用法示例：
   pnpm bcc-skill list
@@ -59,6 +63,9 @@ bcc skill — 技能管理工具 v${VERSION}
   pnpm bcc-skill edit my-skill
   pnpm bcc-skill delete my-skill
   pnpm bcc-skill test summarize "这是一段测试文本"
+  pnpm bcc-skill search 翻译
+  pnpm bcc-skill install translate-en
+  pnpm bcc-skill publish my-skill
 
 技能存储位置：
   用户技能：~/.bcc/skills/<name>.json
@@ -302,6 +309,87 @@ async function cmdTest(name: string, inlineInput: string): Promise<void> {
   closeWizard();
 }
 
+// ─── 子命令：search ───────────────────────────────────────────────────────────
+
+async function cmdSearch(query: string): Promise<void> {
+  console.log(`\n  正在搜索 SkillHub：${query}…\n`);
+  let skills;
+  try {
+    const hub = new SkillHub();
+    skills = await hub.search(query);
+  } catch (err) {
+    fail(`搜索失败：${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
+  if (skills.length === 0) {
+    console.log('  没有找到匹配的技能。\n');
+    return;
+  }
+
+  console.log(`  找到 ${skills.length} 个技能：\n`);
+  for (const s of skills) {
+    const meta: string[] = [];
+    if (s.author)    meta.push(`作者：${s.author}`);
+    if (s.downloads !== undefined) meta.push(`下载：${s.downloads}`);
+    if (s.tags?.length) meta.push(`标签：${s.tags.join(', ')}`);
+    console.log(`    ${s.name.padEnd(22)} ${s.description}`);
+    if (meta.length > 0) console.log(`    ${''.padEnd(22)} ${meta.join('  ')}`);
+  }
+  console.log(`\n  安装：pnpm bcc-skill install <名称>\n`);
+}
+
+// ─── 子命令：install ──────────────────────────────────────────────────────────
+
+async function cmdInstall(name: string): Promise<void> {
+  console.log(`\n  正在从 SkillHub 安装技能 "${name}"…\n`);
+  let hubSkill;
+  try {
+    const hub = new SkillHub();
+    hubSkill = await hub.install(name);
+  } catch (err) {
+    fail(`安装失败：${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  ok(`技能 "${hubSkill.name}" 已安装至 ${USER_SKILLS_DIR}/${hubSkill.name}.json`);
+  console.log(`  描述：${hubSkill.description}`);
+  console.log(`\n  使用：${skillNeedsInput(hubSkill) ? `/skill ${hubSkill.name} <内容>` : `/skill ${hubSkill.name}`}\n`);
+}
+
+// ─── 子命令：publish ──────────────────────────────────────────────────────────
+
+async function cmdPublish(name: string): Promise<void> {
+  const existing = await loadUserSkill(name);
+  if (!existing) {
+    fail(`找不到用户技能 "${name}"（只能发布用户自定义技能，内置技能不可发布）`);
+    process.exit(1);
+  }
+
+  const token = process.env['BCC_HUB_TOKEN'];
+  if (!token) {
+    fail('未设置 BCC_HUB_TOKEN 环境变量。请访问 https://hub.bcc.dev 注册并获取 Token。');
+    console.log('  用法：BCC_HUB_TOKEN=<token> pnpm bcc-skill publish <名称>\n');
+    process.exit(1);
+  }
+
+  console.log(`\n  准备发布技能 "${name}" 到 SkillHub…`);
+  console.log(`  描述：${existing.description}\n`);
+
+  const confirmed = await askConfirm('确认发布？', true);
+  if (!confirmed) { console.log('  已取消。\n'); closeWizard(); return; }
+
+  try {
+    const hub = new SkillHub();
+    await hub.publish(existing, token);
+    ok(`技能 "${name}" 已成功发布到 SkillHub！`);
+    console.log(`\n  其他用户可通过以下命令安装：pnpm bcc-skill install ${name}\n`);
+  } catch (err) {
+    fail(`发布失败：${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  closeWizard();
+}
+
 // ─── 主入口 ───────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -343,6 +431,21 @@ async function main(): Promise<void> {
     case 'test':
       if (!rest[0]) { fail('用法：pnpm bcc-skill test <名称> [内容]'); process.exit(1); }
       await cmdTest(rest[0], rest.slice(1).join(' '));
+      break;
+
+    case 'search':
+      if (!rest[0]) { fail('用法：pnpm bcc-skill search <关键词>'); process.exit(1); }
+      await cmdSearch(rest.join(' '));
+      break;
+
+    case 'install':
+      if (!rest[0]) { fail('用法：pnpm bcc-skill install <名称>'); process.exit(1); }
+      await cmdInstall(rest[0]);
+      break;
+
+    case 'publish':
+      if (!rest[0]) { fail('用法：pnpm bcc-skill publish <名称>'); process.exit(1); }
+      await cmdPublish(rest[0]);
       break;
 
     default:
