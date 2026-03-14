@@ -21,6 +21,10 @@
  *   DELETE /api/sessions/:id            删除会话
  *   POST   /api/sessions/:id/messages    发消息（SSE 流）
  *   GET    /api/analytics/tokens         token 统计
+ *   GET    /api/skills                   列出本地技能（内置 + 用户 + 项目）
+ *   POST   /api/skills                   创建用户技能
+ *   DELETE /api/skills/:name             删除用户技能
+ *   GET    /api/skills/hub?q=            在 SkillHub 搜索技能
  *
  * Worker 间异步聊天监控（依赖 @bcc/messaging）：
  *   GET    /api/chats                     列出所有 Worker 间聊天会话
@@ -36,7 +40,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { AgentEngine } from '@bcc/agent-engine';
-import { getBuiltinTool, findBuiltin } from '@bcc/skills';
+import { getBuiltinTool, findBuiltin, SkillRegistry, saveUserSkill, deleteUserSkill, SkillHub } from '@bcc/skills';
 import type { AgentInterface } from '@bcc/foundation';
 import { SessionStore } from './session-store.js';
 import type { ApiWorker, ApiModel, TokenStats, SseEvent } from './types.js';
@@ -472,6 +476,33 @@ export class HttpServer {
     if (method === 'GET' && path === '/api/analytics/tokens') {
       this.handleGetAnalytics(res);
       return;
+    }
+
+    // ── GET /api/skills/hub  (SkillHub 搜索，需先于 /api/skills 匹配)
+    if (method === 'GET' && path === '/api/skills/hub') {
+      await this.handleSkillHubSearch(url, res);
+      return;
+    }
+
+    // ── GET /api/skills
+    if (method === 'GET' && path === '/api/skills') {
+      await this.handleGetSkills(res);
+      return;
+    }
+
+    // ── POST /api/skills
+    if (method === 'POST' && path === '/api/skills') {
+      await this.handleCreateSkill(req, res);
+      return;
+    }
+
+    // ── DELETE /api/skills/:name
+    {
+      const m = matchRoute('/api/skills/:name', path);
+      if (m && method === 'DELETE') {
+        await this.handleDeleteSkill(res, m.params['name']!);
+        return;
+      }
     }
 
     // ── POST /api/workers/:workerId/heartbeat  (手动触发一次心跳审视)
@@ -1891,6 +1922,77 @@ export class HttpServer {
     try {
       await this.company.scheduler.triggerReview(workerId);
       ok(res, { workerId, message: '心跳审视已触发', triggered: true });
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // ── Skills CRUD ──────────────────────────────────────────────────────────────
+
+  private async handleGetSkills(res: ServerResponse) {
+    try {
+      const reg = await SkillRegistry.load();
+      const list = reg.list();
+      const stats = reg.stats();
+      ok(res, { skills: list, stats });
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async handleCreateSkill(req: IncomingMessage, res: ServerResponse) {
+    let body: { name?: string; description?: string; prompt?: string; system?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { name, description, prompt, system } = body;
+    if (!name?.trim())        { badRequest(res, '"name" is required'); return; }
+    if (!description?.trim()) { badRequest(res, '"description" is required'); return; }
+    if (!prompt?.trim())      { badRequest(res, '"prompt" is required'); return; }
+
+    const { validateSkillName } = await import('@bcc/skills');
+    const err = validateSkillName(name);
+    if (err) { badRequest(res, err); return; }
+
+    try {
+      await saveUserSkill({
+        name,
+        description,
+        prompt,
+        ...(system !== undefined && system.trim() !== '' && { system }),
+      });
+      ok(res, { name, description, prompt, ...(system ? { system } : {}), source: 'user' }, 201);
+    } catch (e) {
+      serverError(res, e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  private async handleDeleteSkill(res: ServerResponse, name: string) {
+    try {
+      const { loadUserSkill } = await import('@bcc/skills');
+      const existing = await loadUserSkill(name);
+      if (!existing) {
+        notFound(res); return;
+      }
+      await deleteUserSkill(name);
+      ok(res, { deleted: true, name });
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async handleSkillHubSearch(url: URL, res: ServerResponse) {
+    const query = url.searchParams.get('q') ?? '';
+    if (!query.trim()) {
+      badRequest(res, '"q" query parameter is required'); return;
+    }
+    try {
+      const hub = new SkillHub();
+      const skills = await hub.search(query);
+      ok(res, { skills, total: skills.length });
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : String(err));
     }

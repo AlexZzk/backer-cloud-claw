@@ -306,6 +306,47 @@ export const chatsApi = {
     service.get<ApiAsyncChatMessage[]>(`/chats/${chatId}/messages`),
 }
 
+// ─── Skills API ─────────────────────────────────────────────────────────
+
+export interface ApiSkill {
+  name: string
+  description: string
+  prompt: string
+  system?: string
+  source: 'builtin' | 'user' | 'project'
+}
+
+export interface ApiSkillStats {
+  builtin: number
+  user: number
+  project: number
+}
+
+export interface ApiHubSkill {
+  name: string
+  description: string
+  prompt: string
+  system?: string
+  author?: string
+  version?: string
+  downloads?: number
+  tags?: string[]
+}
+
+export const skillsApi = {
+  list: () =>
+    service.get<{ skills: ApiSkill[]; stats: ApiSkillStats }>('/skills'),
+
+  create: (data: { name: string; description: string; prompt: string; system?: string }) =>
+    service.post<ApiSkill>('/skills', data),
+
+  delete: (name: string) =>
+    service.delete(`/skills/${encodeURIComponent(name)}`),
+
+  searchHub: (query: string) =>
+    service.get<{ skills: ApiHubSkill[]; total: number }>(`/skills/hub?q=${encodeURIComponent(query)}`),
+}
+
 // ─── Analytics API ──────────────────────────────────────────────────────
 
 export const analyticsApi = {
