@@ -1,0 +1,45 @@
+{
+  "name": "@bcc/channel-discord",
+  "version": "0.1.0",
+  "description": "Discord Bot 渠道 — 通过 Discord Gateway WebSocket 接入 AI 员工",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    }
+  },
+  "bin": {
+    "bcc-discord": "./dist/bin/bcc-discord.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "tsx bin/bcc-discord.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/agent-engine": "workspace:*",
+    "@bcc/foundation": "workspace:*",
+    "@bcc/model-core": "workspace:*",
+    "@bcc/org": "workspace:*",
+    "@bcc/skills": "workspace:*"
+  },
+  "peerDependencies": {
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@bcc/protocol-anthropic": { "optional": true },
+    "@bcc/protocol-openai": { "optional": true }
+  },
+  "devDependencies": {
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*",
+    "@types/node": "*",
+    "tsx": "*",
+    "typescript": "*"
+  }
+}

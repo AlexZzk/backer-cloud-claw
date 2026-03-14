@@ -1,5 +1,8 @@
 // 核心类
 export { Worker } from './worker.js';
+export { LongTermMemory, buildConsolidationPrompt } from './long-term-memory.js';
+export { SOUL_TEMPLATES, getSoulTemplate, listSoulTemplates } from './soul-templates.js';
+export type { SoulTemplate } from './soul-templates.js';
 export { Company } from './company.js';
 export { Mailbox } from './mailbox.js';
 export { MessageRouter } from './router.js';

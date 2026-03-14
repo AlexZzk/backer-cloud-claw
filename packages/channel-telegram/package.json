@@ -1,0 +1,45 @@
+{
+  "name": "@bcc/channel-telegram",
+  "version": "0.1.0",
+  "description": "Telegram Bot 渠道 — 零额外依赖，通过 Telegram Bot API 接入 AI 员工",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
+    }
+  },
+  "bin": {
+    "bcc-telegram": "./dist/bin/bcc-telegram.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "tsx bin/bcc-telegram.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/agent-engine": "workspace:*",
+    "@bcc/foundation": "workspace:*",
+    "@bcc/model-core": "workspace:*",
+    "@bcc/org": "workspace:*",
+    "@bcc/skills": "workspace:*"
+  },
+  "peerDependencies": {
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@bcc/protocol-anthropic": { "optional": true },
+    "@bcc/protocol-openai": { "optional": true }
+  },
+  "devDependencies": {
+    "@bcc/protocol-anthropic": "workspace:*",
+    "@bcc/protocol-openai": "workspace:*",
+    "@types/node": "*",
+    "tsx": "*",
+    "typescript": "*"
+  }
+}
