@@ -36,7 +36,11 @@
         <template v-else>
           <!-- Group headers + items -->
           <template v-for="group in skillGroups" :key="group.source">
-            <div class="group-header">{{ groupLabel(group.source) }} · {{ group.items.length }}</div>
+            <div class="group-header">
+              <span>{{ groupLabel(group.source) }}</span>
+              <span v-if="group.source === 'builtin'" class="group-readonly">🔒 只读</span>
+              <span class="group-count">{{ group.items.length }}</span>
+            </div>
             <div
               v-for="skill in group.items"
               :key="skill.name"
@@ -85,8 +89,8 @@
       <!-- Footer: stats + new button -->
       <div class="list-footer">
         <div class="footer-stats" v-if="activeTab === 'local' && store.stats">
-          <span>内置 {{ store.stats.builtin }}</span>
-          <span>用户 {{ store.stats.user }}</span>
+          <span>系统 {{ store.stats.builtin }}</span>
+          <span>自定义 {{ store.stats.user }}</span>
           <span v-if="store.stats.project">项目 {{ store.stats.project }}</span>
         </div>
         <a-button
@@ -115,13 +119,24 @@
             <span class="detail-name">{{ currentSkill.name }}</span>
             <span class="source-badge" :class="currentSkill.source">{{ groupLabel(currentSkill.source ?? 'builtin') }}</span>
           </div>
-          <div class="detail-actions" v-if="currentSkill.source !== 'builtin'">
-            <a-button v-if="!editing" size="small" @click="startEdit">✏️ {{ t('common.edit') }}</a-button>
+          <div class="detail-actions">
+            <template v-if="!editing">
+              <!-- builtin: fork-edit button -->
+              <a-button
+                v-if="currentSkill.source === 'builtin'"
+                size="small"
+                @click="startEdit"
+              >✏️ 覆盖修改</a-button>
+              <!-- user/project: normal edit + delete -->
+              <template v-else>
+                <a-button size="small" @click="startEdit">✏️ {{ t('common.edit') }}</a-button>
+                <a-button size="small" status="danger" @click="confirmDelete(currentSkill.name)">{{ t('common.delete') }}</a-button>
+              </template>
+            </template>
             <template v-else>
               <a-button size="small" type="primary" :loading="saving" @click="saveEdit">{{ t('common.save') }}</a-button>
               <a-button size="small" @click="cancelEdit">{{ t('common.cancel') }}</a-button>
             </template>
-            <a-button size="small" status="danger" @click="confirmDelete(currentSkill.name)">{{ t('common.delete') }}</a-button>
           </div>
         </div>
 
@@ -153,12 +168,18 @@
             <span v-if="currentSkill.source !== 'builtin'">
               存储于 <code>~/.bcc/skills/{{ currentSkill.name }}.md</code>，可直接用文本编辑器修改
             </span>
-            <span v-else>内置技能（只读），创建同名用户技能可覆盖</span>
+            <span v-else>系统内置技能（只读），点击「覆盖修改」可创建同名自定义技能进行覆盖</span>
           </div>
         </div>
 
         <!-- Edit mode -->
         <div v-else class="detail-body">
+          <!-- Fork notice for builtin skills -->
+          <div v-if="currentSkill.source === 'builtin'" class="fork-notice">
+            <span>⚠️</span>
+            <span>系统技能为只读，保存后将创建同名<strong>自定义技能</strong>来覆盖，不影响原始技能</span>
+          </div>
+
           <a-form layout="vertical">
             <a-form-item :label="t('common.description')">
               <a-input v-model="editForm.description" :placeholder="t('skills.descPlaceholder')" />
@@ -166,7 +187,7 @@
             <a-form-item label="Prompt">
               <a-textarea
                 v-model="editForm.prompt"
-                :auto-size="{ minRows: 4, maxRows: 12 }"
+                :auto-size="{ minRows: 4, maxRows: 20 }"
                 :placeholder="t('skills.promptPlaceholder')"
                 class="code-textarea"
               />
@@ -178,7 +199,7 @@
               </template>
               <a-textarea
                 v-model="editForm.system"
-                :auto-size="{ minRows: 3, maxRows: 10 }"
+                :auto-size="{ minRows: 3, maxRows: 15 }"
                 :placeholder="t('skills.systemPlaceholder')"
                 class="code-textarea"
               />
@@ -192,6 +213,7 @@
         <div class="detail-header">
           <div class="detail-title-row">
             <span class="detail-name">{{ selectedHubSkill.name }}</span>
+            <span class="source-badge hub">Hub</span>
             <span v-if="selectedHubSkill.author" class="hub-author">by {{ selectedHubSkill.author }}</span>
           </div>
           <div class="detail-actions">
@@ -204,6 +226,10 @@
           </div>
         </div>
         <div class="detail-body">
+          <div class="fork-notice hub-notice">
+            <span>🌐</span>
+            <span>Hub 技能为只读，点击「安装」后将在本地创建<strong>自定义技能</strong>副本，可在本地技能列表中修改</span>
+          </div>
           <section class="detail-section">
             <div class="section-label">{{ t('common.description') }}</div>
             <div class="section-content desc-text">{{ selectedHubSkill.description }}</div>
@@ -314,7 +340,7 @@ const currentSkill = computed(() =>
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function groupLabel(source: string) {
-  return source === 'builtin' ? '内置' : source === 'user' ? '用户' : '项目';
+  return source === 'builtin' ? '系统技能' : source === 'user' ? '自定义技能' : '项目技能';
 }
 
 function selectSkill(skill: ApiSkill) {
@@ -340,7 +366,11 @@ async function saveEdit() {
   if (!currentSkill.value) return;
   saving.value = true;
   try {
-    await skillsApi.delete(currentSkill.value.name);
+    // For builtin skills: only create a user skill (fork), don't delete the builtin
+    // For user/project skills: delete old entry + recreate with new content (same name)
+    if (currentSkill.value.source !== 'builtin') {
+      await skillsApi.delete(currentSkill.value.name);
+    }
     await skillsApi.create({
       name:        currentSkill.value.name,
       description: editForm.value.description,
@@ -349,7 +379,10 @@ async function saveEdit() {
     });
     await store.fetchSkills();
     editing.value = false;
-    Message.success(t('common.success'));
+    Message.success(currentSkill.value.source === 'builtin'
+      ? '已创建自定义技能覆盖系统技能'
+      : t('common.success')
+    );
   } catch (err) {
     Message.error(err instanceof Error ? err.message : t('common.error'));
   } finally {
@@ -436,6 +469,9 @@ onMounted(() => { store.fetchSkills(); });
 .skills-view {
   display: flex;
   height: 100%;
+  /* Fix #1: fill main-content width */
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   background: var(--color-bg-1);
 }
@@ -449,6 +485,7 @@ onMounted(() => { store.fetchSkills(); });
   flex-direction: column;
   background: var(--color-bg-2);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .tab-bar {
@@ -500,6 +537,20 @@ onMounted(() => { store.fetchSkills(); });
   color: var(--color-text-3);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.group-readonly {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--color-text-4);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.group-count {
+  margin-left: auto;
+  font-weight: 400;
 }
 
 .skill-item {
@@ -549,8 +600,10 @@ onMounted(() => { store.fetchSkills(); });
 /* ── Right panel ──────────────────────────────────────────────── */
 .detail-panel {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
+  /* Fix #2: allow internal scrolling */
   overflow: hidden;
   background: var(--color-bg-1);
 }
@@ -595,14 +648,36 @@ onMounted(() => { store.fetchSkills(); });
 .source-badge.builtin { background: var(--color-fill-3); color: var(--color-text-3); }
 .source-badge.user    { background: var(--color-primary-light-1); color: rgb(var(--primary-6)); }
 .source-badge.project { background: var(--color-success-light-1); color: rgb(var(--success-6)); }
+.source-badge.hub     { background: var(--color-warning-light-1); color: rgb(var(--warning-6)); }
 .hub-author { font-size: 13px; color: var(--color-text-3); }
 
 .detail-actions { display: flex; gap: 8px; }
 
+/* Fix #2: detail-body fills remaining height and scrolls */
 .detail-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 20px 28px;
+}
+
+.fork-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--color-warning-light-1);
+  border: 1px solid var(--color-warning-light-3);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: rgb(var(--warning-6));
+  line-height: 1.5;
+}
+.hub-notice {
+  background: var(--color-fill-2);
+  border-color: var(--color-border);
+  color: var(--color-text-2);
 }
 
 .detail-section {
@@ -620,6 +695,7 @@ onMounted(() => { store.fetchSkills(); });
 .desc-text { font-size: 14px; color: var(--color-text-1); }
 .muted { color: var(--color-text-3); font-size: 13px; }
 
+/* Fix #2: code-block has no max-height; detail-body scrolls instead */
 .code-block {
   margin: 0;
   font-size: 13px;
@@ -632,8 +708,6 @@ onMounted(() => { store.fetchSkills(); });
   border-radius: 6px;
   border: 1px solid var(--color-border);
   line-height: 1.6;
-  max-height: 400px;
-  overflow-y: auto;
 }
 .system-block {
   border-left: 3px solid rgb(var(--warning-6));
