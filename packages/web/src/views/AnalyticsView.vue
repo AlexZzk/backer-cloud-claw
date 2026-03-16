@@ -4,6 +4,9 @@
     <div class="sub-panel">
       <div class="sub-header">
         <span class="sub-title">{{ t('nav.analytics') }}</span>
+        <a-button type="text" size="mini" shape="circle" :loading="loading" @click="fetchData">
+          <template #icon><icon-refresh /></template>
+        </a-button>
       </div>
 
       <!-- Period selector -->
@@ -40,19 +43,19 @@
       <!-- Summary stats -->
       <div class="summary-stats">
         <div class="summary-item">
-          <div class="si-value">{{ formatNumber(totalTokens) }}</div>
+          <div class="si-value">{{ formatNumber(apiTotalTokens) }}</div>
           <div class="si-label">{{ t('analytics.totalTokens') }}</div>
         </div>
         <div class="summary-item">
-          <div class="si-value">{{ formatNumber(totalInput) }}</div>
+          <div class="si-value">{{ formatNumber(apiTotalInput) }}</div>
           <div class="si-label">{{ t('analytics.inputTokens') }}</div>
         </div>
         <div class="summary-item">
-          <div class="si-value">{{ formatNumber(totalOutput) }}</div>
+          <div class="si-value">{{ formatNumber(apiTotalOutput) }}</div>
           <div class="si-label">{{ t('analytics.outputTokens') }}</div>
         </div>
         <div class="summary-item">
-          <div class="si-value">${{ estimateCost(totalTokens) }}</div>
+          <div class="si-value">${{ estimateCost(apiTotalTokens) }}</div>
           <div class="si-label">{{ t('analytics.costEstimate') }}</div>
         </div>
       </div>
@@ -60,348 +63,402 @@
 
     <!-- Main charts area -->
     <div class="analytics-main">
-      <!-- Top stat cards -->
-      <div class="stat-cards">
-        <div class="stat-card" v-for="card in statCards" :key="card.label">
-          <div class="sc-icon">{{ card.icon }}</div>
-          <div class="sc-content">
-            <div class="sc-value">{{ card.value }}</div>
-            <div class="sc-label">{{ card.label }}</div>
-            <div class="sc-change" :class="card.up ? 'up' : 'down'">
-              {{ card.up ? '↑' : '↓' }} {{ card.change }}
-            </div>
-          </div>
-        </div>
+
+      <!-- Empty state -->
+      <div v-if="!loading && apiTotalTokens === 0" class="empty-state">
+        <div class="es-icon">📊</div>
+        <div class="es-title">{{ t('analytics.noData') }}</div>
+        <div class="es-desc">与 Worker 对话后，Token 消耗将会显示在这里</div>
       </div>
 
-      <!-- Charts grid -->
-      <div class="charts-grid">
-        <!-- Daily tokens line chart -->
-        <div class="chart-card span-2">
-          <div class="chart-header">
-            <h3>{{ t('analytics.tokenUsage') }} — {{ t('analytics.byTime') }}</h3>
-          </div>
-          <div class="chart-container">
-            <!-- Mock visual chart -->
-            <div class="mock-chart line-chart">
-              <div class="lc-bars">
-                <div
-                  v-for="(item, i) in dailyData"
-                  :key="i"
-                  class="lc-bar-group"
-                >
-                  <div class="lc-input" :style="{ height: `${(item.input / maxDayVal) * 100}%` }"></div>
-                  <div class="lc-output" :style="{ height: `${(item.output / maxDayVal) * 100}%` }"></div>
-                  <div class="lc-label">{{ item.date }}</div>
-                </div>
-              </div>
-              <div class="lc-legend">
-                <span class="legend-dot input"></span> {{ t('analytics.inputTokens') }}
-                <span class="legend-dot output" style="margin-left:16px"></span> {{ t('analytics.outputTokens') }}
-              </div>
+      <template v-else>
+        <!-- Top stat cards -->
+        <div class="stat-cards">
+          <div class="stat-card" v-for="card in statCards" :key="card.label">
+            <div class="sc-icon">{{ card.icon }}</div>
+            <div class="sc-content">
+              <div class="sc-value">{{ card.value }}</div>
+              <div class="sc-label">{{ card.label }}</div>
             </div>
           </div>
         </div>
 
-        <!-- By worker / by dept donut -->
-        <div class="chart-card">
-          <div class="chart-header">
-            <h3>{{ selectedDimension === 'worker' ? t('analytics.byWorker') : t('analytics.byDept') }}</h3>
-          </div>
-          <div class="chart-container">
-            <div class="donut-chart">
-              <svg viewBox="0 0 100 100" class="donut-svg">
-                <circle cx="50" cy="50" r="35" fill="none" stroke="var(--border-color)" stroke-width="20"/>
-                <circle
-                  v-for="(seg, i) in donutSegments"
-                  :key="i"
-                  cx="50" cy="50" r="35"
-                  fill="none"
-                  :stroke="seg.color"
-                  stroke-width="20"
-                  :stroke-dasharray="`${seg.dash} ${seg.gap}`"
-                  :stroke-dashoffset="seg.offset"
-                  style="transform: rotate(-90deg); transform-origin: 50% 50%;"
-                />
-                <text x="50" y="46" text-anchor="middle" font-size="9" fill="var(--text-secondary)">总计</text>
-                <text x="50" y="58" text-anchor="middle" font-size="8" font-weight="bold" fill="var(--text-primary)">{{ formatNumber(totalTokens) }}</text>
-              </svg>
-              <div class="donut-legend">
-                <div v-for="(item, i) in activeDonutData" :key="i" class="dl-item">
-                  <span class="dl-dot" :style="{ background: donutColors[i] }"></span>
-                  <span class="dl-name">{{ item.name }}</span>
-                  <span class="dl-val">{{ formatNumber(item.value) }}</span>
-                </div>
-              </div>
+        <!-- Charts grid -->
+        <div class="charts-grid">
+          <!-- Daily tokens bar chart -->
+          <div class="chart-card span-2">
+            <div class="chart-header">
+              <h3>{{ t('analytics.tokenUsage') }} — {{ t('analytics.byTime') }}</h3>
+              <span class="chart-sub">近 {{ filteredDailyData.length }} 天</span>
             </div>
-          </div>
-        </div>
-
-        <!-- By model -->
-        <div class="chart-card">
-          <div class="chart-header">
-            <h3>{{ t('analytics.byModel') }}</h3>
-          </div>
-          <div class="chart-container">
-            <div class="model-bars">
-              <div v-for="(item, i) in modelTokenData" :key="i" class="mb-row">
-                <div class="mb-name">{{ item.name.replace('claude-', '').replace('gpt-', 'GPT-') }}</div>
-                <div class="mb-bar-wrap">
+            <div class="chart-container">
+              <div v-if="filteredDailyData.length === 0" class="chart-empty">{{ t('analytics.noData') }}</div>
+              <div v-else class="mock-chart line-chart">
+                <div class="lc-bars">
                   <div
-                    class="mb-bar"
-                    :style="{
-                      width: `${(item.value / modelTokenData[0]!.value) * 100}%`,
-                      background: i === 0 ? '#165dff' : '#722ed1'
-                    }"
-                  ></div>
+                    v-for="(item, i) in filteredDailyData"
+                    :key="i"
+                    class="lc-bar-group"
+                  >
+                    <div class="lc-input" :style="{ height: `${maxDayVal > 0 ? (item.inputTokens / maxDayVal) * 100 : 0}%` }"></div>
+                    <div class="lc-output" :style="{ height: `${maxDayVal > 0 ? (item.outputTokens / maxDayVal) * 100 : 0}%` }"></div>
+                    <div class="lc-label">{{ item.date.slice(5) }}</div>
+                  </div>
                 </div>
-                <div class="mb-val">{{ formatNumber(item.value) }}</div>
+                <div class="lc-legend">
+                  <span class="legend-dot input"></span> {{ t('analytics.inputTokens') }}
+                  <span class="legend-dot output" style="margin-left:16px"></span> {{ t('analytics.outputTokens') }}
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Department breakdown table -->
-        <div v-if="selectedDimension === 'dept'" class="chart-card span-2">
-          <div class="chart-header">
-            <h3>{{ t('analytics.deptDetail') }}</h3>
-          </div>
-          <a-table
-            :data="deptTableData"
-            :bordered="false"
-            :pagination="false"
-            row-key="deptId"
-            :expandable="{ defaultExpandAllRows: false }"
-          >
-            <template #columns>
-              <a-table-column :title="t('org.department')" data-index="name">
-                <template #cell="{ record }">
-                  <span style="font-weight:600">🏢 {{ record.name }}</span>
-                </template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.inputTokens')" data-index="input">
-                <template #cell="{ record }">{{ formatNumber(record.input) }}</template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.outputTokens')" data-index="output">
-                <template #cell="{ record }">{{ formatNumber(record.output) }}</template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.totalTokens')" data-index="value">
-                <template #cell="{ record }">
-                  <strong>{{ formatNumber(record.value) }}</strong>
-                </template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.costEstimate')">
-                <template #cell="{ record }">
-                  <span class="cost-cell">${{ estimateCost(record.value) }}</span>
-                </template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.share')">
-                <template #cell="{ record }">
-                  <div class="share-bar-wrap">
-                    <div class="share-bar" :style="{ width: `${deptShare(record.value)}%` }"></div>
-                    <span class="share-pct">{{ deptShare(record.value).toFixed(1) }}%</span>
-                  </div>
-                </template>
-              </a-table-column>
-            </template>
-          </a-table>
-
-          <!-- Per-dept member breakdown -->
-          <div v-for="dept in deptMemberBreakdown" :key="dept.deptId" class="dept-member-block">
-            <div class="dmb-header">
-              <span class="dmb-dept-name">{{ dept.name }}</span>
-              <span class="dmb-total">{{ formatNumber(dept.total) }} tokens</span>
+          <!-- By worker / by dept donut -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3>{{ selectedDimension === 'worker' ? t('analytics.byWorker') : t('analytics.byDept') }}</h3>
             </div>
-            <div class="dmb-members">
-              <div v-for="m in dept.members" :key="m.workerId" class="dmb-row">
-                <span class="dmb-avatar">{{ m.avatar }}</span>
-                <span class="dmb-name">{{ m.name }}</span>
-                <span class="dmb-worker" v-if="m.workerName">🤖 {{ m.workerName }}</span>
-                <div class="dmb-bar-wrap">
-                  <div class="dmb-bar" :style="{ width: dept.total > 0 ? `${(m.tokens / dept.total) * 100}%` : '0%' }"></div>
+            <div class="chart-container">
+              <div v-if="activeDonutData.length === 0" class="chart-empty">{{ t('analytics.noData') }}</div>
+              <div v-else class="donut-chart">
+                <svg viewBox="0 0 100 100" class="donut-svg">
+                  <circle cx="50" cy="50" r="35" fill="none" stroke="var(--border-color)" stroke-width="20"/>
+                  <circle
+                    v-for="(seg, i) in donutSegments"
+                    :key="i"
+                    cx="50" cy="50" r="35"
+                    fill="none"
+                    :stroke="seg.color"
+                    stroke-width="20"
+                    :stroke-dasharray="`${seg.dash} ${seg.gap}`"
+                    :stroke-dashoffset="seg.offset"
+                    style="transform: rotate(-90deg); transform-origin: 50% 50%;"
+                  />
+                  <text x="50" y="46" text-anchor="middle" font-size="9" fill="var(--text-secondary)">总计</text>
+                  <text x="50" y="58" text-anchor="middle" font-size="8" font-weight="bold" fill="var(--text-primary)">{{ formatNumber(apiTotalTokens) }}</text>
+                </svg>
+                <div class="donut-legend">
+                  <div v-for="(item, i) in activeDonutData" :key="i" class="dl-item">
+                    <span class="dl-dot" :style="{ background: donutColors[i] }"></span>
+                    <span class="dl-name">{{ item.name }}</span>
+                    <span class="dl-val">{{ formatNumber(item.value) }}</span>
+                  </div>
                 </div>
-                <span class="dmb-val">{{ formatNumber(m.tokens) }}</span>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Per-worker breakdown table -->
-        <div v-else class="chart-card span-2">
-          <div class="chart-header">
-            <h3>{{ t('analytics.workerDetail') }}</h3>
-          </div>
-          <a-table
-            :data="workerTableData"
-            :bordered="false"
-            :pagination="false"
-          >
-            <template #columns>
-              <a-table-column title="Worker" data-index="name">
-                <template #cell="{ record }">
-                  <span>{{ record.avatar }} {{ record.name }}</span>
-                </template>
-              </a-table-column>
-              <a-table-column :title="t('org.department')" data-index="dept">
-                <template #cell="{ record }">
-                  <a-tag v-if="record.dept" size="small" color="arcoblue">{{ record.dept }}</a-tag>
-                  <span v-else class="no-dept">—</span>
-                </template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.inputTokens')" data-index="input">
-                <template #cell="{ record }">{{ formatNumber(record.input) }}</template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.outputTokens')" data-index="output">
-                <template #cell="{ record }">{{ formatNumber(record.output) }}</template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.totalTokens')" data-index="total">
-                <template #cell="{ record }">
-                  <strong>{{ formatNumber(record.total) }}</strong>
-                </template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.costEstimate')">
-                <template #cell="{ record }">
-                  <span class="cost-cell">${{ estimateCost(record.total) }}</span>
-                </template>
-              </a-table-column>
-              <a-table-column :title="t('analytics.share')">
-                <template #cell="{ record }">
-                  <div class="share-bar-wrap">
-                    <div class="share-bar" :style="{ width: `${workerShare(record.total)}%` }"></div>
-                    <span class="share-pct">{{ workerShare(record.total).toFixed(1) }}%</span>
+          <!-- By model placeholder (no model breakdown in current API) -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <h3>{{ t('analytics.byModel') }}</h3>
+            </div>
+            <div class="chart-container">
+              <div class="model-bars">
+                <div v-for="(item, i) in modelBreakdown" :key="i" class="mb-row">
+                  <div class="mb-name">{{ item.name }}</div>
+                  <div class="mb-bar-wrap">
+                    <div
+                      class="mb-bar"
+                      :style="{
+                        width: `${modelBreakdown[0] && modelBreakdown[0].value > 0 ? (item.value / modelBreakdown[0].value) * 100 : 0}%`,
+                        background: i === 0 ? '#165dff' : '#722ed1'
+                      }"
+                    ></div>
                   </div>
-                </template>
-              </a-table-column>
-            </template>
-          </a-table>
+                  <div class="mb-val">{{ formatNumber(item.value) }}</div>
+                </div>
+                <div v-if="modelBreakdown.length === 0" class="chart-empty">{{ t('analytics.noData') }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Department breakdown -->
+          <div v-if="selectedDimension === 'dept'" class="chart-card span-2">
+            <div class="chart-header">
+              <h3>{{ t('analytics.deptDetail') }}</h3>
+            </div>
+            <a-table
+              :data="deptTableData"
+              :bordered="false"
+              :pagination="false"
+              row-key="deptId"
+            >
+              <template #columns>
+                <a-table-column :title="t('org.department')" data-index="name">
+                  <template #cell="{ record }">
+                    <span style="font-weight:600">🏢 {{ record.name }}</span>
+                  </template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.inputTokens')" data-index="input">
+                  <template #cell="{ record }">{{ formatNumber(record.input) }}</template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.outputTokens')" data-index="output">
+                  <template #cell="{ record }">{{ formatNumber(record.output) }}</template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.totalTokens')" data-index="value">
+                  <template #cell="{ record }">
+                    <strong>{{ formatNumber(record.value) }}</strong>
+                  </template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.costEstimate')">
+                  <template #cell="{ record }">
+                    <span class="cost-cell">${{ estimateCost(record.value) }}</span>
+                  </template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.share')">
+                  <template #cell="{ record }">
+                    <div class="share-bar-wrap">
+                      <div class="share-bar" :style="{ width: `${deptSharePct(record.value)}%` }"></div>
+                      <span class="share-pct">{{ deptSharePct(record.value).toFixed(1) }}%</span>
+                    </div>
+                  </template>
+                </a-table-column>
+              </template>
+            </a-table>
+
+            <!-- Per-dept member breakdown -->
+            <div v-for="dept in deptMemberBreakdown" :key="dept.deptId" class="dept-member-block">
+              <div class="dmb-header">
+                <span class="dmb-dept-name">{{ dept.name }}</span>
+                <span class="dmb-total">{{ formatNumber(dept.total) }} tokens</span>
+              </div>
+              <div class="dmb-members">
+                <div v-for="m in dept.members" :key="m.workerId ?? m.name" class="dmb-row">
+                  <span class="dmb-avatar">{{ m.avatar }}</span>
+                  <span class="dmb-name">{{ m.name }}</span>
+                  <span class="dmb-worker" v-if="m.workerName">🤖 {{ m.workerName }}</span>
+                  <div class="dmb-bar-wrap">
+                    <div class="dmb-bar" :style="{ width: dept.total > 0 ? `${(m.tokens / dept.total) * 100}%` : '0%' }"></div>
+                  </div>
+                  <span class="dmb-val">{{ formatNumber(m.tokens) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Per-worker breakdown table -->
+          <div v-else class="chart-card span-2">
+            <div class="chart-header">
+              <h3>{{ t('analytics.workerDetail') }}</h3>
+            </div>
+            <a-table
+              :data="workerTableData"
+              :bordered="false"
+              :pagination="false"
+            >
+              <template #columns>
+                <a-table-column title="Worker" data-index="workerName">
+                  <template #cell="{ record }">
+                    <span>🤖 {{ record.workerName }}</span>
+                  </template>
+                </a-table-column>
+                <a-table-column :title="t('org.department')" data-index="dept">
+                  <template #cell="{ record }">
+                    <a-tag v-if="record.dept" size="small" color="arcoblue">{{ record.dept }}</a-tag>
+                    <span v-else class="no-dept">—</span>
+                  </template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.inputTokens')" data-index="inputTokens">
+                  <template #cell="{ record }">{{ formatNumber(record.inputTokens) }}</template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.outputTokens')" data-index="outputTokens">
+                  <template #cell="{ record }">{{ formatNumber(record.outputTokens) }}</template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.totalTokens')" data-index="totalTokens">
+                  <template #cell="{ record }">
+                    <strong>{{ formatNumber(record.totalTokens) }}</strong>
+                  </template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.requestCount')" data-index="callCount" />
+                <a-table-column :title="t('analytics.costEstimate')">
+                  <template #cell="{ record }">
+                    <span class="cost-cell">${{ estimateCost(record.totalTokens) }}</span>
+                  </template>
+                </a-table-column>
+                <a-table-column :title="t('analytics.share')">
+                  <template #cell="{ record }">
+                    <div class="share-bar-wrap">
+                      <div class="share-bar" :style="{ width: `${workerSharePct(record.totalTokens)}%` }"></div>
+                      <span class="share-pct">{{ workerSharePct(record.totalTokens).toFixed(1) }}%</span>
+                    </div>
+                  </template>
+                </a-table-column>
+              </template>
+            </a-table>
+          </div>
         </div>
-      </div>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useWorkersStore } from '@/stores/workers';
-import {
-  MOCK_TOKEN_DAILY,
-  MOCK_TOKEN_BY_WORKER,
-  MOCK_TOKEN_BY_MODEL,
-  MOCK_TOKEN_BY_DEPT,
-  MOCK_COMPANY,
-} from '@/mock/data';
+import { analyticsApi, type TokenStats } from '@/api/client';
+import { MOCK_COMPANY } from '@/mock/data';
 
 const { t } = useI18n();
 const workersStore = useWorkersStore();
 
 const selectedPeriod = ref('month');
 const selectedDimension = ref<'worker' | 'dept'>('worker');
+const loading = ref(false);
+const stats = ref<TokenStats | null>(null);
 
 const periods = [
-  { value: 'today', labelKey: 'analytics.today' },
-  { value: 'week', labelKey: 'analytics.thisWeek' },
-  { value: 'month', labelKey: 'analytics.thisMonth' },
-  { value: '30days', labelKey: 'analytics.last30Days' },
+  { value: 'today',   labelKey: 'analytics.today' },
+  { value: 'week',    labelKey: 'analytics.thisWeek' },
+  { value: 'month',   labelKey: 'analytics.thisMonth' },
+  { value: '30days',  labelKey: 'analytics.last30Days' },
 ];
 
 const dimensions = computed(() => [
   { value: 'worker', label: t('analytics.byWorker') },
-  { value: 'dept', label: t('analytics.byDept') },
+  { value: 'dept',   label: t('analytics.byDept') },
 ]);
 
-const dailyData = MOCK_TOKEN_DAILY;
-const workerTokenData = MOCK_TOKEN_BY_WORKER;
-const modelTokenData = MOCK_TOKEN_BY_MODEL;
-const deptTokenData = MOCK_TOKEN_BY_DEPT;
+async function fetchData() {
+  loading.value = true;
+  try {
+    const res = await analyticsApi.tokens();
+    stats.value = res.data;
+  } catch {
+    // backend may not be running; ignore
+  } finally {
+    loading.value = false;
+  }
+}
 
-const maxDayVal = computed(() => Math.max(...dailyData.map(d => d.input + d.output)));
-const totalInput = computed(() => dailyData.reduce((s, d) => s + d.input, 0));
-const totalOutput = computed(() => dailyData.reduce((s, d) => s + d.output, 0));
-const totalTokens = computed(() => totalInput.value + totalOutput.value);
+onMounted(() => {
+  void workersStore.fetchWorkers();
+  void fetchData();
+});
 
-const donutColors = ['#165dff', '#722ed1', '#00b42a', '#ff7d00', '#f53f3f'];
+// ── Computed from real API ──────────────────────────────────────────────────
 
-const activeDonutData = computed(() =>
-  selectedDimension.value === 'dept'
-    ? deptTokenData.filter(d => d.value > 0).map(d => ({ name: d.name, value: d.value }))
-    : workerTokenData.map(d => ({ name: d.name, value: d.value }))
+const apiTotalInput  = computed(() => stats.value?.totalInputTokens  ?? 0);
+const apiTotalOutput = computed(() => stats.value?.totalOutputTokens ?? 0);
+const apiTotalTokens = computed(() => stats.value?.totalTokens        ?? 0);
+
+/** Filter byDay to the selected period */
+const filteredDailyData = computed(() => {
+  const byDay = stats.value?.byDay ?? [];
+  const now = Date.now();
+  const cutoff: Record<string, number> = {
+    today:   now - 1  * 24 * 60 * 60 * 1000,
+    week:    now - 7  * 24 * 60 * 60 * 1000,
+    month:   now - 30 * 24 * 60 * 60 * 1000,
+    '30days':now - 30 * 24 * 60 * 60 * 1000,
+  };
+  const cutoffMs = cutoff[selectedPeriod.value] ?? cutoff['30days']!;
+  const cutoffDate = new Date(cutoffMs).toISOString().slice(0, 10);
+  return byDay.filter(d => d.date >= cutoffDate);
+});
+
+const maxDayVal = computed(() =>
+  Math.max(1, ...filteredDailyData.value.map(d => d.inputTokens + d.outputTokens))
 );
 
-// Donut segments
-const donutSegments = computed(() => {
-  const data = activeDonutData.value;
-  const total = data.reduce((s, d) => s + d.value, 0);
-  const circumference = 2 * Math.PI * 35;
-  let offset = 0;
-  return data.map((item, i) => {
-    const pct = item.value / total;
-    const dash = pct * circumference;
-    const gap = circumference - dash;
-    const seg = { dash, gap, offset: -offset, color: donutColors[i] ?? '#ccc' };
-    offset += dash;
-    return seg;
-  });
-});
-
-const statCards = computed(() => [
-  { icon: '📊', label: t('analytics.totalTokens'), value: formatNumber(totalTokens.value), change: '+12.4%', up: true },
-  { icon: '🔢', label: t('analytics.requestCount'), value: '178', change: '+8.3%', up: true },
-  { icon: '📈', label: t('analytics.avgTokensPerReq'), value: formatNumber(Math.round(totalTokens.value / 178)), change: '+3.7%', up: true },
-  { icon: '💰', label: t('analytics.costEstimate'), value: `$${estimateCost(totalTokens.value)}`, change: '+12.4%', up: true },
-]);
-
-// Worker dimension table
+// Worker table data — real API
 const workerTableData = computed(() => {
-  return MOCK_TOKEN_BY_WORKER.map(w => {
-    const deptName = w.deptId ? MOCK_COMPANY.departments.find(d => d.id === w.deptId)?.name : null;
-    return {
-      workerId: w.workerId,
-      name: w.name,
-      avatar: '🤖',
-      dept: deptName ?? null,
-      input: w.input,
-      output: w.output,
-      total: w.value,
-    };
-  });
+  const byWorker = stats.value?.byWorker ?? [];
+  return byWorker.map(w => {
+    // Find department name by mapping workerId through org members
+    let dept: string | null = null;
+    for (const d of MOCK_COMPANY.departments) {
+      if (d.members.some(m => m.workerId === w.workerId)) { dept = d.name; break; }
+    }
+    return { ...w, dept };
+  }).sort((a, b) => b.totalTokens - a.totalTokens);
 });
 
-// Dept dimension table
-const deptTableData = computed(() => deptTokenData);
+// Department table data — aggregated from real worker data
+const deptTableData = computed(() => {
+  return MOCK_COMPANY.departments.map(dept => {
+    let input = 0, output = 0, value = 0;
+    for (const m of dept.members) {
+      if (!m.workerId) continue;
+      const wt = stats.value?.byWorker.find(w => w.workerId === m.workerId);
+      if (wt) { input += wt.inputTokens; output += wt.outputTokens; value += wt.totalTokens; }
+    }
+    return { deptId: dept.id, name: dept.name, input, output, value };
+  }).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+});
 
 // Per-dept member breakdown
 const deptMemberBreakdown = computed(() => {
   return MOCK_COMPANY.departments.map(dept => {
     const members = dept.members.map(emp => {
-      const wt = emp.workerId ? MOCK_TOKEN_BY_WORKER.find(w => w.workerId === emp.workerId) : null;
-      const workerName = emp.workerId ? workersStore.workers.find(w => w.id === emp.workerId)?.name ?? null : null;
-      return { workerId: emp.workerId ?? null, name: emp.name, avatar: emp.avatar, workerName, tokens: wt?.value ?? 0 };
+      const wt = emp.workerId ? stats.value?.byWorker.find(w => w.workerId === emp.workerId) : null;
+      const workerName = wt?.workerName ?? null;
+      return { workerId: emp.workerId ?? null, name: emp.name, avatar: emp.avatar, workerName, tokens: wt?.totalTokens ?? 0 };
     });
     const total = members.reduce((s, m) => s + m.tokens, 0);
     return { deptId: dept.id, name: dept.name, members, total };
   }).filter(d => d.total > 0);
 });
 
-const deptTotal = computed(() => deptTableData.value.reduce((s, d) => s + d.value, 0));
-const workerTotal = computed(() => workerTableData.value.reduce((s, w) => s + w.total, 0));
+const donutColors = ['#165dff', '#722ed1', '#00b42a', '#ff7d00', '#f53f3f'];
 
-function deptShare(val: number) {
-  return deptTotal.value > 0 ? (val / deptTotal.value) * 100 : 0;
-}
+const activeDonutData = computed(() => {
+  if (selectedDimension.value === 'dept') {
+    return deptTableData.value.map(d => ({ name: d.name, value: d.value }));
+  }
+  return workerTableData.value.map(w => ({ name: w.workerName, value: w.totalTokens }));
+});
 
-function workerShare(val: number) {
-  return workerTotal.value > 0 ? (val / workerTotal.value) * 100 : 0;
-}
+const donutSegments = computed(() => {
+  const data = activeDonutData.value;
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (total === 0) return [];
+  const circumference = 2 * Math.PI * 35;
+  let offset = 0;
+  return data.map((item, i) => {
+    const dash = (item.value / total) * circumference;
+    const gap  = circumference - dash;
+    const seg  = { dash, gap, offset: -offset, color: donutColors[i] ?? '#ccc' };
+    offset += dash;
+    return seg;
+  });
+});
+
+// Model breakdown — derived from workers' modelId (from workers store)
+const modelBreakdown = computed(() => {
+  const map = new Map<string, number>();
+  for (const w of (stats.value?.byWorker ?? [])) {
+    const worker = workersStore.workers.find(ww => ww.id === w.workerId);
+    const modelId = worker?.modelId ?? 'unknown';
+    map.set(modelId, (map.get(modelId) ?? 0) + w.totalTokens);
+  }
+  return [...map.entries()]
+    .map(([name, value]) => ({ name: name.replace('claude-', '').replace('gpt-', 'GPT-'), value }))
+    .sort((a, b) => b.value - a.value);
+});
+
+const statCards = computed(() => [
+  { icon: '📊', label: t('analytics.totalTokens'),    value: formatNumber(apiTotalTokens.value) },
+  { icon: '🔢', label: t('analytics.requestCount'),   value: String(stats.value?.byWorker.reduce((s, w) => s + w.callCount, 0) ?? 0) },
+  { icon: '📈', label: t('analytics.inputTokens'),    value: formatNumber(apiTotalInput.value) },
+  { icon: '💰', label: t('analytics.costEstimate'),   value: `$${estimateCost(apiTotalTokens.value)}` },
+]);
+
+const deptTotal   = computed(() => deptTableData.value.reduce((s, d) => s + d.value, 0));
+const workerTotal = computed(() => workerTableData.value.reduce((s, w) => s + w.totalTokens, 0));
+
+function deptSharePct(val: number)   { return deptTotal.value   > 0 ? (val / deptTotal.value)   * 100 : 0; }
+function workerSharePct(val: number) { return workerTotal.value > 0 ? (val / workerTotal.value) * 100 : 0; }
 
 function formatNumber(n: number) {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
 }
 
 function estimateCost(tokens: number): string {
-  return (tokens / 1000000 * 3).toFixed(2);
+  return (tokens / 1_000_000 * 3).toFixed(2);
 }
 </script>
 
@@ -500,6 +557,21 @@ function estimateCost(tokens: number): string {
   background: var(--bg-card);
 }
 
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+  gap: 12px;
+  color: var(--text-tertiary);
+}
+
+.es-icon { font-size: 48px; }
+.es-title { font-size: 16px; font-weight: 600; color: var(--text-secondary); }
+.es-desc { font-size: 13px; }
+
 /* Stat cards */
 .stat-cards {
   display: grid;
@@ -542,15 +614,6 @@ function estimateCost(tokens: number): string {
   margin-top: 2px;
 }
 
-.sc-change {
-  font-size: 11px;
-  margin-top: 4px;
-  font-weight: 500;
-}
-
-.sc-change.up { color: #00b42a; }
-.sc-change.down { color: #f53f3f; }
-
 /* Charts grid */
 .charts-grid {
   display: grid;
@@ -570,6 +633,9 @@ function estimateCost(tokens: number): string {
 }
 
 .chart-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 14px;
 }
 
@@ -579,11 +645,25 @@ function estimateCost(tokens: number): string {
   color: var(--text-primary);
 }
 
+.chart-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .chart-container {
   min-height: 200px;
 }
 
-/* ─── Mock Line Chart ────────────────────────────────────────────────── */
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 160px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+/* ─── Bar Chart ──────────────────────────────────────────────────────── */
 
 .mock-chart {
   height: 200px;
@@ -631,8 +711,8 @@ function estimateCost(tokens: number): string {
   transition: height 0.3s ease;
 }
 
-.lc-input { background: rgba(22, 93, 255, 0.5); }
-.lc-output { background: rgba(22, 93, 255, 0.15); }
+.lc-input  { background: rgba(22, 93, 255, 0.55); }
+.lc-output { background: rgba(22, 93, 255, 0.18); }
 
 .lc-label {
   position: absolute;
@@ -662,8 +742,8 @@ function estimateCost(tokens: number): string {
   margin-right: 5px;
 }
 
-.legend-dot.input { background: rgba(22, 93, 255, 0.5); }
-.legend-dot.output { background: rgba(22, 93, 255, 0.15); }
+.legend-dot.input  { background: rgba(22, 93, 255, 0.55); }
+.legend-dot.output { background: rgba(22, 93, 255, 0.18); }
 
 /* ─── Donut Chart ────────────────────────────────────────────────────── */
 
@@ -702,7 +782,7 @@ function estimateCost(tokens: number): string {
 }
 
 .dl-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dl-val { font-weight: 600; color: var(--text-primary); }
+.dl-val  { font-weight: 600; color: var(--text-primary); }
 
 /* ─── Model Bars ─────────────────────────────────────────────────────── */
 
@@ -807,7 +887,7 @@ function estimateCost(tokens: number): string {
 }
 
 .dmb-avatar { font-size: 16px; flex-shrink: 0; }
-.dmb-name { font-weight: 500; color: var(--text-primary); min-width: 60px; }
+.dmb-name   { font-weight: 500; color: var(--text-primary); min-width: 60px; }
 .dmb-worker { font-size: 11px; color: var(--text-tertiary); min-width: 80px; }
 
 .dmb-bar-wrap {
@@ -836,10 +916,6 @@ function estimateCost(tokens: number): string {
 
 /* ─── Cost ───────────────────────────────────────────────────────────── */
 
-.cost-cell {
-  font-weight: 600;
-  color: #165dff;
-}
-
-.no-dept { color: var(--text-tertiary); }
+.cost-cell { font-weight: 600; color: #165dff; }
+.no-dept   { color: var(--text-tertiary); }
 </style>

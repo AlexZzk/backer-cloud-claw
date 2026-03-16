@@ -39,13 +39,14 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { readdir, unlink } from 'node:fs/promises';
+import { readdir, unlink, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { AgentEngine } from '@bcc/agent-engine';
 import { getBuiltinTool, findBuiltin, SkillRegistry, saveUserSkill, deleteUserSkill, SkillHub } from '@bcc/skills';
 import type { AgentInterface, AgentChunk, OrgMessage, Tool } from '@bcc/foundation';
 import { SessionStore } from './session-store.js';
-import type { ApiWorker, ApiModel, TokenStats, SseEvent } from './types.js';
+import type { ApiWorker, ApiModel, TokenStats, TokenRecord, SseEvent } from './types.js';
 import type {
   BccConfig,
   ModelInstanceConfig,
@@ -296,9 +297,13 @@ interface WorkerTokenAcc {
 
 // ─── HttpServer ────────────────────────────────────────────────────────────────
 
+const TOKEN_RECORDS_PATH = join(homedir(), '.bcc', 'token-records.json');
+
 export class HttpServer {
   private store = new SessionStore();
   private tokenAcc = new Map<string, WorkerTokenAcc>();
+  /** 带时间戳的明细记录，用于按天/按周统计，持久化到 ~/.bcc/token-records.json */
+  private tokenRecords: TokenRecord[] = [];
   /** 每个 Worker 共享同一 AgentEngine 实例，跨会话保持记忆 */
   private workerAgents = new Map<string, AgentInterface>();
   /** Worker 间异步聊天存储（与 CLI 模式共享同一 ~/.bcc/chats 目录） */
@@ -330,6 +335,8 @@ export class HttpServer {
   async start(): Promise<void> {
     // 从磁盘恢复历史会话（元数据 + 消息，agent 按需重建）
     await this.store.loadFromDisk();
+    // 恢复 token 明细记录
+    await this._loadTokenRecords();
 
     // ── 初始化 Company（核心业务逻辑层：Worker 实例 + 调度器 + 心跳）──────────
     await this._initCompany();
@@ -873,11 +880,30 @@ export class HttpServer {
 
   private handleGetAnalytics(res: ServerResponse) {
     const byWorker = [...this.tokenAcc.values()];
+
+    // 将明细记录按日期聚合（最近 30 天）
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const dayMap = new Map<string, { inputTokens: number; outputTokens: number; totalTokens: number }>();
+    for (const r of this.tokenRecords) {
+      if (r.timestamp < cutoff) continue;
+      const d = new Date(r.timestamp);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const acc = dayMap.get(key) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      acc.inputTokens  += r.inputTokens;
+      acc.outputTokens += r.outputTokens;
+      acc.totalTokens  += r.totalTokens;
+      dayMap.set(key, acc);
+    }
+    const byDay = [...dayMap.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, v]) => ({ date, ...v }));
+
     const stats: TokenStats = {
       totalInputTokens:  byWorker.reduce((s, w) => s + w.inputTokens,  0),
       totalOutputTokens: byWorker.reduce((s, w) => s + w.outputTokens, 0),
       totalTokens:       byWorker.reduce((s, w) => s + w.totalTokens,  0),
       byWorker,
+      byDay,
     };
     ok(res, stats);
   }
@@ -1265,6 +1291,8 @@ export class HttpServer {
     if (!tokenUsage) return;
     const workerCfg = (this.config.workers ?? []).find(w => w.id === workerId);
     const workerName = workerCfg?.name ?? workerId;
+
+    // 累计汇总（内存，用于 byWorker 统计）
     const acc = this.tokenAcc.get(workerId) ?? {
       workerId, workerName, inputTokens: 0, outputTokens: 0, totalTokens: 0, callCount: 0,
     };
@@ -1273,6 +1301,51 @@ export class HttpServer {
     acc.totalTokens  += tokenUsage.totalTokens;
     acc.callCount    += 1;
     this.tokenAcc.set(workerId, acc);
+
+    // 明细记录（带时间戳，用于 byDay 统计）
+    const record: TokenRecord = {
+      workerId,
+      workerName,
+      inputTokens:  tokenUsage.inputTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens:  tokenUsage.totalTokens,
+      timestamp: Date.now(),
+    };
+    this.tokenRecords.push(record);
+    void this._persistTokenRecords();
+  }
+
+  /** 从磁盘恢复 token 明细记录，同时重建内存汇总 */
+  private async _loadTokenRecords(): Promise<void> {
+    try {
+      const raw = await readFile(TOKEN_RECORDS_PATH, 'utf-8');
+      const records: TokenRecord[] = JSON.parse(raw);
+      this.tokenRecords = records;
+      // 重建 tokenAcc 汇总
+      for (const r of records) {
+        const acc = this.tokenAcc.get(r.workerId) ?? {
+          workerId: r.workerId, workerName: r.workerName,
+          inputTokens: 0, outputTokens: 0, totalTokens: 0, callCount: 0,
+        };
+        acc.inputTokens  += r.inputTokens;
+        acc.outputTokens += r.outputTokens;
+        acc.totalTokens  += r.totalTokens;
+        acc.callCount    += 1;
+        this.tokenAcc.set(r.workerId, acc);
+      }
+    } catch {
+      // 文件不存在或解析失败，忽略
+    }
+  }
+
+  /** 异步持久化 token 明细记录到磁盘 */
+  private async _persistTokenRecords(): Promise<void> {
+    try {
+      await mkdir(join(homedir(), '.bcc'), { recursive: true });
+      await writeFile(TOKEN_RECORDS_PATH, JSON.stringify(this.tokenRecords), 'utf-8');
+    } catch {
+      // 写入失败不影响主流程
+    }
   }
 
   // ── DM 会话 ──────────────────────────────────────────────────────────────────
