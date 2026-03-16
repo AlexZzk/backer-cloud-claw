@@ -67,6 +67,62 @@
         </div>
       </div>
 
+      <!-- Goals section -->
+      <div class="goals-section">
+        <div class="goals-header">
+          <div class="goals-title">
+            <span class="goals-icon">🎯</span>
+            <span>{{ selectedDept ? t('org.deptGoals') : t('org.companyGoals') }}</span>
+            <a-tag size="small" color="arcoblue">{{ currentGoals.length }}</a-tag>
+          </div>
+          <a-button size="small" @click="openAddGoal">
+            <template #icon><icon-plus /></template>
+            {{ t('org.addGoal') }}
+          </a-button>
+        </div>
+
+        <div v-if="currentGoals.length === 0" class="goals-empty">
+          <span>{{ t('org.noGoals') }}</span>
+        </div>
+
+        <div v-else class="goals-list">
+          <div
+            v-for="goal in currentGoals"
+            :key="goal.id"
+            class="goal-item"
+            :class="[`priority-${goal.priority}`, `status-${goal.status}`]"
+          >
+            <div class="goal-main">
+              <div class="goal-status-dot" :class="goal.status"></div>
+              <div class="goal-content">
+                <div class="goal-title-row">
+                  <span class="goal-title">{{ goal.title }}</span>
+                  <div class="goal-badges">
+                    <a-tag size="small" :color="priorityColor(goal.priority)">
+                      {{ t(`org.priority_${goal.priority}`) }}
+                    </a-tag>
+                    <a-tag size="small" :color="statusColor(goal.status)">
+                      {{ t(`org.goalStatus_${goal.status}`) }}
+                    </a-tag>
+                  </div>
+                </div>
+                <div class="goal-desc">{{ goal.description }}</div>
+              </div>
+            </div>
+            <div class="goal-actions">
+              <a-button type="text" size="mini" @click="openEditGoal(goal)">
+                <template #icon><icon-edit /></template>
+              </a-button>
+              <a-button type="text" size="mini" status="danger" @click="deleteGoal(goal.id)">
+                <template #icon><icon-delete /></template>
+              </a-button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <a-divider style="margin: 12px 0" />
+
       <!-- Employee grid -->
       <div v-if="viewMode === 'grid'" class="employee-grid">
         <div
@@ -155,6 +211,9 @@
                 <icon-team class="ot-icon" />
                 <span class="ot-name">{{ dept.name }}</span>
                 <span class="ot-meta">{{ dept.members.length }} 人</span>
+                <a-tag v-if="dept.goals.length > 0" size="small" color="blue" style="margin-left:4px">
+                  🎯 {{ dept.goals.filter(g => g.status === 'active').length }}
+                </a-tag>
                 <a-button
                   type="text"
                   size="mini"
@@ -265,6 +324,37 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- Goal modal -->
+    <a-modal
+      v-model:visible="showGoalModal"
+      :title="editingGoal ? t('org.editGoal') : t('org.addGoal')"
+      @ok="handleSaveGoal"
+      @cancel="showGoalModal = false"
+    >
+      <a-form layout="vertical">
+        <a-form-item :label="t('org.goalTitle')">
+          <a-input v-model="goalForm.title" :placeholder="t('org.goalTitlePlaceholder')" />
+        </a-form-item>
+        <a-form-item :label="t('common.description')">
+          <a-textarea v-model="goalForm.description" :placeholder="t('org.goalDescPlaceholder')" :auto-size="{ minRows: 2, maxRows: 4 }" />
+        </a-form-item>
+        <a-form-item :label="t('org.goalPriority')">
+          <a-select v-model="goalForm.priority">
+            <a-option value="high">{{ t('org.priority_high') }}</a-option>
+            <a-option value="medium">{{ t('org.priority_medium') }}</a-option>
+            <a-option value="low">{{ t('org.priority_low') }}</a-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item :label="t('org.goalStatus')">
+          <a-select v-model="goalForm.status">
+            <a-option value="active">{{ t('org.goalStatus_active') }}</a-option>
+            <a-option value="paused">{{ t('org.goalStatus_paused') }}</a-option>
+            <a-option value="completed">{{ t('org.goalStatus_completed') }}</a-option>
+          </a-select>
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -272,13 +362,13 @@
 import { ref, computed, reactive } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useWorkersStore } from '@/stores/workers';
-import { MOCK_COMPANY, type MockEmployee } from '@/mock/data';
+import { MOCK_COMPANY, type MockEmployee, type MockGoal } from '@/mock/data';
 import { Message } from '@arco-design/web-vue';
 
 const { t } = useI18n();
 const workersStore = useWorkersStore();
 
-const company = reactive({ ...MOCK_COMPANY });
+const company = reactive({ ...MOCK_COMPANY, departments: MOCK_COMPANY.departments.map(d => ({ ...d, goals: [...d.goals], members: [...d.members] })), goals: [...MOCK_COMPANY.goals] });
 const selectedDeptId = ref<string | null>(null);
 const selectedEmployeeId = ref<string | null>(null);
 const viewMode = ref<'grid' | 'list'>('grid');
@@ -296,6 +386,11 @@ function toggleDept(deptId: string) {
 
 const newDept = reactive({ name: '', description: '' });
 const newEmp = reactive({ name: '', role: '', email: '', departmentId: '', workerId: '' });
+
+// Goal state
+const showGoalModal = ref(false);
+const editingGoal = ref<MockGoal | null>(null);
+const goalForm = reactive({ title: '', description: '', priority: 'medium' as MockGoal['priority'], status: 'active' as MockGoal['status'] });
 
 const selectedDept = computed(() =>
   selectedDeptId.value ? company.departments.find(d => d.id === selectedDeptId.value) : null
@@ -315,12 +410,59 @@ const displayEmployees = computed(() => {
   return company.departments.flatMap(d => d.members);
 });
 
+const currentGoals = computed<MockGoal[]>(() => {
+  if (selectedDept.value) return selectedDept.value.goals;
+  return company.goals;
+});
+
 function getDeptName(deptId: string): string {
   return company.departments.find(d => d.id === deptId)?.name ?? deptId;
 }
 
 function getWorkerName(workerId: string): string {
   return workersStore.workers.find(w => w.id === workerId)?.name ?? workerId;
+}
+
+function priorityColor(priority: MockGoal['priority']) {
+  return { high: 'red', medium: 'orange', low: 'green' }[priority];
+}
+
+function statusColor(status: MockGoal['status']) {
+  return { active: 'arcoblue', completed: 'green', paused: 'gray' }[status];
+}
+
+function openAddGoal() {
+  editingGoal.value = null;
+  Object.assign(goalForm, { title: '', description: '', priority: 'medium', status: 'active' });
+  showGoalModal.value = true;
+}
+
+function openEditGoal(goal: MockGoal) {
+  editingGoal.value = goal;
+  Object.assign(goalForm, { title: goal.title, description: goal.description, priority: goal.priority, status: goal.status });
+  showGoalModal.value = true;
+}
+
+function handleSaveGoal() {
+  if (!goalForm.title) return;
+  const goals = selectedDept.value ? selectedDept.value.goals : company.goals;
+  if (editingGoal.value) {
+    const idx = goals.findIndex(g => g.id === editingGoal.value!.id);
+    if (idx !== -1) {
+      goals[idx] = { ...editingGoal.value, title: goalForm.title, description: goalForm.description, priority: goalForm.priority, status: goalForm.status };
+    }
+  } else {
+    goals.push({ id: `goal-${Date.now()}`, title: goalForm.title, description: goalForm.description, priority: goalForm.priority, status: goalForm.status });
+  }
+  showGoalModal.value = false;
+  Message.success(t('common.success'));
+}
+
+function deleteGoal(goalId: string) {
+  const goals = selectedDept.value ? selectedDept.value.goals : company.goals;
+  const idx = goals.findIndex(g => g.id === goalId);
+  if (idx !== -1) goals.splice(idx, 1);
+  Message.success(t('common.success'));
 }
 
 function handleCreateDept() {
@@ -330,6 +472,7 @@ function handleCreateDept() {
     name: newDept.name,
     description: newDept.description,
     members: [],
+    goals: [],
   });
   Object.assign(newDept, { name: '', description: '' });
   showCreateDept.value = false;
@@ -512,6 +655,124 @@ function handleAddEmployee() {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* ─── Goals Section ──────────────────────────────────────────────────── */
+
+.goals-section {
+  background: var(--bg-base);
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.goals-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.goals-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.goals-icon { font-size: 16px; }
+
+.goals-empty {
+  text-align: center;
+  padding: 16px 0;
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.goals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  transition: all 0.15s;
+}
+
+.goal-item:hover {
+  border-color: rgba(22, 93, 255, 0.3);
+  box-shadow: 0 1px 6px rgba(22, 93, 255, 0.08);
+}
+
+.goal-item.status-completed {
+  opacity: 0.65;
+}
+
+.goal-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.goal-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.goal-status-dot.active { background: #00b42a; }
+.goal-status-dot.paused { background: #ff7d00; }
+.goal-status-dot.completed { background: #86909c; }
+
+.goal-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.goal-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.goal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.goal-badges {
+  display: flex;
+  gap: 4px;
+}
+
+.goal-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.goal-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 /* ─── Employee Grid ──────────────────────────────────────────────────── */
