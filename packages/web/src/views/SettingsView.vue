@@ -246,6 +246,22 @@
 
           <a-button type="primary" @click="saveStorage">{{ t('common.save') }}</a-button>
         </a-form>
+
+        <a-divider />
+
+        <h3 style="margin: 0 0 8px;">对话列表自动刷新</h3>
+        <p class="section-desc" style="margin-bottom: 12px;">定时刷新对话列表，获取 Worker 发来的最新通知消息。设为 0 可关闭自动刷新。</p>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <a-input-number
+            v-model="chatRefreshInterval"
+            :min="0"
+            :max="3600"
+            :step="5"
+            style="width: 160px"
+          />
+          <span style="color: var(--text-secondary); font-size: 13px;">秒（0 = 关闭）</span>
+          <a-button type="primary" @click="saveChatRefreshInterval">保存</a-button>
+        </div>
       </div>
 
       <!-- About / Danger Zone -->
@@ -352,6 +368,46 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- 精细化清除数据对话框 -->
+    <a-modal
+      v-model:visible="showClearModal"
+      title="选择要清除的数据"
+      :ok-loading="clearLoading"
+      ok-status="danger"
+      ok-text="确认清除"
+      @ok="executeClearData"
+    >
+      <p style="margin-bottom: 16px; color: var(--text-secondary); font-size: 13px;">
+        请选择需要清除的数据类型。此操作不可恢复，请谨慎操作。
+      </p>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <a-checkbox v-model="clearOptions.chatHistory">
+          <div>
+            <div style="font-weight: 500;">聊天记录</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">所有对话会话、消息记录及 Worker 间异步消息</div>
+          </div>
+        </a-checkbox>
+        <a-checkbox v-model="clearOptions.workerConfig">
+          <div>
+            <div style="font-weight: 500;">员工配置</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">所有 AI 员工（Worker）的配置信息</div>
+          </div>
+        </a-checkbox>
+        <a-checkbox v-model="clearOptions.modelConfig">
+          <div>
+            <div style="font-weight: 500;">模型配置</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">所有 AI 模型实例（API Key、端点等）</div>
+          </div>
+        </a-checkbox>
+        <a-checkbox v-model="clearOptions.localStorage">
+          <div>
+            <div style="font-weight: 500;">本地缓存</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">浏览器本地存储（登录状态、UI 偏好等），清除后需重新登录</div>
+          </div>
+        </a-checkbox>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -362,13 +418,16 @@ import { useRouter } from 'vue-router';
 import { useAppStore } from '@/stores/app';
 import { useAuthStore } from '@/stores/auth';
 import { useModelsStore, type ConfiguredModel, type ModelProtocol } from '@/stores/models';
+import { useWorkersStore } from '@/stores/workers';
 import { Message, Modal } from '@arco-design/web-vue';
+import { modelsApi, workersApi, chatsApi, adminApi } from '@/api/client';
 
 const { t } = useI18n();
 const router = useRouter();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const modelsStore = useModelsStore();
+const workersStore = useWorkersStore();
 
 const activeSection = ref('profile');
 
@@ -532,6 +591,16 @@ function confirmDeleteModel(id: string) {
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
+const chatRefreshInterval = ref(
+  parseInt(localStorage.getItem('bcc_chat_refresh_interval') ?? '30000', 10) / 1000
+);
+
+function saveChatRefreshInterval() {
+  const ms = (chatRefreshInterval.value || 0) * 1000;
+  localStorage.setItem('bcc_chat_refresh_interval', String(ms));
+  Message.success(t('settings.saveSuccess'));
+}
+
 const storageForm = reactive({
   memoryType: 'file' as 'file' | 'database',
   dataDir: '~/.bcc/',
@@ -547,16 +616,73 @@ function saveStorage() {
 
 // ─── About ────────────────────────────────────────────────────────────────────
 
-function confirmClearData() {
-  Modal.confirm({
-    title: t('settings.clearAllData'),
-    content: t('settings.clearDataWarning'),
-    onOk() {
+// ─── 精细化清除数据 ───────────────────────────────────────────────────────────
+
+const showClearModal = ref(false);
+const clearOptions = reactive({
+  chatHistory: true,    // 聊天记录（会话 + 异步消息）
+  modelConfig: false,   // 模型配置
+  workerConfig: false,  // 员工配置
+  localStorage: false,  // 本地缓存（浏览器存储）
+});
+const clearLoading = ref(false);
+
+async function executeClearData() {
+  clearLoading.value = true;
+  const errors: string[] = [];
+
+  try {
+    if (clearOptions.chatHistory) {
+      // 删除所有会话和异步聊天
+      await adminApi.deleteAllSessions().catch(e => errors.push('会话: ' + e.message));
+      await chatsApi.deleteAll().catch(e => errors.push('聊天: ' + e.message));
+    }
+
+    if (clearOptions.workerConfig) {
+      const workers = [...workersStore.workers];
+      for (const w of workers) {
+        await workersApi.delete(w.id).catch(() => {});
+      }
+      await workersStore.fetchWorkers();
+    }
+
+    if (clearOptions.modelConfig) {
+      const models = [...modelsStore.models];
+      for (const m of models) {
+        await modelsApi.delete(m.id).catch(() => {});
+      }
+      await modelsStore.fetchModels();
+    }
+
+    if (clearOptions.localStorage) {
       localStorage.clear();
-      Message.success(t('common.success'));
+    }
+
+    showClearModal.value = false;
+
+    if (errors.length > 0) {
+      Message.warning('部分数据清除失败：' + errors.join('；'));
+    } else {
+      Message.success('数据已清除');
+    }
+
+    if (clearOptions.localStorage || clearOptions.workerConfig || clearOptions.modelConfig) {
       router.push('/login');
-    },
-  });
+    } else {
+      router.push('/chat');
+    }
+  } finally {
+    clearLoading.value = false;
+  }
+}
+
+function confirmClearData() {
+  // 重置默认选项
+  clearOptions.chatHistory = true;
+  clearOptions.modelConfig = false;
+  clearOptions.workerConfig = false;
+  clearOptions.localStorage = false;
+  showClearModal.value = true;
 }
 
 function handleLogout() {

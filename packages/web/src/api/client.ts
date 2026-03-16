@@ -304,6 +304,18 @@ export const chatsApi = {
 
   getMessages: (chatId: string) =>
     service.get<ApiAsyncChatMessage[]>(`/chats/${chatId}/messages`),
+
+  delete: (chatId: string) =>
+    service.delete(`/chats/${chatId}`),
+
+  deleteAll: () =>
+    service.delete<{ deleted: number }>('/chats'),
+}
+
+export const adminApi = {
+  /** 批量删除所有会话 */
+  deleteAllSessions: () =>
+    service.delete<{ deleted: number }>('/sessions'),
 }
 
 // ─── Skills API ─────────────────────────────────────────────────────────

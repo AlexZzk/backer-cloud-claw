@@ -4,9 +4,22 @@
     <div class="sub-panel">
       <div class="sub-header">
         <span class="sub-title">{{ t('nav.chat') }}</span>
-        <a-button type="primary" size="mini" shape="circle" @click="openNewChatPicker" title="新建对话">
-          <template #icon><icon-plus /></template>
-        </a-button>
+        <div style="display: flex; gap: 4px;">
+          <a-tooltip content="刷新对话列表">
+            <a-button
+              size="mini"
+              shape="circle"
+              :loading="refreshing"
+              @click="refreshChats"
+              title="刷新"
+            >
+              <template #icon><icon-refresh /></template>
+            </a-button>
+          </a-tooltip>
+          <a-button type="primary" size="mini" shape="circle" @click="openNewChatPicker" title="新建对话">
+            <template #icon><icon-plus /></template>
+          </a-button>
+        </div>
       </div>
       <div class="sub-search">
         <a-input v-model="searchText" :placeholder="t('common.search')" size="small" allow-clear>
@@ -313,7 +326,7 @@
         <!-- Messages -->
         <div class="messages-area" ref="messagesArea">
           <!-- Empty state: no messages yet -->
-          <div v-if="!chatStore.activeSession || chatStore.activeSession.messages.length === 0" class="chat-empty">
+          <div v-if="mergedMessages.length === 0" class="chat-empty">
             <div class="empty-avatar">🤖</div>
             <h3>{{ activeWorker.name }}</h3>
             <p>{{ activeWorker.description }}</p>
@@ -331,7 +344,7 @@
           <!-- Messages -->
           <template v-else>
             <div
-              v-for="msg in chatStore.activeSession.messages"
+              v-for="msg in mergedMessages"
               :key="msg.id"
               class="message-wrapper"
               :class="msg.role"
@@ -349,8 +362,9 @@
                 <div class="speaker-name">{{ getMsgSpeakerName(msg) }}</div>
                 <div class="message-bubble" :class="msg.role">
                   <div class="message-content" v-html="renderMarkdownWithMentions(msg.content)"></div>
-                  <div class="message-footer" v-if="msg.tokenUsage">
-                    <span class="token-info">
+                  <div class="message-footer">
+                    <a-tag v-if="(msg as any).isNotify" size="small" color="purple" style="font-size: 10px;">异步通知</a-tag>
+                    <span v-if="msg.tokenUsage" class="token-info">
                       ↑{{ msg.tokenUsage.inputTokens }} ↓{{ msg.tokenUsage.outputTokens }} tokens
                     </span>
                   </div>
@@ -443,38 +457,18 @@
         <!-- Onboarding: no workers configured yet -->
         <template v-else>
           <div class="no-conv-icon">🚀</div>
-          <h2>开始前先配置 AI 助理</h2>
+          <h2>还没有 AI 员工</h2>
           <p style="max-width: 360px; text-align: center; color: var(--text-secondary);">
-            还没有配置任何 AI Worker。请先添加模型，再创建一个 AI 员工（助理）。
+            创建一个 AI 员工（Worker）后即可开始对话。<br>
+            如果还没有配置模型，可以在员工页面一起配置。
           </p>
-          <div class="onboarding-steps">
-            <div class="ob-step" :class="{ done: hasModels }">
-              <span class="ob-num">{{ hasModels ? '✓' : '1' }}</span>
-              <div class="ob-info">
-                <div class="ob-title">配置 AI 模型</div>
-                <div class="ob-desc">在设置中添加 API Key 和模型实例</div>
-              </div>
-              <a-button
-                v-if="!hasModels"
-                type="primary"
-                size="small"
-                @click="router.push('/settings')"
-              >去设置</a-button>
-            </div>
-            <div class="ob-step" :class="{ done: hasWorkers }">
-              <span class="ob-num">2</span>
-              <div class="ob-info">
-                <div class="ob-title">创建 AI 员工（助理）</div>
-                <div class="ob-desc">在员工页面新建一个 Worker 并设为主助理</div>
-              </div>
-              <a-button
-                v-if="hasModels"
-                type="primary"
-                size="small"
-                @click="router.push('/workers')"
-              >去创建</a-button>
-              <a-button v-else size="small" disabled>去创建</a-button>
-            </div>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 12px;">
+            <a-button type="primary" size="large" @click="router.push('/workers')">
+              创建 AI 员工
+            </a-button>
+            <a-button size="large" @click="router.push('/settings')">
+              配置模型
+            </a-button>
           </div>
         </template>
       </div>
@@ -614,6 +608,7 @@
 import { ref, computed, nextTick, watch, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
+import { onUnmounted } from 'vue';
 import { useChatStore, type ChatSession, type ApiAsyncChat } from '@/stores/chat';
 import { useAuthStore } from '@/stores/auth';
 import { useWorkersStore } from '@/stores/workers';
@@ -660,6 +655,25 @@ const primaryWorker = computed(() =>
 );
 
 const activeSessionType = computed(() => chatStore.activeSession?.type ?? 'chat');
+
+/**
+ * 合并主会话消息 + Worker notify_user 异步消息，按时间戳排序
+ * 让用户与 Worker 的所有沟通都在同一窗口展示
+ */
+const mergedMessages = computed(() => {
+  const sessionMsgs = (chatStore.activeSession?.messages ?? []).map(m => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    timestamp: m.timestamp,
+    tokenUsage: m.tokenUsage,
+    speakerId: m.speakerId,
+    isNotify: false,
+  }));
+  const notifyMsgs = chatStore.activeWorkerNotifyMessages;
+  const all = [...sessionMsgs, ...notifyMsgs];
+  return all.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+});
 
 const activeAsyncChat = computed(() =>
   chatStore.activeAsyncChatId
@@ -981,9 +995,59 @@ function getWorkerName(id: string): string {
   return workersStore.getWorker(id)?.name ?? id;
 }
 
-watch(() => chatStore.activeSession?.messages.length, async () => {
+watch(() => mergedMessages.value.length, async () => {
   await nextTick();
   scrollToBottom();
+});
+
+// ─── 对话列表刷新 ──────────────────────────────────────────────────────────────
+
+const refreshing = ref(false);
+
+/**
+ * 读取用户配置的刷新间隔（毫秒）
+ * 存储在 localStorage，默认 30 秒（0 = 关闭自动刷新）
+ */
+function getChatRefreshInterval(): number {
+  const stored = localStorage.getItem('bcc_chat_refresh_interval');
+  if (stored !== null) return parseInt(stored, 10) || 0;
+  return 30_000; // 默认 30 秒
+}
+
+async function refreshChats() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  try {
+    await Promise.all([
+      chatStore.fetchAllSessions(),
+      chatStore.fetchAsyncChats(),
+    ]);
+  } finally {
+    refreshing.value = false;
+  }
+}
+
+let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  const interval = getChatRefreshInterval();
+  if (interval > 0) {
+    autoRefreshTimer = setInterval(() => {
+      void chatStore.fetchAsyncChats();
+    }, interval);
+  }
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshTimer !== null) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+}
+
+onUnmounted(() => {
+  stopAutoRefresh();
 });
 
 onMounted(async () => {
@@ -996,6 +1060,8 @@ onMounted(async () => {
     chatStore.fetchAllSessions(),
     chatStore.fetchAsyncChats(),
   ]);
+  // 启动自动刷新
+  startAutoRefresh();
 });
 </script>
 

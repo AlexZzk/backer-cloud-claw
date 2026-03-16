@@ -744,11 +744,26 @@ export class HttpServer {
       return;
     }
 
+    // ── DELETE /api/chats  (批量删除所有聊天)
+    if (method === 'DELETE' && path === '/api/chats') {
+      await this.handleDeleteAllChats(res);
+      return;
+    }
+
     // ── GET /api/chats/:chatId/messages
     {
       const m = matchRoute('/api/chats/:chatId/messages', path);
       if (m && method === 'GET') {
         await this.handleGetChatMessages(res, m.params['chatId']!);
+        return;
+      }
+    }
+
+    // ── DELETE /api/chats/:chatId
+    {
+      const m = matchRoute('/api/chats/:chatId', path);
+      if (m && method === 'DELETE') {
+        await this.handleDeleteChat(res, m.params['chatId']!);
         return;
       }
     }
@@ -760,6 +775,12 @@ export class HttpServer {
         await this.handleGetChat(res, m.params['chatId']!);
         return;
       }
+    }
+
+    // ── DELETE /api/sessions  (批量删除所有会话)
+    if (method === 'DELETE' && path === '/api/sessions') {
+      this.handleDeleteAllSessions(res);
+      return;
     }
 
     // ── POST /api/dm-sessions  (创建 Worker↔Worker DM 会话)
@@ -1324,6 +1345,39 @@ export class HttpServer {
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : 'Failed to create chat');
     }
+  }
+
+  /** DELETE /api/chats/:chatId — 删除指定聊天会话 */
+  private async handleDeleteChat(res: ServerResponse, chatId: string) {
+    try {
+      const deleted = await this.chatStore.deleteChat(chatId);
+      if (!deleted) { notFound(res); return; }
+      cors(res);
+      res.writeHead(204);
+      res.end();
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : 'Failed to delete chat');
+    }
+  }
+
+  /** DELETE /api/chats — 批量删除所有聊天会话 */
+  private async handleDeleteAllChats(res: ServerResponse) {
+    try {
+      const count = await this.chatStore.deleteAllChats();
+      ok(res, { deleted: count });
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : 'Failed to delete chats');
+    }
+  }
+
+  /** DELETE /api/sessions — 批量删除所有会话 */
+  private handleDeleteAllSessions(res: ServerResponse) {
+    const all = this.store.listAll();
+    let count = 0;
+    for (const session of all) {
+      if (this.store.delete(session.id)) count++;
+    }
+    ok(res, { deleted: count });
   }
 
   private async handleCreateDmSession(req: IncomingMessage, res: ServerResponse) {
