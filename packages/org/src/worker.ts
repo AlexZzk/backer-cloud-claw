@@ -858,18 +858,23 @@ export class Worker implements Participant {
       contextLines.push('');
     }
 
-    // 回复规范：引导 LLM 判断是否需要回复，避免无效循环
+    // 回复规范：引导 LLM 判断如何处理消息
     contextLines.push(
-      '【回复规范】判断是否有实质内容需要回复，以下情况只输出 [SKIP]：',
-      '  · 对方只是简单确认（"好的""收到""已了解""明白了"）且无提问',
-      '  · 对方告知将要处理/已接受你委托的任务（如"好的，我会在12点提醒用户"）',
-      '  · 对方告知任务进度更新，只是通知状态，没有问题',
-      '  · 任何不需要你作出决定或提供信息的回复',
-      '以下情况正常回复：',
-      '  · 对方提出了需要你回答的问题',
-      '  · 任务完成通知 → 向原始请求方（用户或上级）汇报，然后停止',
-      '  · 任务受阻、需要资源 → 处理或上报',
+      '【处理规范】根据消息类型决定如何响应：',
+      '',
+      '▶ 收到新任务或委托（对方让你做某件事）→ 必须执行以下完整流程：',
+      '  1. 先回复确认收到：告知发送方你已收到并会处理（如"已收到，我会在下午2点提醒用户吃药，并立即编写 Java HelloWorld 代码"）',
+      '  2. 使用工具执行任务（写代码、创建提醒、发消息等）',
+      '  3. 任务完成后，通知任务下发方（通过 send_direct_message 或 notify_user）',
+      '  4. 若原始需求来自用户，也需通过 notify_user 通知用户',
+      '',
+      '▶ 以下情况只输出 [SKIP]（不回复、不调用工具）：',
+      '  · 对方只是简单确认"好的""收到""明白了"且无任何新请求',
+      '  · 对方仅通知你"已完成你委托的任务"且你无需跟进',
+      '  · 对方仅汇报任务进度状态，无需你作出决策或提供信息',
+      '',
       '⚠️ 输出 [SKIP] 时请勿添加其他文字，勿调用任何工具。',
+      '⚠️ 收到任务时绝不能 [SKIP]，必须确认 + 执行 + 汇报。',
     );
 
     const userInput = contextLines.join('\n');
@@ -884,8 +889,9 @@ export class Worker implements Participant {
     let response = '';
     let tokenUsage: TokenUsage | undefined;
 
-    // 优先使用审视引擎（更便宜），无则回退到主引擎
-    for await (const chunk of (this.reviewEngine ?? this.engine).stream(userInput)) {
+    // 必须使用主引擎：inbox 消息处理需要完整的工具能力（写代码、发消息、创建任务等）
+    // reviewEngine 未注册工具，只能生成纯文本，无法执行任务，不能用于 inbox 处理
+    for await (const chunk of this.engine.stream(userInput)) {
       if (chunk.type === 'text' && chunk.text) {
         response += chunk.text;
       }

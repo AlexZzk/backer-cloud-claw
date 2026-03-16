@@ -606,8 +606,33 @@ async function main(): Promise<void> {
   if (workerDefs.length > 0) {
     const buildResult = await buildWorkerRegistry(workerDefs, config.models, memory, episodicStore);
     if (buildResult) {
-      const { registry: workerRegistry, workers: allWorkers } = buildResult;
+      const { registry: workerRegistry, company, workers: allWorkers } = buildResult;
       const initialSession = resolveInitialWorkerSession(workerRegistry, workerDefs, args.worker);
+
+      // Fix 1: 启动所有 Worker 的定期 inbox 审视调度器（每 30 秒一次）
+      // HTTP 模式中有启动，CLI 模式此前缺失，导致 processInbox() 永远不被触发
+      for (const worker of allWorkers) {
+        company.scheduler.start(worker.profile.id, 30_000);
+      }
+
+      // Fix 2: 监听 chat:message:sent 事件，消息发送后立即触发接收方审视
+      // HTTP 模式中 send_to_group/send_direct_message 工具内有此逻辑，
+      // CLI 模式需要在此统一处理。
+      // 策略：只要有新消息，就触发所有非发送方 Worker 检查 inbox（Worker 数量少，开销可接受）
+      company.onEvent((event) => {
+        if (event.type === 'chat:message:sent') {
+          // OrgEvent 中 chat:message:sent 的 message 字段是 ChatMessage，含 from 字段
+          const chatMsgEvent = event as { type: 'chat:message:sent'; chatId: string; message: { from: string } };
+          const senderId = chatMsgEvent.message.from;
+          for (const worker of allWorkers) {
+            if (worker.profile.id === senderId) continue; // 跳过发送方自己
+            if (company.scheduler.isRunning(worker.profile.id)) {
+              void company.scheduler.triggerReview(worker.profile.id).catch(() => {});
+            }
+          }
+        }
+      });
+
       const cli = await CliChannel.create({ agent: initialSession, workerRegistry });
       await cli.start();
 
