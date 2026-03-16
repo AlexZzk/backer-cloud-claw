@@ -179,6 +179,14 @@ export interface WorkerOptions {
   ) => Promise<string | null>;
 
   /**
+   * 同事 ID 提供函数（可选）。
+   * 返回当前团队中所有有效 Worker ID 的列表（不含自身）。
+   * 注入后，send_direct_message / create_group_chat 等工具会在执行前校验目标 ID，
+   * 若 ID 不存在则立即返回错误提示，防止 LLM 向不存在的 Worker 发送消息。
+   */
+  peersProvider?: () => string[];
+
+  /**
    * 会话 ID（用于情节记忆归档）。
    * 不提供时使用 `{profile.id}-{timestamp}` 作为默认值。
    */
@@ -414,7 +422,7 @@ export class Worker implements Participant {
     // 自动注册 inbox / task 工具
     if (options.inboxService) {
       const hasCommunicateSkill = profile.skills?.includes('communicate') ?? false;
-      worker._registerInboxTools(options.inboxService, hasCommunicateSkill);
+      worker._registerInboxTools(options.inboxService, hasCommunicateSkill, options.peersProvider);
     }
     if (options.taskService) {
       worker._registerTaskTools(options.taskService);
@@ -874,7 +882,17 @@ export class Worker implements Participant {
     contextLines.push(
       '【处理规范】根据消息类型决定如何响应：',
       '',
-      '▶ 收到新任务或委托（对方让你做某件事）→ 必须执行以下完整流程：',
+      '▶ 收到来自同事的私信（1:1 私聊）中的新任务或委托 → 必须按以下顺序执行：',
+      '  1. 【先在此私信中回复】用 send_direct_message 回复发送方，告知已收到并会处理',
+      '     （在当前私信回复，不要在群聊回复，以保持沟通上下文连贯）',
+      '  2. 执行任务（写代码、调用工具、收集信息等）',
+      '  3. 如果任务需要其他同事协作：',
+      '     a. 用 create_group_chat 创建包含相关同事的群聊',
+      '     b. 用 send_to_group 在群聊中分配子任务（@workerID 指派）',
+      '  4. 任务完成后，通过 notify_user 将最终结果发给用户',
+      '  5. 输出 [SKIP] 结束本轮处理',
+      '',
+      '▶ 收到来自用户的任务或委托 → 必须执行以下完整流程：',
       '  1. 先回复确认收到：告知发送方你已收到并会处理',
       '  2. 使用工具执行任务（写代码、创建提醒、发消息等）',
       '  3. 任务完成后，通过 notify_user 将结果发给用户（如果最终受益方是用户）',
@@ -891,6 +909,7 @@ export class Worker implements Participant {
       '',
       '⚠️ 输出 [SKIP] 时请勿添加其他文字，勿调用任何工具。',
       '⚠️ 收到新任务时绝不能 [SKIP]，必须确认 + 执行 + 用工具汇报（完成后输出 [SKIP]）。',
+      '⚠️ 收到同事私信任务时：必须先在私信中回复，再创建群聊（如需协作），顺序不可颠倒。',
     );
 
     const userInput = contextLines.join('\n');
@@ -1044,7 +1063,7 @@ export class Worker implements Participant {
    * 注意：无论是否具备 communicate 技能，`processInbox()` 都会处理收件箱消息
    * 并发送文字回复——工具权限不影响"回复"能力，只影响"主动发起"能力。
    */
-  private _registerInboxTools(inboxService: AsyncInboxService, hasCommunicateSkill = false): void {
+  private _registerInboxTools(inboxService: AsyncInboxService, hasCommunicateSkill = false, peersProvider?: () => string[]): void {
     const workerId = this.id;
     const workerName = this.profile.name;
 
@@ -1101,6 +1120,18 @@ export class Worker implements Participant {
       },
       handler: async (input: Record<string, unknown>) => {
         const { participants, title } = input as { participants: string[]; title?: string };
+        // 校验所有参与者 ID 是否有效
+        if (peersProvider) {
+          const validIds = peersProvider();
+          const invalidIds = (participants as string[]).filter(p => p !== 'user' && !validIds.includes(p));
+          if (invalidIds.length > 0) {
+            return [
+              `❌ 创建失败：以下 Worker ID 在当前团队中不存在：${invalidIds.join('、')}`,
+              `   有效的同事 ID：${validIds.length > 0 ? validIds.join('、') : '（暂无同事）'}`,
+              `   请根据上方同事名录核实 ID 后重试。`,
+            ].join('\n');
+          }
+        }
         // 自动加入自己和 "user"（人类主管），去重
         const allParticipants = [...new Set([workerId, ...(participants as string[]), 'user'])];
         const chat = await inboxService.createGroupChat(allParticipants, title);
@@ -1166,6 +1197,17 @@ export class Worker implements Participant {
       },
       handler: async (input: Record<string, unknown>) => {
         const { to, content } = input as { to: string; content: string };
+        // 校验接收方是否是有效的 Worker ID
+        if (peersProvider) {
+          const validIds = peersProvider();
+          if (!validIds.includes(to)) {
+            return [
+              `❌ 发送失败：Worker "${to}" 在当前团队中不存在。`,
+              `   有效的同事 ID：${validIds.length > 0 ? validIds.join('、') : '（暂无同事）'}`,
+              `   请根据上方同事名录核实目标 ID 后重试。`,
+            ].join('\n');
+          }
+        }
         const chat = await inboxService.openDirectChat(workerId, to);
         const msg = await inboxService.post(chat.id, workerId, content);
         return [

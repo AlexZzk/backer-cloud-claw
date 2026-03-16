@@ -535,6 +535,10 @@ export class HttpServer {
       tokenTracker:  this.company!.tokenTracker,
       eventBus:      this.company!.eventBus,
       inboxService:  this.messagingService!,
+      // 提供同事 ID 列表，用于工具调用时校验目标 Worker 是否存在（排除自身）
+      peersProvider: () => (this.config.workers ?? [])
+        .map(w => w.id)
+        .filter(id => id !== workerCfg.id),
       ...(taskService && { taskService }),
       sessionId,
     });
@@ -1590,8 +1594,17 @@ export class HttpServer {
       }
       id = rawId.trim();
     } else {
-      // 自动生成：w + 8位随机十六进制，保证唯一且可读
-      id = 'w' + randomUUID().replace(/-/g, '').slice(0, 8);
+      // 自动生成：w + 3位递增序号（w001, w002, ...），对 LLM 更易识别
+      const existingWorkers = this.config.workers ?? [];
+      const maxNum = existingWorkers.reduce((max, w) => {
+        const m = /^w(\d+)$/.exec(w.id);
+        return m ? Math.max(max, parseInt(m[1], 10)) : max;
+      }, 0);
+      id = 'w' + String(maxNum + 1).padStart(3, '0');
+      // 极罕见冲突兜底（如用户手动指定了 w001 等 ID）
+      while (existingWorkers.some(w => w.id === id)) {
+        id = 'w' + String(parseInt(id.slice(1), 10) + 1).padStart(3, '0');
+      }
     }
 
     const workers = this.config.workers ?? [];
