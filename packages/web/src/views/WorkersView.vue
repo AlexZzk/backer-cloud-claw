@@ -148,6 +148,7 @@
           >
             <div class="card-avatar">🤖</div>
             <div class="card-name">{{ w.name }}</div>
+            <div class="card-id" style="font-size: 11px; color: var(--text-secondary); margin: -6px 0 4px; font-family: monospace;">{{ w.id }}</div>
             <div class="card-desc">{{ w.description }}</div>
             <div class="card-skills">
               <a-tag v-for="s in w.skills.slice(0, 2)" :key="s" size="small" color="arcoblue">{{ s }}</a-tag>
@@ -197,22 +198,15 @@
   >
     <a-form :model="form" layout="vertical">
       <a-row :gutter="16">
-        <a-col :span="12">
+        <a-col :span="editingWorker ? 18 : 24">
           <a-form-item :label="t('workers.workerName')" required>
-            <a-input
-              v-model="form.name"
-              :placeholder="t('workers.namePlaceholder')"
-              @input="onNameInput(form.name)"
-            />
+            <a-input v-model="form.name" :placeholder="t('workers.namePlaceholder')" />
           </a-form-item>
         </a-col>
-        <a-col :span="12">
-          <a-form-item label="Worker ID" required>
-            <a-input
-              v-model="form.id"
-              placeholder="如：pm、coder（字母/数字/连字符）"
-              :disabled="!!editingWorker"
-            />
+        <!-- 编辑时只读展示员工号（新建时不显示，由系统自动生成） -->
+        <a-col v-if="editingWorker" :span="6">
+          <a-form-item label="员工号">
+            <a-input :model-value="form.id" disabled />
           </a-form-item>
         </a-col>
       </a-row>
@@ -459,20 +453,12 @@ function openEdit(worker: MockWorker) {
   showModal.value = true;
 }
 
-// 当 name 变化时自动填充 id（仅新建且 id 为空时）
-function onNameInput(val: string) {
-  if (!editingWorker.value && !form.id) {
-    form.id = slugify(val);
-  }
-}
+// slugify 仍保留供其他可能的用途
+void slugify; // suppress unused warning
 
 async function handleSave() {
   if (!form.name.trim()) {
     Message.error('请输入 Worker 名称');
-    return;
-  }
-  if (!editingWorker.value && !form.id.trim()) {
-    Message.error('请输入 Worker ID');
     return;
   }
   if (!form.modelId) {
@@ -501,7 +487,7 @@ async function handleSave() {
       Message.success('Worker 已更新');
     } else {
       await workersStore.createWorker({
-        id:                 form.id.trim(),
+        id:                 '',  // 空字符串让后端自动生成员工号
         name:               form.name.trim(),
         description:        form.description.trim(),
         modelId:            form.modelId,
