@@ -385,7 +385,13 @@
         <a-checkbox v-model="clearOptions.chatHistory">
           <div>
             <div style="font-weight: 500;">聊天记录</div>
-            <div style="font-size: 12px; color: var(--text-secondary);">所有对话会话、消息记录及 Worker 间异步消息</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">与 AI 员工的对话会话及消息记录</div>
+          </div>
+        </a-checkbox>
+        <a-checkbox v-model="clearOptions.workerChats">
+          <div>
+            <div style="font-weight: 500;">员工间对话</div>
+            <div style="font-size: 12px; color: var(--text-secondary);">AI 员工之间的异步消息、群聊及私信记录</div>
           </div>
         </a-checkbox>
         <a-checkbox v-model="clearOptions.workerConfig">
@@ -620,7 +626,8 @@ function saveStorage() {
 
 const showClearModal = ref(false);
 const clearOptions = reactive({
-  chatHistory: true,    // 聊天记录（会话 + 异步消息）
+  chatHistory: true,    // 聊天记录（用户↔Worker 会话）
+  workerChats: true,    // 员工间对话（Worker↔Worker 异步消息）
   modelConfig: false,   // 模型配置
   workerConfig: false,  // 员工配置
   localStorage: false,  // 本地缓存（浏览器存储）
@@ -633,9 +640,11 @@ async function executeClearData() {
 
   try {
     if (clearOptions.chatHistory) {
-      // 删除所有会话和异步聊天
       await adminApi.deleteAllSessions().catch(e => errors.push('会话: ' + e.message));
-      await chatsApi.deleteAll().catch(e => errors.push('聊天: ' + e.message));
+    }
+
+    if (clearOptions.workerChats) {
+      await chatsApi.deleteAll().catch(e => errors.push('员工间对话: ' + e.message));
     }
 
     if (clearOptions.workerConfig) {
@@ -679,6 +688,7 @@ async function executeClearData() {
 function confirmClearData() {
   // 重置默认选项
   clearOptions.chatHistory = true;
+  clearOptions.workerChats = true;
   clearOptions.modelConfig = false;
   clearOptions.workerConfig = false;
   clearOptions.localStorage = false;

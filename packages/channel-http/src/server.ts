@@ -1598,7 +1598,7 @@ export class HttpServer {
       const existingWorkers = this.config.workers ?? [];
       const maxNum = existingWorkers.reduce((max, w) => {
         const m = /^w(\d+)$/.exec(w.id);
-        return m ? Math.max(max, parseInt(m[1], 10)) : max;
+        return m ? Math.max(max, parseInt(m[1]!, 10)) : max;
       }, 0);
       id = 'w' + String(maxNum + 1).padStart(3, '0');
       // 极罕见冲突兜底（如用户手动指定了 w001 等 ID）
