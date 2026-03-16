@@ -18,6 +18,12 @@ export default defineConfig(({ mode }) => {
         'Access-Control-Allow-Origin': '*',
       },
       proxy: {
+        // SSE 长连接单独配置：禁用缓冲、不超时
+        '/api/events': {
+          target: env.VITE_BASE_API_PROXY,
+          changeOrigin: true,
+          secure: false,
+        },
         '/api': {
           target: env.VITE_BASE_API_PROXY,
           changeOrigin: true,
@@ -25,7 +31,6 @@ export default defineConfig(({ mode }) => {
           configure: (proxy) => {
             proxy.on('proxyReq', (proxyReq, req) => {
               console.log('代理转发:', req.url, '->', proxyReq.getHeader('host'))
-              console.log(env)
             })
           }
         },
