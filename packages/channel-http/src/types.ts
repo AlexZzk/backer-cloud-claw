@@ -78,11 +78,21 @@ export interface ApiModel {
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 
+export interface DailyTokenStats {
+  /** YYYY-MM-DD */
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface TokenStats {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalTokens: number;
   byWorker: WorkerTokenStats[];
+  /** 按天分组的 Token 消耗，最近 30 天，无数据的天不包含 */
+  byDay: DailyTokenStats[];
 }
 
 export interface WorkerTokenStats {
@@ -92,6 +102,17 @@ export interface WorkerTokenStats {
   outputTokens: number;
   totalTokens: number;
   callCount: number;
+}
+
+/** 持久化的单条 token 消耗记录 */
+export interface TokenRecord {
+  workerId: string;
+  workerName: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  /** Unix timestamp (ms) */
+  timestamp: number;
 }
 
 // ─── SSE 事件 ─────────────────────────────────────────────────────────────────

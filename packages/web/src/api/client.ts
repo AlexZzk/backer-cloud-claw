@@ -67,6 +67,14 @@ export interface ApiModel {
   isFallback: boolean
 }
 
+export interface DailyTokenStats {
+  /** YYYY-MM-DD */
+  date: string
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
 export interface TokenStats {
   totalInputTokens: number
   totalOutputTokens: number
@@ -79,6 +87,7 @@ export interface TokenStats {
     totalTokens: number
     callCount: number
   }[]
+  byDay: DailyTokenStats[]
 }
 
 // ─── Worker API ─────────────────────────────────────────────────────────

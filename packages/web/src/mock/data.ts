@@ -43,11 +43,20 @@ export interface MockConversation {
   messages: MockMessage[];
 }
 
+export interface MockGoal {
+  id: string;
+  title: string;
+  description: string;
+  priority: 'high' | 'medium' | 'low';
+  status: 'active' | 'completed' | 'paused';
+}
+
 export interface MockDepartment {
   id: string;
   name: string;
   description: string;
   members: MockEmployee[];
+  goals: MockGoal[];
 }
 
 export interface MockEmployee {
@@ -65,6 +74,7 @@ export interface MockCompany {
   name: string;
   description: string;
   departments: MockDepartment[];
+  goals: MockGoal[];
 }
 
 // ─── Workers ──────────────────────────────────────────────────────────────────
@@ -285,11 +295,21 @@ export const MOCK_COMPANY: MockCompany = {
   id: 'company-1',
   name: '未来科技有限公司',
   description: '专注于 AI 应用开发的科技公司',
+  goals: [
+    { id: 'cg-1', title: '成为行业领先的 AI 平台', description: '在 2025 年底前，成为国内 AI 应用开发领域市场占有率前三的平台', priority: 'high', status: 'active' },
+    { id: 'cg-2', title: '扩展企业客户', description: '全年新增 100 家企业客户，覆盖金融、医疗、教育三大领域', priority: 'high', status: 'active' },
+    { id: 'cg-3', title: '打造高效 AI 团队文化', description: '建立 AI 辅助工作流程，提升整体研发效率 30%', priority: 'medium', status: 'active' },
+  ],
   departments: [
     {
       id: 'dept-tech',
       name: '技术部',
       description: '负责产品研发和技术架构',
+      goals: [
+        { id: 'tg-1', title: '完成 v2.0 核心功能开发', description: '在 Q2 前完成多模态支持、长上下文优化和 API 网关重构', priority: 'high', status: 'active' },
+        { id: 'tg-2', title: '系统稳定性提升', description: '将服务可用性提升至 99.9%，减少 P0 故障发生频率', priority: 'high', status: 'active' },
+        { id: 'tg-3', title: '技术债清理', description: '清理历史技术债，提升代码覆盖率至 80% 以上', priority: 'medium', status: 'active' },
+      ],
       members: [
         { id: 'emp-1', name: '张三', role: '技术总监', email: 'zhang@example.com', avatar: '👨‍💻', departmentId: 'dept-tech', workerId: 'w-code' },
         { id: 'emp-2', name: '李四', role: '前端工程师', email: 'li@example.com', avatar: '👩‍💻', departmentId: 'dept-tech' },
@@ -300,6 +320,10 @@ export const MOCK_COMPANY: MockCompany = {
       id: 'dept-product',
       name: '产品部',
       description: '负责产品规划和用户体验',
+      goals: [
+        { id: 'pg-1', title: '完成用户体验全面升级', description: '重新设计核心交互流程，NPS 提升至 60+', priority: 'high', status: 'active' },
+        { id: 'pg-2', title: '新功能快速验证', description: '建立 MVP 快速验证机制，缩短功能验证周期至 2 周', priority: 'medium', status: 'active' },
+      ],
       members: [
         { id: 'emp-4', name: '赵六', role: '产品经理', email: 'zhao@example.com', avatar: '📋', departmentId: 'dept-product' },
         { id: 'emp-5', name: '钱七', role: 'UI 设计师', email: 'qian@example.com', avatar: '🎨', departmentId: 'dept-product' },
@@ -309,6 +333,10 @@ export const MOCK_COMPANY: MockCompany = {
       id: 'dept-research',
       name: '研究部',
       description: '负责 AI 技术研究和探索',
+      goals: [
+        { id: 'rg-1', title: '发布 Agent 技术白皮书', description: '整理内部 Agent 架构经验，发布技术白皮书，提升品牌技术影响力', priority: 'medium', status: 'active' },
+        { id: 'rg-2', title: '探索多智能体协作框架', description: '研究并原型验证多 Agent 协作机制，输出可行性报告', priority: 'high', status: 'active' },
+      ],
       members: [
         { id: 'emp-6', name: '孙八', role: 'AI 研究员', email: 'sun@example.com', avatar: '🔭', departmentId: 'dept-research', workerId: 'w-research' },
         { id: 'emp-7', name: '周九', role: '数据科学家', email: 'zhou@example.com', avatar: '📈', departmentId: 'dept-research', workerId: 'w-data' },
@@ -318,6 +346,10 @@ export const MOCK_COMPANY: MockCompany = {
       id: 'dept-content',
       name: '内容部',
       description: '负责内容创作和市场传播',
+      goals: [
+        { id: 'contg-1', title: '内容矩阵建设', description: '建立技术博客、视频教程、社区运营三位一体的内容矩阵', priority: 'high', status: 'active' },
+        { id: 'contg-2', title: '品牌曝光提升', description: '全年实现 500 万+ 内容曝光量，社媒粉丝增长 200%', priority: 'medium', status: 'paused' },
+      ],
       members: [
         { id: 'emp-8', name: '吴十', role: '内容总监', email: 'wu@example.com', avatar: '📝', departmentId: 'dept-content', workerId: 'w-writer' },
         { id: 'emp-9', name: '郑十一', role: '文案策划', email: 'zheng@example.com', avatar: '✍️', departmentId: 'dept-content' },
@@ -342,13 +374,22 @@ export const MOCK_TOKEN_DAILY = [
 ];
 
 export const MOCK_TOKEN_BY_WORKER = [
-  { name: '代码助手', value: 512340 },
-  { name: '研究助手', value: 284720 },
-  { name: '写作助手', value: 163890 },
-  { name: '数据分析师', value: 89430 },
+  { name: '代码助手', workerId: 'w-code', deptId: 'dept-tech', input: 148580, output: 363760, value: 512340 },
+  { name: '研究助手', workerId: 'w-research', deptId: 'dept-research', input: 82770, output: 201950, value: 284720 },
+  { name: '写作助手', workerId: 'w-writer', deptId: 'dept-content', input: 47530, output: 116360, value: 163890 },
+  { name: '数据分析师', workerId: 'w-data', deptId: 'dept-research', input: 25950, output: 63480, value: 89430 },
+  { name: '个人助理', workerId: 'w-secretary', deptId: null, input: 28560, output: 69870, value: 98430 },
+];
+
+// Dept-level aggregation (workers mapped to depts via members[].workerId)
+export const MOCK_TOKEN_BY_DEPT = [
+  { deptId: 'dept-tech', name: '技术部', input: 148580, output: 363760, value: 512340 },
+  { deptId: 'dept-research', name: '研究部', input: 108720, output: 265430, value: 374150 },
+  { deptId: 'dept-content', name: '内容部', input: 47530, output: 116360, value: 163890 },
+  { deptId: 'dept-product', name: '产品部', input: 0, output: 0, value: 0 },
 ];
 
 export const MOCK_TOKEN_BY_MODEL = [
   { name: 'claude-sonnet-4-6', value: 886490 },
-  { name: 'claude-opus-4-6', value: 163890 },
+  { name: 'claude-opus-4-6', value: 262320 },
 ];
