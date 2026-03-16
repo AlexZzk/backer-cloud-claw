@@ -53,6 +53,7 @@ import { saveConfig, loadConfig } from './config-loader.js';
 import { ChatStore, MessagingService } from '@bcc/messaging';
 import { TaskStore, TaskManager } from '@bcc/task';
 import { Company, Worker } from '@bcc/org';
+import { FileMemoryStore } from '@bcc/memory-fs';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -371,9 +372,12 @@ export class HttpServer {
     });
 
     // 为所有 Worker 创建实例并加入 Company
+    const memory = this.config.defaults.enableMemory
+      ? new FileMemoryStore({ dir: this.config.defaults.sessionDir })
+      : undefined;
     for (const workerCfg of this.config.workers ?? []) {
       try {
-        const worker = await this._createWorker(workerCfg);
+        const worker = await this._createWorker(workerCfg, memory);
         this.company.addWorker(worker);
       } catch (err) {
         console.error(`  ⚠️  初始化 Worker "${workerCfg.id}" 失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -451,7 +455,10 @@ export class HttpServer {
   /**
    * 为指定 WorkerConfig 创建 @bcc/org Worker 实例（用于 Company / 心跳调度）。
    */
-  private async _createWorker(workerCfg: WorkerConfig): Promise<Worker> {
+  private async _createWorker(
+    workerCfg: WorkerConfig,
+    memory?: FileMemoryStore,
+  ): Promise<Worker> {
     const modelInstance = this.config.models.find(m => m.id === workerCfg.modelId)
       ?? this.config.models.find(m => m.primary)
       ?? this.config.models[0];
@@ -466,6 +473,17 @@ export class HttpServer {
       ? `你的名字是「${workerCfg.name}」。${workerCfg.description}`
       : `你的名字是「${workerCfg.name}」。`;
 
+    // 同事名录：与 CLI 的 buildColleagueSection() 保持一致
+    // 让 Worker 知道团队成员的 ID 和职责，才能正确使用 send_direct_message 等工具
+    const allWorkers = this.config.workers ?? [];
+    const colleagues = allWorkers.filter(w => w.id !== workerCfg.id);
+    const colleagueSection = colleagues.length > 0
+      ? [
+          '## 你的同事',
+          ...colleagues.map(c => `- **${c.name}**（ID: \`${c.id}\`）：${c.description ?? c.role}`),
+        ].join('\n')
+      : '';
+
     const skillPrompts: string[] = [];
     for (const skillId of workerCfg.skills ?? []) {
       const skill = findBuiltin(skillId);
@@ -475,7 +493,9 @@ export class HttpServer {
       const communicateSkill = findBuiltin('communicate');
       if (communicateSkill?.system) skillPrompts.push(communicateSkill.system);
     }
-    const system = [identityHeader, workerCfg.role || '', ...skillPrompts].filter(Boolean).join('\n\n');
+    const system = [identityHeader, workerCfg.role || '', colleagueSection, ...skillPrompts]
+      .filter(Boolean)
+      .join('\n\n');
 
     // 可选：审视引擎（心跳用，更便宜的模型）
     let reviewEngineOptions;
@@ -491,6 +511,8 @@ export class HttpServer {
       ? this.getTaskManagerForWorker(workerCfg.id)
       : undefined;
 
+    const sessionId = `worker-${workerCfg.id}`;
+
     return Worker.create({
       profile: {
         id:          workerCfg.id,
@@ -501,12 +523,18 @@ export class HttpServer {
         modelId:     workerCfg.modelId,
         ...(workerCfg.reviewModelId && { reviewModelId: workerCfg.reviewModelId }),
       },
-      engineOptions: { model: adapter, system },
+      engineOptions: {
+        model: adapter,
+        system,
+        // 持久化对话记忆（与 CLI 行为对齐，跨会话保持历史上下文）
+        ...(memory && { memory, sessionId }),
+      },
       ...(reviewEngineOptions && { reviewEngineOptions }),
       tokenTracker:  this.company!.tokenTracker,
       eventBus:      this.company!.eventBus,
       inboxService:  this.messagingService!,
       ...(taskService && { taskService }),
+      sessionId,
     });
   }
 
