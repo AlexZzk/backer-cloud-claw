@@ -13,6 +13,8 @@ import type {
   EpisodicStore,
   Episode,
   Message,
+  ToolCallChunk,
+  ToolResultChunk,
 } from '@bcc/foundation';
 import { AgentEngine, type AgentEngineOptions } from '@bcc/agent-engine';
 import { Mailbox } from './mailbox.js';
@@ -450,7 +452,12 @@ export class Worker implements Participant {
    */
   async *receiveStream(
     message: OrgMessage,
-  ): AsyncIterable<{ type: 'chunk'; text: string } | { type: 'done'; reply: OrgMessage }> {
+  ): AsyncIterable<
+    | { type: 'chunk'; text: string }
+    | ToolCallChunk
+    | ToolResultChunk
+    | { type: 'done'; reply: OrgMessage }
+  > {
     await this._setState('processing');
     void this.auditLog.recordMessageReceived(
       this.id, message.id, message.from, message.threadId,
@@ -470,8 +477,13 @@ export class Worker implements Participant {
         if (chunk.type === 'text' && chunk.text) {
           accumulatedText += chunk.text;
           yield { type: 'chunk', text: chunk.text };
-        }
-        if (chunk.type === 'done') {
+        } else if (chunk.type === 'tool_call') {
+          // 透传工具调用事件，供 HTTP 流式 UI 实时展示
+          yield chunk as ToolCallChunk;
+        } else if (chunk.type === 'tool_result') {
+          // 透传工具结果事件，供 HTTP 流式 UI 实时展示
+          yield chunk as ToolResultChunk;
+        } else if (chunk.type === 'done') {
           tokenUsage = chunk.tokenUsage;
         }
       }
@@ -863,18 +875,22 @@ export class Worker implements Participant {
       '【处理规范】根据消息类型决定如何响应：',
       '',
       '▶ 收到新任务或委托（对方让你做某件事）→ 必须执行以下完整流程：',
-      '  1. 先回复确认收到：告知发送方你已收到并会处理（如"已收到，我会在下午2点提醒用户吃药，并立即编写 Java HelloWorld 代码"）',
+      '  1. 先回复确认收到：告知发送方你已收到并会处理',
       '  2. 使用工具执行任务（写代码、创建提醒、发消息等）',
-      '  3. 任务完成后，通知任务下发方（通过 send_direct_message 或 notify_user）',
-      '  4. 若原始需求来自用户，也需通过 notify_user 通知用户',
+      '  3. 任务完成后，通过 notify_user 将结果发给用户（如果最终受益方是用户）',
+      '  4. 完成第3步后，输出 [SKIP] 作为文本回复（绝不在群聊中再追加描述性文字）',
       '',
-      '▶ 以下情况只输出 [SKIP]（不回复、不调用工具）：',
+      '▶ 收到同事的任务完成通知（同事完成了你委托给他的任务）→ 执行以下流程：',
+      '  1. 调用 notify_user 将结果转交给用户',
+      '  2. 必须输出 [SKIP] 作为文本回复，不向群聊追加任何文字',
+      '  ⚠️ 理由：在群聊发文字会触发对方再次回复，形成无限循环',
+      '',
+      '▶ 以下情况直接输出 [SKIP]（不回复、不调用工具）：',
       '  · 对方只是简单确认"好的""收到""明白了"且无任何新请求',
-      '  · 对方仅通知你"已完成你委托的任务"且你无需跟进',
       '  · 对方仅汇报任务进度状态，无需你作出决策或提供信息',
       '',
       '⚠️ 输出 [SKIP] 时请勿添加其他文字，勿调用任何工具。',
-      '⚠️ 收到任务时绝不能 [SKIP]，必须确认 + 执行 + 汇报。',
+      '⚠️ 收到新任务时绝不能 [SKIP]，必须确认 + 执行 + 用工具汇报（完成后输出 [SKIP]）。',
     );
 
     const userInput = contextLines.join('\n');

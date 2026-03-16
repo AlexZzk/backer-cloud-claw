@@ -91,6 +91,14 @@ export class Company implements Participant {
     return [...this.members.values()];
   }
 
+  /**
+   * 按 ID 获取 Worker 实例（用于 HTTP 服务器统一使用 Company Worker 进行用户会话）。
+   * @returns Worker 实例，若不存在则返回 undefined
+   */
+  getWorker(id: string): Worker | undefined {
+    return this.members.get(id) as Worker | undefined;
+  }
+
   // ─── Thread 管理 ─────────────────────────────────────────────────────────────
 
   /**

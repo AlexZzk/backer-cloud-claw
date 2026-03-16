@@ -95,6 +95,9 @@ export class WorkerSession implements AgentInterface {
     for await (const event of this.worker.receiveStream(message)) {
       if (event.type === 'chunk') {
         yield { type: 'text', text: event.text };
+      } else if (event.type === 'tool_call' || event.type === 'tool_result') {
+        // 透传工具事件（CLI 的 REPL 会展示工具调用进度）
+        yield event;
       } else {
         // done
         const reply = event.reply;
