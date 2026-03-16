@@ -41,7 +41,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomUUID } from 'node:crypto';
 import { AgentEngine } from '@bcc/agent-engine';
 import { getBuiltinTool, findBuiltin, SkillRegistry, saveUserSkill, deleteUserSkill, SkillHub } from '@bcc/skills';
-import type { AgentInterface } from '@bcc/foundation';
+import type { AgentInterface, AgentChunk, OrgMessage, Tool } from '@bcc/foundation';
 import { SessionStore } from './session-store.js';
 import type { ApiWorker, ApiModel, TokenStats, SseEvent } from './types.js';
 import type {
@@ -194,6 +194,92 @@ async function createAdapter(instance: ModelInstanceConfig) {
   });
 }
 
+// ─── WorkerChatAdapter ────────────────────────────────────────────────────────
+
+/**
+ * WorkerChatAdapter：将 Company Worker 实例包装为 AgentInterface。
+ *
+ * CLI 模式通过 WorkerSession 包装 Worker（位于 @bcc/channel-cli）。
+ * HTTP 模式通过此 Adapter 包装，两者逻辑一致，确保"改一端，两端生效"。
+ *
+ * 核心行为：
+ * - stream()：调用 Worker.receiveStream()，透传 tool_call/tool_result 事件
+ * - 注入 getStateContext()（pending 消息 + 任务），让 Worker 感知工作现场
+ * - getHistory()/clearHistory()/dumpHistory() 代理到 Worker 的 AgentEngine
+ */
+class WorkerChatAdapter implements AgentInterface {
+  private readonly threadId: string;
+
+  constructor(private readonly worker: Worker, threadId?: string) {
+    this.threadId = threadId ?? randomUUID();
+  }
+
+  get currentModel(): string {
+    return this.worker.profile.modelId;
+  }
+
+  listModels(): string[] {
+    return [this.worker.profile.modelId];
+  }
+
+  getHistory() {
+    return this.worker.getHistory();
+  }
+
+  clearHistory(): void {
+    this.worker.getHistory().length = 0;
+  }
+
+  dumpHistory(): string {
+    return this.worker.getHistory()
+      .map(m => {
+        const role = m.role === 'user' ? '用户' : this.worker.profile.name;
+        const text = typeof m.content === 'string'
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content
+                .filter((c): c is { type: 'text'; text: string } => typeof c === 'object' && c !== null && 'type' in c && c.type === 'text')
+                .map((c) => (c as { type: 'text'; text: string }).text)
+                .join('')
+            : '';
+        return `[${role}]\n${text}`;
+      })
+      .filter(s => s.split('\n')[1]?.trim())
+      .join('\n\n');
+  }
+
+  async *stream(userInput: string): AsyncIterable<AgentChunk> {
+    // 注入当前工作现场上下文（未读消息 + 待处理任务），与 CLI WorkerSession 保持一致
+    const stateContext = await this.worker.getStateContext();
+    const enrichedInput = stateContext
+      ? `【当前状态提醒 - 你的工作现场】\n${stateContext}\n\n【本条消息】\n${userInput}`
+      : userInput;
+
+    const message: OrgMessage = {
+      id: randomUUID(),
+      threadId: this.threadId,
+      from: 'user',
+      to: this.worker.id,
+      content: enrichedInput,
+      timestamp: Date.now(),
+    };
+
+    for await (const event of this.worker.receiveStream(message)) {
+      if (event.type === 'chunk') {
+        yield { type: 'text', text: event.text };
+      } else if (event.type === 'tool_call') {
+        yield event;
+      } else if (event.type === 'tool_result') {
+        yield event;
+      } else {
+        // done
+        const tu = event.reply.tokenUsage;
+        yield tu ? { type: 'done', tokenUsage: tu } : { type: 'done' };
+      }
+    }
+  }
+}
+
 // ─── token 统计累计 ───────────────────────────────────────────────────────────
 
 interface WorkerTokenAcc {
@@ -292,6 +378,54 @@ export class HttpServer {
       } catch (err) {
         console.error(`  ⚠️  初始化 Worker "${workerCfg.id}" 失败: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    // 注入 call_worker 委托工具（多于 1 名 Worker 时，与 CLI 模式行为一致）
+    // Worker 可通过同步委托立即获得另一个 Worker 的回复（适合短时间子任务）
+    const allCompanyWorkers = this.company.getWorkers() as Worker[];
+    if (allCompanyWorkers.length > 1) {
+      for (const fromWorker of allCompanyWorkers) {
+        const targets = allCompanyWorkers.filter(w => w.profile.id !== fromWorker.profile.id);
+        const targetDesc = targets
+          .map(w => `  - ${w.profile.id}（${w.profile.name}）：${w.profile.description}`)
+          .join('\n');
+        const callWorkerTool: Tool = {
+          definition: {
+            name: 'call_worker',
+            description: `将子任务委托给团队中的其他成员，获取他们的专业回复后继续处理。\n可委托的成员：\n${targetDesc}`,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                worker_id: {
+                  type: 'string',
+                  description: '目标员工的 ID',
+                  enum: targets.map(w => w.profile.id),
+                },
+                message: { type: 'string', description: '发给目标员工的任务描述或问题' },
+              },
+              required: ['worker_id', 'message'],
+            },
+          },
+          handler: async (input) => {
+            const { worker_id, message } = input as { worker_id: string; message: string };
+            const thread = this.company!.openThread(
+              `${fromWorker.profile.id} → ${worker_id}`,
+              [fromWorker.profile.id, worker_id],
+            );
+            try {
+              const replies = await this.company!.send(worker_id, message, thread.id, fromWorker.profile.id);
+              this.company!.closeThread(thread.id);
+              if (replies.length === 0) return `（${worker_id} 未返回任何内容）`;
+              return replies.map(r => r.content).join('\n');
+            } catch (err) {
+              this.company!.closeThread(thread.id);
+              throw err;
+            }
+          },
+        };
+        fromWorker.registerTool(callWorkerTool);
+      }
+      console.log(`  🔗 已为所有员工注入「call_worker」委托工具`);
     }
 
     // 按各 Worker 独立配置启动心跳（heartbeatIntervalMs === 0 为被动模式，不启动定时器）
@@ -1530,6 +1664,17 @@ export class HttpServer {
   private async getAgentForWorker(workerCfg: WorkerConfig): Promise<AgentInterface> {
     const cached = this.workerAgents.get(workerCfg.id);
     if (cached) return cached;
+
+    // 优先使用 Company Worker（与 CLI 模式共享同一实例，工具注册、[SKIP] 规则完全一致）
+    // 这确保了"改 Worker 代码，CLI 和 UI 同时生效"，消除重复实现
+    if (this.company) {
+      const companyWorker = this.company.getWorker(workerCfg.id);
+      if (companyWorker) {
+        const adapter = new WorkerChatAdapter(companyWorker);
+        this.workerAgents.set(workerCfg.id, adapter);
+        return adapter;
+      }
+    }
 
     const modelInstance = this.config.models.find(m => m.id === workerCfg.modelId)
       ?? this.config.models.find(m => m.primary)
