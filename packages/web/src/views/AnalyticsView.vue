@@ -298,10 +298,11 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useWorkersStore } from '@/stores/workers';
 import { analyticsApi, type TokenStats } from '@/api/client';
-import { MOCK_COMPANY } from '@/mock/data';
+import { useOrgStore } from '@/stores/org';
 
 const { t } = useI18n();
 const workersStore = useWorkersStore();
+const orgStore = useOrgStore();
 
 const selectedPeriod = ref('month');
 const selectedDimension = ref<'worker' | 'dept'>('worker');
@@ -323,8 +324,7 @@ const dimensions = computed(() => [
 async function fetchData() {
   loading.value = true;
   try {
-    const res = await analyticsApi.tokens();
-    stats.value = res.data;
+    stats.value = await analyticsApi.tokens();
   } catch {
     // backend may not be running; ignore
   } finally {
@@ -366,22 +366,18 @@ const maxDayVal = computed(() =>
 const workerTableData = computed(() => {
   const byWorker = stats.value?.byWorker ?? [];
   return byWorker.map(w => {
-    // Find department name by mapping workerId through org members
-    let dept: string | null = null;
-    for (const d of MOCK_COMPANY.departments) {
-      if (d.members.some(m => m.workerId === w.workerId)) { dept = d.name; break; }
-    }
+    const deptId = orgStore.getWorkerDept(w.workerId);
+    const dept = deptId ? orgStore.departments.find(d => d.id === deptId)?.name ?? null : null;
     return { ...w, dept };
   }).sort((a, b) => b.totalTokens - a.totalTokens);
 });
 
 // Department table data — aggregated from real worker data
 const deptTableData = computed(() => {
-  return MOCK_COMPANY.departments.map(dept => {
+  return orgStore.departments.map(dept => {
     let input = 0, output = 0, value = 0;
-    for (const m of dept.members) {
-      if (!m.workerId) continue;
-      const wt = stats.value?.byWorker.find(w => w.workerId === m.workerId);
+    for (const wId of dept.memberIds) {
+      const wt = stats.value?.byWorker.find(w => w.workerId === wId);
       if (wt) { input += wt.inputTokens; output += wt.outputTokens; value += wt.totalTokens; }
     }
     return { deptId: dept.id, name: dept.name, input, output, value };
@@ -390,11 +386,17 @@ const deptTableData = computed(() => {
 
 // Per-dept member breakdown
 const deptMemberBreakdown = computed(() => {
-  return MOCK_COMPANY.departments.map(dept => {
-    const members = dept.members.map(emp => {
-      const wt = emp.workerId ? stats.value?.byWorker.find(w => w.workerId === emp.workerId) : null;
-      const workerName = wt?.workerName ?? null;
-      return { workerId: emp.workerId ?? null, name: emp.name, avatar: emp.avatar, workerName, tokens: wt?.totalTokens ?? 0 };
+  return orgStore.departments.map(dept => {
+    const members = dept.memberIds.map(wId => {
+      const worker = workersStore.workers.find(w => w.id === wId);
+      const wt = stats.value?.byWorker.find(w => w.workerId === wId);
+      return {
+        workerId: wId,
+        name: worker?.name ?? wId,
+        avatar: '🤖',
+        workerName: wt?.workerName ?? null,
+        tokens: wt?.totalTokens ?? 0,
+      };
     });
     const total = members.reduce((s, m) => s + m.tokens, 0);
     return { deptId: dept.id, name: dept.name, members, total };
