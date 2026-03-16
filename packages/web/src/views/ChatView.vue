@@ -1046,8 +1046,40 @@ function stopAutoRefresh() {
   }
 }
 
+// ── SSE 实时推送：监听 Worker 后台事件，有新消息时立即刷新 ──────────────────
+let sseSource: EventSource | null = null;
+
+function startSseListener() {
+  if (sseSource) return;
+  sseSource = new EventSource('/api/events');
+  sseSource.addEventListener('org', (e: MessageEvent) => {
+    try {
+      const event = JSON.parse(e.data) as { type: string };
+      // Worker 完成处理（inbox 回复）或消息已发送时，立即刷新异步聊天列表
+      if (event.type === 'worker:done' || event.type === 'message:sent') {
+        void chatStore.fetchAsyncChats();
+      }
+    } catch {
+      // ignore parse errors
+    }
+  });
+  sseSource.onerror = () => {
+    // 连接断开后稍后重连（5s）
+    stopSseListener();
+    setTimeout(startSseListener, 5_000);
+  };
+}
+
+function stopSseListener() {
+  if (sseSource) {
+    sseSource.close();
+    sseSource = null;
+  }
+}
+
 onUnmounted(() => {
   stopAutoRefresh();
+  stopSseListener();
 });
 
 onMounted(async () => {
@@ -1060,8 +1092,9 @@ onMounted(async () => {
     chatStore.fetchAllSessions(),
     chatStore.fetchAsyncChats(),
   ]);
-  // 启动自动刷新
+  // 启动自动刷新（后备轮询）+ SSE 实时推送
   startAutoRefresh();
+  startSseListener();
 });
 </script>
 
