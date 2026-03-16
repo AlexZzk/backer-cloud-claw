@@ -411,7 +411,8 @@ export class Worker implements Participant {
 
     // 自动注册 inbox / task 工具
     if (options.inboxService) {
-      worker._registerInboxTools(options.inboxService);
+      const hasCommunicateSkill = profile.skills?.includes('communicate') ?? false;
+      worker._registerInboxTools(options.inboxService, hasCommunicateSkill);
     }
     if (options.taskService) {
       worker._registerTaskTools(options.taskService);
@@ -859,9 +860,15 @@ export class Worker implements Participant {
 
     // 回复规范：引导 LLM 判断是否需要回复，避免无效循环
     contextLines.push(
-      '【回复规范】请判断是否有实质内容需要回复：',
-      '- 对方提问、任务完成/受阻通知、需要你决策 → 正常回复，可调用工具',
-      '- 对方只是简单确认（"好的""收到""已了解"）且无提问 → 只输出 [SKIP]，不发消息',
+      '【回复规范】判断是否有实质内容需要回复，以下情况只输出 [SKIP]：',
+      '  · 对方只是简单确认（"好的""收到""已了解""明白了"）且无提问',
+      '  · 对方告知将要处理/已接受你委托的任务（如"好的，我会在12点提醒用户"）',
+      '  · 对方告知任务进度更新，只是通知状态，没有问题',
+      '  · 任何不需要你作出决定或提供信息的回复',
+      '以下情况正常回复：',
+      '  · 对方提出了需要你回答的问题',
+      '  · 任务完成通知 → 向原始请求方（用户或上级）汇报，然后停止',
+      '  · 任务受阻、需要资源 → 处理或上报',
       '⚠️ 输出 [SKIP] 时请勿添加其他文字，勿调用任何工具。',
     );
 
@@ -1002,9 +1009,52 @@ export class Worker implements Participant {
 
   // ─── 自动注册工具 ────────────────────────────────────────────────────────────
 
-  private _registerInboxTools(inboxService: AsyncInboxService): void {
+  /**
+   * 注册收件箱相关工具。
+   *
+   * 权限分层：
+   * - 所有 Worker（hasCommunicateSkill = false）：只注册 `notify_user`，
+   *   可主动通知用户（任务完成汇报等），但**不能主动向其他 Worker 发起沟通**。
+   * - 具备 `communicate` 技能的 Worker（hasCommunicateSkill = true）：
+   *   额外注册 `create_group_chat`、`send_to_group`、`send_direct_message`、
+   *   `check_my_mentions`，可发起跨 Worker 协作。
+   *
+   * 注意：无论是否具备 communicate 技能，`processInbox()` 都会处理收件箱消息
+   * 并发送文字回复——工具权限不影响"回复"能力，只影响"主动发起"能力。
+   */
+  private _registerInboxTools(inboxService: AsyncInboxService, hasCommunicateSkill = false): void {
     const workerId = this.id;
     const workerName = this.profile.name;
+
+    // ── notify_user：所有 Worker 都有，用于主动通知用户 ────────────────────────
+    this.engine.registerTool({
+      definition: {
+        name: 'notify_user',
+        description:
+          '向用户（主管）发送主动通知。适用场景：任务完成后汇报结果、遇到阻碍需要用户决策。' +
+          '注意：此工具只能发给用户，不能发给其他 Worker。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: '通知内容' },
+          },
+          required: ['content'],
+        },
+      },
+      handler: async (input: Record<string, unknown>) => {
+        const { content } = input as { content: string };
+        const chat = await inboxService.openDirectChat(workerId, 'user');
+        const msg = await inboxService.post(chat.id, workerId, content);
+        return [
+          `✅ 已通知用户`,
+          `   消息 ID：${msg.id}`,
+          `   发送时间：${new Date(msg.timestamp).toLocaleString('zh-CN')}`,
+        ].join('\n');
+      },
+    });
+
+    // ── 以下工具仅具备 communicate 技能的 Worker 才注册 ────────────────────────
+    if (!hasCommunicateSkill) return;
 
     // 工具：创建群聊
     this.engine.registerTool({
@@ -1072,19 +1122,20 @@ export class Worker implements Participant {
       },
     });
 
-    // 工具：发送私信（支持 Worker ID 或 'user'）
+    // 工具：发送私信（给其他 Worker 或用户）
     this.engine.registerTool({
       definition: {
         name: 'send_direct_message',
         description:
-          '向指定 Worker 或用户（"user"）发送私信。会自动创建或复用已有的 1 对 1 会话。' +
-          '用途：任务完成后通知委托人、向用户（主管）汇报结果、请求同事协助。',
+          '向指定 Worker 发送私信。会自动创建或复用已有的 1 对 1 会话。' +
+          '用途：委托任务给特定 Worker、私下协商、链式委托中通知上级完成情况。' +
+          '如只是通知用户（主管），优先使用 notify_user 工具更简洁。',
         inputSchema: {
           type: 'object',
           properties: {
             to: {
               type: 'string',
-              description: '接收方的 Worker ID，或 "user"（表示发消息给用户/主管）',
+              description: '接收方的 Worker ID（不是 "user"，通知用户请用 notify_user）',
             },
             content: { type: 'string', description: '消息内容' },
           },
