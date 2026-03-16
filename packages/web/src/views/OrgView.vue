@@ -1,94 +1,93 @@
 <template>
   <div class="org-view">
-    <!-- Sub panel -->
+    <!-- Sub panel: recursive org tree -->
     <div class="sub-panel">
       <div class="sub-header">
         <span class="sub-title">{{ t('nav.org') }}</span>
-        <a-button type="primary" size="mini" shape="circle" @click="showCreateDept = true">
-          <template #icon><icon-plus /></template>
-        </a-button>
       </div>
 
-      <!-- Company entry -->
-      <div
-        class="company-info"
-        :class="{ active: selectedDeptId === null }"
-        @click="selectedDeptId = null; selectedWorkerId = null"
-      >
-        <div class="company-logo">🏢</div>
-        <div>
-          <div class="company-name">{{ orgStore.company.name }}</div>
-          <div class="company-desc">{{ orgStore.company.description }}</div>
-        </div>
-      </div>
-
-      <a-divider style="margin: 8px 0" />
-
-      <div class="dept-list">
-        <div
-          v-for="dept in orgStore.departments"
-          :key="dept.id"
-          class="dept-item"
-          :class="{ active: selectedDeptId === dept.id }"
-          @click="selectedDeptId = dept.id; selectedWorkerId = null"
-        >
-          <icon-team class="dept-icon" />
-          <div class="dept-info">
-            <div class="dept-name">{{ dept.name }}</div>
-            <div class="dept-count">{{ dept.memberIds.length }} {{ t('org.members') }}</div>
-          </div>
-          <a-button
-            type="text"
-            size="mini"
-            class="dept-del-btn"
-            @click.stop="handleDeleteDept(dept.id)"
-          >
-            <template #icon><icon-delete /></template>
-          </a-button>
-        </div>
-        <div v-if="orgStore.departments.length === 0" class="no-depts">
-          {{ t('org.noDepartments') }}
-        </div>
+      <div class="tree-container">
+        <OrgTreeNode
+          :node="orgStore.root"
+          :depth="0"
+          :selected-id="selectedId"
+          @select="selectedId = $event; selectedWorkerId = null"
+          @add-child="openAddChild($event)"
+        />
       </div>
     </div>
 
     <!-- Main content -->
-    <div class="org-main">
+    <div class="org-main" v-if="currentNode">
       <!-- Breadcrumb -->
-      <div class="main-breadcrumb" v-if="selectedDeptId">
-        <span class="bc-link" @click="selectedDeptId = null; selectedWorkerId = null">
-          <icon-left />{{ orgStore.company.name }}
-        </span>
-        <icon-right class="bc-sep" />
-        <span class="bc-current">{{ selectedDept?.name }}</span>
+      <div class="breadcrumb" v-if="breadcrumb.length > 1">
+        <template v-for="(n, i) in breadcrumb" :key="n.id">
+          <span
+            class="bc-item"
+            :class="{ last: i === breadcrumb.length - 1 }"
+            @click="selectedId = n.id"
+          >{{ nodeTypeIcon(n.type) }} {{ n.name }}</span>
+          <span v-if="i < breadcrumb.length - 1" class="bc-sep">/</span>
+        </template>
       </div>
 
-      <!-- View header -->
-      <div class="view-header">
-        <div class="view-title-group">
-          <div style="display:flex; align-items:center; gap:10px">
-            <h2>{{ selectedDept ? selectedDept.name : orgStore.company.name }}</h2>
-            <a-button type="text" size="mini" @click="openEditInfo">
-              <template #icon><icon-edit /></template>
-            </a-button>
+      <!-- Node header -->
+      <div class="node-header">
+        <div class="nh-left">
+          <span class="nh-icon">{{ nodeTypeIcon(currentNode.type) }}</span>
+          <div>
+            <div class="nh-title-row">
+              <h2>{{ currentNode.name }}</h2>
+              <a-tag size="small" color="arcoblue">{{ nodeTypeLabel(currentNode.type) }}</a-tag>
+              <a-button type="text" size="mini" @click="openEditNode">
+                <template #icon><icon-edit /></template>
+              </a-button>
+              <a-button
+                v-if="currentNode.id !== 'root'"
+                type="text"
+                size="mini"
+                status="danger"
+                @click="handleDeleteNode"
+              >
+                <template #icon><icon-delete /></template>
+              </a-button>
+            </div>
+            <p class="nh-desc">{{ currentNode.description || '暂无描述' }}</p>
           </div>
-          <p class="view-desc">{{ selectedDept ? selectedDept.description : orgStore.company.description }}</p>
         </div>
-        <div class="view-actions">
-          <a-radio-group v-model="viewMode" type="button" size="small">
-            <a-radio value="grid"><icon-apps /></a-radio>
-            <a-radio value="list"><icon-list /></a-radio>
-          </a-radio-group>
+        <div class="nh-actions">
+          <a-button @click="openAddChild(currentNode.id)">
+            <template #icon><icon-plus /></template>
+            {{ t('org.addSubUnit') }}
+          </a-button>
         </div>
+      </div>
+
+      <!-- Leader -->
+      <div class="leader-section" v-if="currentNode.id !== 'root'">
+        <span class="leader-label">{{ t('org.leader') }}：</span>
+        <a-select
+          :model-value="currentNode.leaderId ?? null"
+          allow-clear
+          size="small"
+          style="width:200px"
+          :placeholder="t('org.noLeader')"
+          @change="(v: string | null) => orgStore.setLeader(currentNode!.id, v)"
+        >
+          <a-option v-for="w in currentNodeWorkers" :key="w.id" :value="w.id">
+            🤖 {{ w.name }}
+          </a-option>
+        </a-select>
+        <a-tag v-if="leaderWorker" color="gold" size="small">⭐ {{ leaderWorker.name }}</a-tag>
       </div>
 
       <!-- Goals section -->
       <div class="goals-section">
         <div class="goals-header">
           <div class="goals-title">
-            <span class="goals-icon">🎯</span>
-            <span>{{ selectedDept ? t('org.deptGoals') : t('org.companyGoals') }}</span>
-            <a-tag size="small" color="arcoblue">{{ currentGoals.length }}</a-tag>
+            <span>🎯</span>
+            <span>{{ t('org.companyGoals') }}</span>
+            <a-tag size="small" color="arcoblue">{{ currentNode.goals.length }}</a-tag>
           </div>
           <a-button size="small" @click="openAddGoal">
             <template #icon><icon-plus /></template>
@@ -96,11 +95,10 @@
           </a-button>
         </div>
 
-        <div v-if="currentGoals.length === 0" class="goals-empty">{{ t('org.noGoals') }}</div>
-
+        <div v-if="currentNode.goals.length === 0" class="goals-empty">{{ t('org.noGoals') }}</div>
         <div v-else class="goals-list">
           <div
-            v-for="goal in currentGoals"
+            v-for="goal in currentNode.goals"
             :key="goal.id"
             class="goal-item"
             :class="`status-${goal.status}`"
@@ -110,10 +108,8 @@
               <div class="goal-content">
                 <div class="goal-title-row">
                   <span class="goal-title">{{ goal.title }}</span>
-                  <div class="goal-badges">
-                    <a-tag size="small" :color="priorityColor(goal.priority)">{{ t(`org.priority_${goal.priority}`) }}</a-tag>
-                    <a-tag size="small" :color="statusColor(goal.status)">{{ t(`org.goalStatus_${goal.status}`) }}</a-tag>
-                  </div>
+                  <a-tag size="small" :color="priorityColor(goal.priority)">{{ t(`org.priority_${goal.priority}`) }}</a-tag>
+                  <a-tag size="small" :color="statusColor(goal.status)">{{ t(`org.goalStatus_${goal.status}`) }}</a-tag>
                 </div>
                 <div class="goal-desc">{{ goal.description }}</div>
               </div>
@@ -122,7 +118,7 @@
               <a-button type="text" size="mini" @click="openEditGoal(goal)">
                 <template #icon><icon-edit /></template>
               </a-button>
-              <a-button type="text" size="mini" status="danger" @click="handleDeleteGoal(goal.id)">
+              <a-button type="text" size="mini" status="danger" @click="orgStore.deleteGoal(currentNode.id, goal.id)">
                 <template #icon><icon-delete /></template>
               </a-button>
             </div>
@@ -130,170 +126,128 @@
         </div>
       </div>
 
-      <a-divider style="margin: 12px 0" />
-
-      <!-- Workers section header -->
-      <div class="section-header">
-        <span class="section-title">{{ t('org.members') }}（{{ displayWorkers.length }}）</span>
-        <a-button v-if="selectedDeptId" size="small" @click="showAssignWorker = true">
-          <template #icon><icon-plus /></template>
-          {{ t('org.assignWorker') }}
-        </a-button>
+      <!-- Sub-units -->
+      <div v-if="currentNode.children.length > 0" class="sub-units-section">
+        <div class="section-title">
+          {{ t('org.subUnits') }}（{{ currentNode.children.length }}）
+        </div>
+        <div class="sub-units-grid">
+          <div
+            v-for="child in currentNode.children"
+            :key="child.id"
+            class="sub-unit-card"
+            @click="selectedId = child.id"
+          >
+            <div class="suc-icon">{{ nodeTypeIcon(child.type) }}</div>
+            <div class="suc-name">{{ child.name }}</div>
+            <div class="suc-meta">
+              <a-tag size="small" color="arcoblue">{{ nodeTypeLabel(child.type) }}</a-tag>
+              <span class="suc-count">{{ totalMembers(child) }} 人</span>
+            </div>
+            <div class="suc-goals" v-if="child.goals.filter(g => g.status === 'active').length > 0">
+              🎯 {{ child.goals.filter(g => g.status === 'active').length }} 个目标
+            </div>
+          </div>
+        </div>
       </div>
 
-      <!-- Worker grid -->
-      <div v-if="viewMode === 'grid'" class="worker-grid">
-        <div
-          v-for="w in displayWorkers"
-          :key="w.id"
-          class="worker-card"
-          :class="{ selected: selectedWorkerId === w.id }"
-          @click="selectedWorkerId = w.id === selectedWorkerId ? null : w.id"
+      <!-- Members section -->
+      <div class="members-section">
+        <div class="section-header">
+          <span class="section-title">{{ t('org.members') }}（{{ currentNodeWorkers.length }}）</span>
+          <div class="section-actions">
+            <a-radio-group v-model="viewMode" type="button" size="small">
+              <a-radio value="grid"><icon-apps /></a-radio>
+              <a-radio value="list"><icon-list /></a-radio>
+            </a-radio-group>
+            <a-button size="small" @click="showAssignWorker = true">
+              <template #icon><icon-plus /></template>
+              {{ t('org.assignWorker') }}
+            </a-button>
+          </div>
+        </div>
+
+        <!-- Worker grid -->
+        <div v-if="viewMode === 'grid'" class="worker-grid">
+          <div
+            v-for="w in currentNodeWorkers"
+            :key="w.id"
+            class="worker-card"
+            :class="{ selected: selectedWorkerId === w.id, leader: currentNode.leaderId === w.id }"
+            @click="selectedWorkerId = w.id === selectedWorkerId ? null : w.id"
+          >
+            <div class="wc-leader-crown" v-if="currentNode.leaderId === w.id">👑</div>
+            <div class="wc-avatar">{{ workerAvatar(w) }}</div>
+            <div class="wc-name">{{ w.name }}</div>
+            <div class="wc-role">{{ workerRoleLabel(w.role) }}</div>
+            <div class="wc-status">
+              <span class="status-dot" :class="w.status"></span>
+              <span>{{ t(`workers.${w.status}`) }}</span>
+            </div>
+            <div class="wc-model">{{ w.modelId }}</div>
+          </div>
+          <div v-if="currentNodeWorkers.length === 0" class="members-empty">
+            <span>{{ t('org.noDeptMembers') }}</span>
+            <a-button size="small" type="text" @click="showAssignWorker = true">
+              + {{ t('org.assignWorker') }}
+            </a-button>
+          </div>
+        </div>
+
+        <!-- Worker list -->
+        <a-table
+          v-else
+          :data="currentNodeWorkers"
+          :bordered="false"
+          :stripe="true"
+          row-key="id"
+          :pagination="{ pageSize: 10, simple: true }"
+          style="margin-top: 8px;"
         >
-          <div class="wc-avatar">{{ workerAvatar(w) }}</div>
-          <div class="wc-name">{{ w.name }}</div>
-          <div class="wc-role">{{ workerRoleLabel(w.role) }}</div>
-          <div class="wc-status">
-            <span class="status-dot" :class="w.status"></span>
-            <span>{{ t(`workers.${w.status}`) }}</span>
-          </div>
-          <div class="wc-dept-tag">
-            <a-tag v-if="getDeptName(w.id)" size="small" color="arcoblue">{{ getDeptName(w.id) }}</a-tag>
-            <a-tag v-else size="small">{{ t('org.unassigned') }}</a-tag>
-          </div>
-          <div v-if="w.isPrimary" class="wc-primary-badge">
-            <a-tag size="small" color="gold">⭐ 主要</a-tag>
-          </div>
-        </div>
-
-        <div v-if="displayWorkers.length === 0" class="workers-empty">
-          <icon-robot style="font-size:32px; color:var(--text-tertiary)" />
-          <span>{{ selectedDeptId ? t('org.noDeptMembers') : t('org.noWorkers') }}</span>
-        </div>
-      </div>
-
-      <!-- Worker list -->
-      <a-table
-        v-else
-        :data="displayWorkers"
-        :bordered="false"
-        :stripe="true"
-        row-key="id"
-        :pagination="{ pageSize: 10, simple: true }"
-        style="margin-top: 8px;"
-      >
-        <template #columns>
-          <a-table-column title="" :width="50">
-            <template #cell="{ record }">
-              <span style="font-size:22px">{{ workerAvatar(record) }}</span>
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('workers.workerName')" data-index="name" />
-          <a-table-column :title="t('org.employeeRole')">
-            <template #cell="{ record }">{{ workerRoleLabel(record.role) }}</template>
-          </a-table-column>
-          <a-table-column :title="t('org.department')">
-            <template #cell="{ record }">
-              <a-tag v-if="getDeptName(record.id)" size="small" color="arcoblue">{{ getDeptName(record.id) }}</a-tag>
-              <span v-else style="color:var(--text-tertiary)">—</span>
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('workers.workerStatus')">
-            <template #cell="{ record }">
-              <span class="status-dot" :class="record.status"></span>
-              {{ t(`workers.${record.status}`) }}
-            </template>
-          </a-table-column>
-          <a-table-column :title="t('common.actions')">
-            <template #cell="{ record }">
-              <a-button type="text" size="mini" @click="selectedWorkerId = record.id">
-                <template #icon><icon-eye /></template>
-              </a-button>
-              <a-button type="text" size="mini" @click="openAssignSingle(record.id)">
-                <template #icon><icon-swap /></template>
-              </a-button>
-            </template>
-          </a-table-column>
-        </template>
-      </a-table>
-
-      <!-- Org chart (company level only) -->
-      <div v-if="!selectedDeptId" class="org-overview">
-        <h3 class="overview-title">{{ t('org.orgChart') }}</h3>
-        <div class="org-tree">
-          <div class="ot-root">
-            <div class="ot-node root-node">
-              <span class="ot-avatar">🏢</span>
-              <strong>{{ orgStore.company.name }}</strong>
-              <span class="ot-meta">{{ orgStore.departments.length }} 个部门</span>
-            </div>
-          </div>
-
-          <div class="ot-children">
-            <div
-              v-for="(dept, dIdx) in orgStore.departments"
-              :key="dept.id"
-              class="ot-branch"
-              :class="{ 'ot-last': dIdx === orgStore.departments.length - 1 }"
-            >
-              <div
-                class="ot-node dept-node"
-                :class="{ expanded: expandedDepts.has(dept.id) }"
-                @click="toggleDept(dept.id)"
-              >
-                <span class="ot-expand">{{ expandedDepts.has(dept.id) ? '▾' : '▸' }}</span>
-                <icon-team class="ot-icon" />
-                <span class="ot-name">{{ dept.name }}</span>
-                <span class="ot-meta">{{ dept.memberIds.length }} 人</span>
-                <a-tag v-if="dept.goals.filter(g => g.status === 'active').length > 0" size="small" color="blue" style="margin-left:4px">
-                  🎯 {{ dept.goals.filter(g => g.status === 'active').length }}
-                </a-tag>
-                <a-button type="text" size="mini" class="dept-nav-btn" @click.stop="selectedDeptId = dept.id">
-                  <template #icon><icon-right /></template>
+          <template #columns>
+            <a-table-column title="" :width="50">
+              <template #cell="{ record }">
+                <span style="font-size:20px">{{ workerAvatar(record) }}</span>
+              </template>
+            </a-table-column>
+            <a-table-column :title="t('workers.workerName')" data-index="name">
+              <template #cell="{ record }">
+                <span>{{ record.name }}</span>
+                <a-tag v-if="currentNode.leaderId === record.id" size="small" color="gold" style="margin-left:6px">👑 负责人</a-tag>
+              </template>
+            </a-table-column>
+            <a-table-column :title="t('workers.workerStatus')">
+              <template #cell="{ record }">
+                <span class="status-dot" :class="record.status"></span>
+                {{ t(`workers.${record.status}`) }}
+              </template>
+            </a-table-column>
+            <a-table-column title="Model" data-index="modelId" />
+            <a-table-column :title="t('common.actions')">
+              <template #cell="{ record }">
+                <a-button type="text" size="mini" @click="selectedWorkerId = record.id">
+                  <template #icon><icon-eye /></template>
                 </a-button>
-              </div>
-
-              <transition name="tree-slide">
-                <div v-if="expandedDepts.has(dept.id)" class="ot-children member-children">
-                  <div
-                    v-for="(wId, eIdx) in dept.memberIds"
-                    :key="wId"
-                    class="ot-branch"
-                    :class="{ 'ot-last': eIdx === dept.memberIds.length - 1 }"
-                  >
-                    <div class="ot-node member-node" @click="selectedWorkerId = wId">
-                      <span class="ot-avatar">{{ workerAvatar(getWorker(wId)) }}</span>
-                      <span class="ot-name">{{ getWorker(wId)?.name ?? wId }}</span>
-                      <span class="ot-role">· {{ workerRoleLabel(getWorker(wId)?.role) }}</span>
-                      <span class="status-dot sm" :class="getWorker(wId)?.status"></span>
-                    </div>
-                  </div>
-                  <div v-if="dept.memberIds.length === 0" class="ot-branch">
-                    <div class="ot-node member-node" style="color:var(--text-tertiary); cursor:default">
-                      暂无成员
-                    </div>
-                  </div>
-                </div>
-              </transition>
-            </div>
-          </div>
-
-          <!-- Unassigned workers -->
-          <div v-if="unassignedWorkers.length > 0" class="unassigned-block">
-            <div class="ua-title">未分配部门（{{ unassignedWorkers.length }}）</div>
-            <div class="ua-chips">
-              <a-tag
-                v-for="w in unassignedWorkers"
-                :key="w.id"
-                size="small"
-                @click="openAssignSingle(w.id)"
-                style="cursor:pointer"
-              >
-                {{ workerAvatar(w) }} {{ w.name }}
-              </a-tag>
-            </div>
-          </div>
-        </div>
+                <a-button
+                  type="text"
+                  size="mini"
+                  :title="currentNode.leaderId === record.id ? '取消负责人' : '设为负责人'"
+                  @click="orgStore.setLeader(currentNode!.id, currentNode!.leaderId === record.id ? null : record.id)"
+                >
+                  <template #icon><icon-star /></template>
+                </a-button>
+                <a-button
+                  type="text"
+                  size="mini"
+                  status="danger"
+                  @click="orgStore.assignWorker(record.id, null)"
+                >
+                  <template #icon><icon-minus /></template>
+                </a-button>
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
       </div>
     </div>
 
@@ -315,79 +269,68 @@
           <span class="status-dot" :class="selectedWorker.status"></span>
           {{ t(`workers.${selectedWorker.status}`) }}
         </div>
-        <div class="wd-row" v-if="getDeptName(selectedWorker.id)">
-          <icon-team />{{ getDeptName(selectedWorker.id) }}
+        <div class="wd-row" v-if="workerNodePath(selectedWorker.id)">
+          📍 {{ workerNodePath(selectedWorker.id) }}
         </div>
-        <div class="wd-row" v-if="selectedWorker.modelId">
-          🤖 {{ selectedWorker.modelId }}
-        </div>
+        <div class="wd-row">🤖 {{ selectedWorker.modelId }}</div>
         <div class="wd-row" v-if="selectedWorker.skills?.length">
           🔧 {{ selectedWorker.skills.join(', ') }}
         </div>
         <a-divider />
         <div class="wd-assign-section">
-          <div class="wd-assign-label">所属部门</div>
-          <a-select
-            :model-value="orgStore.getWorkerDept(selectedWorker.id)"
+          <div class="wd-assign-label">所属节点</div>
+          <a-tree-select
+            :model-value="orgStore.getWorkerNodeId(selectedWorker.id)"
+            :data="treeSelectData"
             allow-clear
-            :placeholder="t('org.unassigned')"
+            placeholder="未分配"
             style="width:100%"
             @change="(v: string | null) => orgStore.assignWorker(selectedWorker!.id, v ?? null)"
-          >
-            <a-option v-for="d in orgStore.departments" :key="d.id" :value="d.id">{{ d.name }}</a-option>
-          </a-select>
+          />
         </div>
       </div>
     </a-drawer>
 
-    <!-- Create department modal -->
+    <!-- Add/edit node modal -->
     <a-modal
-      v-model:visible="showCreateDept"
-      :title="t('org.createDepartment')"
-      @ok="handleCreateDept"
-      @cancel="showCreateDept = false"
+      v-model:visible="showNodeModal"
+      :title="nodeModalMode === 'add' ? t('org.addSubUnit') : t('org.editNode')"
+      @ok="handleSaveNode"
+      @cancel="showNodeModal = false"
     >
       <a-form layout="vertical">
-        <a-form-item :label="t('org.departmentName')">
-          <a-input v-model="newDept.name" :placeholder="t('org.departmentNamePlaceholder')" />
+        <a-form-item :label="t('common.name')">
+          <a-input v-model="nodeForm.name" :placeholder="t('org.nodeNamePlaceholder')" />
+        </a-form-item>
+        <a-form-item :label="t('org.nodeType')">
+          <a-select v-model="nodeForm.type" allow-create>
+            <a-option v-for="opt in NODE_TYPE_OPTIONS.filter(o => o.value !== 'root')" :key="opt.value" :value="opt.value">
+              {{ opt.icon }} {{ opt.label }}
+            </a-option>
+          </a-select>
         </a-form-item>
         <a-form-item :label="t('common.description')">
-          <a-input v-model="newDept.description" :placeholder="t('org.departmentDescPlaceholder')" />
+          <a-textarea v-model="nodeForm.description" :auto-size="{ minRows: 2 }" />
         </a-form-item>
       </a-form>
     </a-modal>
 
-    <!-- Edit company/dept info modal -->
-    <a-modal
-      v-model:visible="showEditInfo"
-      :title="selectedDeptId ? t('org.editDepartment') : t('org.editCompany')"
-      @ok="handleSaveInfo"
-      @cancel="showEditInfo = false"
-    >
-      <a-form layout="vertical">
-        <a-form-item :label="selectedDeptId ? t('org.departmentName') : t('org.companyName')">
-          <a-input v-model="editInfoForm.name" />
-        </a-form-item>
-        <a-form-item :label="t('common.description')">
-          <a-textarea v-model="editInfoForm.description" :auto-size="{ minRows: 2 }" />
-        </a-form-item>
-      </a-form>
-    </a-modal>
-
-    <!-- Assign workers to dept modal -->
+    <!-- Assign workers modal -->
     <a-modal
       v-model:visible="showAssignWorker"
-      :title="t('org.assignWorker')"
+      :title="`分配 Worker 到「${currentNode?.name}」`"
       @ok="handleBatchAssign"
       @cancel="showAssignWorker = false"
     >
-      <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px">
-        选择要加入「{{ selectedDept?.name }}」的 Worker
+      <p style="font-size:12px; color:var(--text-secondary); margin-bottom:12px">
+        勾选后，Worker 将从原位置移动到此节点
       </p>
       <a-checkbox-group v-model="assignSelection" style="display:flex; flex-direction:column; gap:8px">
         <a-checkbox v-for="w in workersStore.workers" :key="w.id" :value="w.id">
           {{ workerAvatar(w) }} {{ w.name }}
-          <a-tag v-if="getDeptName(w.id)" size="small" color="arcoblue" style="margin-left:6px">{{ getDeptName(w.id) }}</a-tag>
+          <span v-if="orgStore.getWorkerNodeId(w.id)" style="font-size:11px; color:var(--text-tertiary); margin-left:4px">
+            → {{ getNodeName(orgStore.getWorkerNodeId(w.id)) }}
+          </span>
         </a-checkbox>
       </a-checkbox-group>
     </a-modal>
@@ -429,9 +372,10 @@
 import { ref, computed, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useWorkersStore } from '@/stores/workers';
-import { useOrgStore, type OrgGoal } from '@/stores/org';
+import { useOrgStore, NODE_TYPE_OPTIONS, nodeTypeIcon, nodeTypeLabel, totalMembers, type OrgGoal } from '@/stores/org';
 import type { ApiWorker } from '@/api/client';
 import { Message } from '@arco-design/web-vue';
+import OrgTreeNode from '@/components/OrgTreeNode.vue';
 
 const { t } = useI18n();
 const workersStore = useWorkersStore();
@@ -439,70 +383,76 @@ const orgStore = useOrgStore();
 
 onMounted(() => { void workersStore.fetchWorkers(); });
 
-const selectedDeptId    = ref<string | null>(null);
+const selectedId        = ref<string>('root');
 const selectedWorkerId  = ref<string | null>(null);
 const viewMode          = ref<'grid' | 'list'>('grid');
-const expandedDepts     = ref<Set<string>>(new Set());
 
-const showCreateDept    = ref(false);
-const showEditInfo      = ref(false);
+const showNodeModal     = ref(false);
 const showAssignWorker  = ref(false);
 const showGoalModal     = ref(false);
+const nodeModalMode     = ref<'add' | 'edit'>('add');
+const addChildParentId  = ref<string | null>(null);
 const assignSelection   = ref<string[]>([]);
 
-const newDept = reactive({ name: '', description: '' });
-const editInfoForm = reactive({ name: '', description: '' });
-
+const nodeForm = reactive({ name: '', description: '', type: 'department' });
 const editingGoalId = ref<string | null>(null);
-const goalForm = reactive({ title: '', description: '', priority: 'medium' as OrgGoal['priority'], status: 'active' as OrgGoal['status'] });
+const goalForm = reactive({
+  title: '', description: '',
+  priority: 'medium' as OrgGoal['priority'],
+  status: 'active' as OrgGoal['status'],
+});
 
 // ── Computed ───────────────────────────────────────────────────────────────
 
-const selectedDept = computed(() =>
-  selectedDeptId.value ? orgStore.departments.find(d => d.id === selectedDeptId.value) : null
+const currentNode = computed(() => orgStore.node(selectedId.value) ?? orgStore.root);
+
+const breadcrumb = computed(() => orgStore.path(selectedId.value));
+
+const currentNodeWorkers = computed((): ApiWorker[] => {
+  if (!currentNode.value) return [];
+  return currentNode.value.memberIds
+    .map(id => workersStore.workers.find(w => w.id === id))
+    .filter((w): w is ApiWorker => !!w);
+});
+
+const leaderWorker = computed(() =>
+  currentNode.value?.leaderId
+    ? workersStore.workers.find(w => w.id === currentNode.value!.leaderId)
+    : null
 );
 
 const selectedWorker = computed(() =>
   selectedWorkerId.value ? workersStore.workers.find(w => w.id === selectedWorkerId.value) : null
 );
 
-const displayWorkers = computed(() => {
-  if (selectedDept.value) {
-    return selectedDept.value.memberIds
-      .map(id => workersStore.workers.find(w => w.id === id))
-      .filter((w): w is ApiWorker => !!w);
+/** TreeSelect data for worker drawer */
+const treeSelectData = computed(() => {
+  function toTree(n: typeof orgStore.root): object {
+    return { key: n.id, title: `${nodeTypeIcon(n.type)} ${n.name}`, children: n.children.map(toTree) };
   }
-  return workersStore.workers;
+  return [toTree(orgStore.root)];
 });
-
-const unassignedWorkers = computed(() =>
-  workersStore.workers.filter(w => !orgStore.getWorkerDept(w.id))
-);
-
-const currentGoals = computed<OrgGoal[]>(() =>
-  selectedDept.value ? selectedDept.value.goals : orgStore.company.goals
-);
-
-const currentTargetId = computed(() => selectedDeptId.value ?? 'company');
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function getWorker(id: string): ApiWorker | undefined {
-  return workersStore.workers.find(w => w.id === id);
+function workerNodePath(workerId: string): string {
+  const nodeId = orgStore.getWorkerNodeId(workerId);
+  if (!nodeId) return '';
+  return orgStore.path(nodeId).map(n => n.name).join(' › ');
 }
 
-function getDeptName(workerId: string): string | null {
-  const deptId = orgStore.getWorkerDept(workerId);
-  return deptId ? (orgStore.departments.find(d => d.id === deptId)?.name ?? null) : null;
+function getNodeName(nodeId: string | null): string {
+  if (!nodeId) return '';
+  return orgStore.node(nodeId)?.name ?? nodeId;
 }
 
-const ROLE_AVATARS: Record<string, string> = {
-  secretary: '🤵', research: '🔬', code: '💻', writer: '✍️', data: '📊',
-};
+const ROLE_AVATARS: [string, string][] = [
+  ['secretary', '🤵'], ['research', '🔬'], ['code', '💻'], ['writer', '✍️'], ['data', '📊'],
+];
 
 function workerAvatar(w: ApiWorker | undefined): string {
   if (!w) return '🤖';
-  for (const [k, v] of Object.entries(ROLE_AVATARS)) {
+  for (const [k, v] of ROLE_AVATARS) {
     if (w.id.includes(k) || w.name.includes(k)) return v;
   }
   return '🤖';
@@ -510,15 +460,8 @@ function workerAvatar(w: ApiWorker | undefined): string {
 
 function workerRoleLabel(role: string | undefined): string {
   if (!role) return '';
-  // Extract first sentence or truncate long system prompts
   const first = role.split('。')[0]?.split('.')[0] ?? role;
-  return first.length > 30 ? first.slice(0, 30) + '…' : first;
-}
-
-function toggleDept(deptId: string) {
-  const s = new Set(expandedDepts.value);
-  s.has(deptId) ? s.delete(deptId) : s.add(deptId);
-  expandedDepts.value = s;
+  return first.length > 28 ? first.slice(0, 28) + '…' : first;
 }
 
 function priorityColor(p: OrgGoal['priority']) {
@@ -529,55 +472,56 @@ function statusColor(s: OrgGoal['status']) {
   return { active: 'arcoblue', completed: 'green', paused: 'gray' }[s];
 }
 
-// ── Actions ────────────────────────────────────────────────────────────────
+// ── Node actions ───────────────────────────────────────────────────────────
 
-function handleCreateDept() {
-  if (!newDept.name) return;
-  orgStore.createDepartment(newDept.name, newDept.description);
-  Object.assign(newDept, { name: '', description: '' });
-  showCreateDept.value = false;
+function openAddChild(parentId: string) {
+  addChildParentId.value = parentId;
+  nodeModalMode.value = 'add';
+  Object.assign(nodeForm, { name: '', description: '', type: 'department' });
+  showNodeModal.value = true;
+}
+
+function openEditNode() {
+  nodeModalMode.value = 'edit';
+  Object.assign(nodeForm, {
+    name: currentNode.value?.name ?? '',
+    description: currentNode.value?.description ?? '',
+    type: currentNode.value?.type ?? 'department',
+  });
+  showNodeModal.value = true;
+}
+
+function handleSaveNode() {
+  if (!nodeForm.name) return;
+  if (nodeModalMode.value === 'add') {
+    const child = orgStore.addChild(addChildParentId.value, { ...nodeForm });
+    selectedId.value = child.id;
+  } else {
+    orgStore.updateNode(currentNode.value!.id, { ...nodeForm });
+  }
+  showNodeModal.value = false;
   Message.success(t('common.success'));
 }
 
-function handleDeleteDept(id: string) {
-  orgStore.deleteDepartment(id);
-  if (selectedDeptId.value === id) selectedDeptId.value = null;
-}
-
-function openEditInfo() {
-  if (selectedDept.value) {
-    Object.assign(editInfoForm, { name: selectedDept.value.name, description: selectedDept.value.description });
-  } else {
-    Object.assign(editInfoForm, { name: orgStore.company.name, description: orgStore.company.description });
-  }
-  showEditInfo.value = true;
-}
-
-function handleSaveInfo() {
-  if (selectedDeptId.value) {
-    orgStore.updateDepartment(selectedDeptId.value, { name: editInfoForm.name, description: editInfoForm.description });
-  } else {
-    orgStore.updateCompany({ name: editInfoForm.name, description: editInfoForm.description });
-  }
-  showEditInfo.value = false;
+function handleDeleteNode() {
+  const parentPath = orgStore.path(currentNode.value!.id);
+  orgStore.deleteNode(currentNode.value!.id);
+  // Navigate to parent
+  selectedId.value = parentPath[parentPath.length - 2]?.id ?? 'root';
   Message.success(t('common.success'));
-}
-
-function openAssignSingle(workerId: string) {
-  selectedWorkerId.value = workerId;
 }
 
 function handleBatchAssign() {
-  if (!selectedDeptId.value) return;
+  if (!currentNode.value) return;
   for (const wId of assignSelection.value) {
-    orgStore.assignWorker(wId, selectedDeptId.value);
+    orgStore.assignWorker(wId, currentNode.value.id);
   }
   assignSelection.value = [];
   showAssignWorker.value = false;
   Message.success(t('common.success'));
 }
 
-// ── Goals ──────────────────────────────────────────────────────────────────
+// ── Goal actions ───────────────────────────────────────────────────────────
 
 function openAddGoal() {
   editingGoalId.value = null;
@@ -592,18 +536,14 @@ function openEditGoal(goal: OrgGoal) {
 }
 
 function handleSaveGoal() {
-  if (!goalForm.title) return;
+  if (!goalForm.title || !currentNode.value) return;
   if (editingGoalId.value) {
-    orgStore.updateGoal(currentTargetId.value, editingGoalId.value, { ...goalForm });
+    orgStore.updateGoal(currentNode.value.id, editingGoalId.value, { ...goalForm });
   } else {
-    orgStore.addGoal(currentTargetId.value, { ...goalForm });
+    orgStore.addGoal(currentNode.value.id, { ...goalForm });
   }
   showGoalModal.value = false;
   Message.success(t('common.success'));
-}
-
-function handleDeleteGoal(goalId: string) {
-  orgStore.deleteGoal(currentTargetId.value, goalId);
 }
 </script>
 
@@ -632,65 +572,15 @@ function handleDeleteGoal(goalId: string) {
   align-items: center;
   justify-content: space-between;
   padding: 16px 16px 12px;
+  flex-shrink: 0;
 }
 
-.sub-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
+.sub-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 
-.company-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px 12px;
-  border-radius: 8px;
-  margin: 0 8px;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-.company-info:hover,
-.company-info.active { background: rgba(22,93,255,0.08); }
-
-.company-logo { font-size: 30px; flex-shrink: 0; }
-.company-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.company-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
-
-.dept-list {
+.tree-container {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 8px;
-}
-
-.dept-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 10px;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: background 0.12s;
-  color: var(--text-secondary);
-  position: relative;
-}
-
-.dept-item:hover { background: rgba(22, 93, 255, 0.05); color: var(--text-primary); }
-.dept-item.active { background: rgba(22, 93, 255, 0.1); color: #165dff; }
-
-.dept-icon { font-size: 18px; flex-shrink: 0; }
-.dept-info { min-width: 0; flex: 1; }
-.dept-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dept-count { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
-
-.dept-del-btn { opacity: 0; transition: opacity 0.15s; }
-.dept-item:hover .dept-del-btn { opacity: 1; }
-
-.no-depts {
-  text-align: center;
-  padding: 20px;
-  font-size: 12px;
-  color: var(--text-tertiary);
+  padding: 4px 8px 8px;
 }
 
 /* ─── Main ───────────────────────────────────────────────────────────── */
@@ -698,52 +588,84 @@ function handleDeleteGoal(goalId: string) {
 .org-main {
   flex: 1;
   overflow-y: auto;
-  padding: 0 24px 24px;
+  padding: 0 24px 40px;
   background: var(--bg-card);
 }
 
-.main-breadcrumb {
+/* Breadcrumb */
+.breadcrumb {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 14px 0 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 14px 0 4px;
+  font-size: 12px;
 }
 
-.bc-link {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.bc-item {
   color: #165dff;
   cursor: pointer;
-  font-weight: 500;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background 0.12s;
 }
-.bc-link:hover { text-decoration: underline; }
-.bc-sep { font-size: 14px; color: var(--text-tertiary); }
-.bc-current { font-weight: 600; color: var(--text-primary); }
+.bc-item:hover { background: rgba(22,93,255,0.08); }
+.bc-item.last { color: var(--text-primary); font-weight: 600; cursor: default; }
+.bc-item.last:hover { background: none; }
+.bc-sep { color: var(--text-tertiary); }
 
-.view-header {
+/* Node header */
+.node-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 16px 0 12px;
+  padding: 12px 0 16px;
+  gap: 16px;
 }
 
-.view-title-group h2 {
+.nh-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.nh-icon { font-size: 36px; flex-shrink: 0; margin-top: 2px; }
+
+.nh-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.nh-title-row h2 {
   font-size: 20px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  margin: 0;
 }
 
-.view-desc { font-size: 13px; color: var(--text-secondary); }
+.nh-desc { font-size: 13px; color: var(--text-secondary); margin: 0; }
 
-.view-actions {
+.nh-actions { display: flex; gap: 8px; flex-shrink: 0; padding-top: 4px; }
+
+/* Leader */
+.leader-section {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-base);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  margin-bottom: 16px;
+  font-size: 13px;
 }
+
+.leader-label { color: var(--text-secondary); flex-shrink: 0; }
 
 /* ─── Goals ──────────────────────────────────────────────────────────── */
 
@@ -771,8 +693,7 @@ function handleDeleteGoal(goalId: string) {
   color: var(--text-primary);
 }
 
-.goals-icon { font-size: 16px; }
-.goals-empty { text-align: center; padding: 14px 0; font-size: 13px; color: var(--text-tertiary); }
+.goals-empty { text-align: center; padding: 12px 0; font-size: 13px; color: var(--text-tertiary); }
 
 .goals-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -784,28 +705,57 @@ function handleDeleteGoal(goalId: string) {
   border-radius: 10px;
   border: 1px solid var(--border-color);
   background: var(--bg-card);
-  transition: all 0.15s;
+  transition: border-color 0.15s;
 }
-.goal-item:hover { border-color: rgba(22,93,255,0.3); box-shadow: 0 1px 6px rgba(22,93,255,0.08); }
+.goal-item:hover { border-color: rgba(22,93,255,0.3); }
 .goal-item.status-completed { opacity: 0.65; }
 
 .goal-main { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
 
-.goal-status-dot {
-  width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0;
-}
+.goal-status-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
 .goal-status-dot.active    { background: #00b42a; }
 .goal-status-dot.paused    { background: #ff7d00; }
 .goal-status-dot.completed { background: #86909c; }
 
 .goal-content { flex: 1; min-width: 0; }
-.goal-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.goal-title-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .goal-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.goal-badges { display: flex; gap: 4px; }
 .goal-desc { font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.5; }
 .goal-actions { display: flex; gap: 2px; flex-shrink: 0; margin-left: 8px; }
 
-/* ─── Section header ─────────────────────────────────────────────────── */
+/* ─── Sub units ──────────────────────────────────────────────────────── */
+
+.sub-units-section { margin-bottom: 16px; }
+
+.sub-units-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.sub-unit-card {
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sub-unit-card:hover {
+  border-color: #165dff;
+  box-shadow: 0 2px 8px rgba(22,93,255,0.1);
+}
+
+.suc-icon { font-size: 28px; margin-bottom: 8px; }
+.suc-name { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.suc-meta { display: flex; align-items: center; gap: 8px; }
+.suc-count { font-size: 12px; color: var(--text-tertiary); }
+.suc-goals { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+
+/* ─── Members ────────────────────────────────────────────────────────── */
+
+.members-section { margin-top: 0; }
 
 .section-header {
   display: flex;
@@ -814,35 +764,33 @@ function handleDeleteGoal(goalId: string) {
   margin-bottom: 12px;
 }
 
-.section-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-/* ─── Worker Grid ────────────────────────────────────────────────────── */
+.section-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.section-actions { display: flex; align-items: center; gap: 8px; }
 
 .worker-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 12px;
 }
 
 .worker-card {
   background: var(--bg-base);
   border-radius: 14px;
-  padding: 20px 16px;
+  padding: 16px 14px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s;
   border: 2px solid transparent;
+  position: relative;
 }
 .worker-card:hover { border-color: var(--border-color); box-shadow: var(--shadow-sm); }
 .worker-card.selected { border-color: #165dff; background: rgba(22,93,255,0.04); }
+.worker-card.leader { border-color: rgba(250,173,20,0.5); background: rgba(250,173,20,0.04); }
 
-.wc-avatar { font-size: 40px; margin-bottom: 10px; }
-.wc-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.wc-role { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+.wc-leader-crown { position: absolute; top: 8px; right: 10px; font-size: 14px; }
+.wc-avatar { font-size: 36px; margin-bottom: 8px; }
+.wc-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.wc-role { font-size: 11px; color: var(--text-secondary); margin-top: 3px; }
 .wc-status {
   font-size: 11px;
   color: var(--text-tertiary);
@@ -852,117 +800,24 @@ function handleDeleteGoal(goalId: string) {
   justify-content: center;
   gap: 5px;
 }
-.wc-dept-tag { margin-top: 8px; }
-.wc-primary-badge { margin-top: 6px; }
+.wc-model { font-size: 10px; color: var(--text-tertiary); margin-top: 3px; font-family: monospace; }
 
-.workers-empty {
-  grid-column: 1 / -1;
+.members-empty {
+  grid-column: 1/-1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 40px 0;
+  gap: 8px;
+  padding: 32px 0;
   color: var(--text-tertiary);
   font-size: 13px;
 }
 
 /* Status dot */
-.status-dot {
-  display: inline-block;
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-}
-.status-dot.sm { width: 6px; height: 6px; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.online  { background: #00b42a; }
 .status-dot.idle    { background: #ff7d00; }
 .status-dot.offline { background: #86909c; }
-
-/* ─── Org Tree ───────────────────────────────────────────────────────── */
-
-.org-overview {
-  margin-top: 28px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border-color);
-}
-
-.overview-title {
-  font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 20px;
-}
-
-.org-tree { font-size: 14px; }
-
-.ot-root { margin-bottom: 4px; }
-
-.ot-node {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-base);
-  cursor: pointer;
-  transition: all 0.15s;
-  user-select: none;
-}
-
-.root-node {
-  cursor: default;
-  background: linear-gradient(135deg, rgba(22,93,255,0.06), rgba(114,46,209,0.06));
-  border-color: rgba(22,93,255,0.2);
-  font-size: 15px;
-}
-.root-node .ot-avatar { font-size: 22px; }
-
-.ot-children {
-  margin-left: 24px;
-  border-left: 1.5px solid var(--border-color);
-}
-
-.member-children { border-left-color: rgba(22,93,255,0.2); }
-
-.ot-branch { position: relative; padding: 4px 0 4px 20px; }
-.ot-branch::before {
-  content: ''; position: absolute; left: 0; top: 20px;
-  width: 20px; height: 1.5px; background: var(--border-color);
-}
-.member-children > .ot-branch::before { background: rgba(22,93,255,0.2); }
-
-.dept-node { color: var(--text-primary); gap: 7px; }
-.dept-node:hover { background: rgba(22,93,255,0.06); border-color: #165dff; }
-.dept-node.expanded { background: rgba(22,93,255,0.08); border-color: rgba(22,93,255,0.4); color: #165dff; }
-
-.ot-expand { font-size: 12px; width: 14px; text-align: center; color: var(--text-tertiary); flex-shrink: 0; }
-.ot-icon { font-size: 15px; color: inherit; }
-.ot-name { font-weight: 500; }
-.ot-meta { font-size: 11px; color: var(--text-tertiary); margin-left: 4px; }
-.ot-role { font-size: 12px; color: var(--text-tertiary); }
-.ot-avatar { font-size: 18px; }
-
-.dept-nav-btn { opacity: 0; transition: opacity 0.15s; margin-left: 4px; }
-.dept-node:hover .dept-nav-btn { opacity: 1; }
-
-.member-node {
-  border-color: rgba(22,93,255,0.1); background: var(--bg-card); color: var(--text-secondary); gap: 8px;
-}
-.member-node:hover {
-  background: rgba(22,93,255,0.04); border-color: rgba(22,93,255,0.2); color: var(--text-primary);
-}
-
-/* Unassigned block */
-.unassigned-block {
-  margin-top: 20px;
-  padding: 12px 16px;
-  border-radius: 10px;
-  border: 1px dashed var(--border-color);
-}
-.ua-title { font-size: 12px; color: var(--text-tertiary); margin-bottom: 8px; }
-.ua-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-
-/* Tree expand animation */
-.tree-slide-enter-active { transition: all 0.2s ease; overflow: hidden; }
-.tree-slide-leave-active { transition: all 0.15s ease; overflow: hidden; }
-.tree-slide-enter-from,
-.tree-slide-leave-to { opacity: 0; transform: translateY(-6px); }
 
 /* ─── Worker Drawer ──────────────────────────────────────────────────── */
 
@@ -974,9 +829,9 @@ function handleDeleteGoal(goalId: string) {
   gap: 8px;
 }
 
-.wd-avatar { font-size: 60px; margin-bottom: 8px; }
+.wd-avatar { font-size: 56px; margin-bottom: 8px; }
 .worker-detail h2 { font-size: 20px; font-weight: 700; color: var(--text-primary); }
-.wd-role { color: var(--text-secondary); font-size: 13px; text-align: center; }
+.wd-role { color: var(--text-secondary); font-size: 13px; text-align: center; max-width: 240px; }
 
 .wd-row {
   display: flex;
@@ -985,7 +840,7 @@ function handleDeleteGoal(goalId: string) {
   font-size: 13px;
   color: var(--text-secondary);
   width: 100%;
-  padding: 4px 0;
+  padding: 3px 0;
 }
 
 .wd-assign-section { width: 100%; }

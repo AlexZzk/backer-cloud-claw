@@ -366,41 +366,42 @@ const maxDayVal = computed(() =>
 const workerTableData = computed(() => {
   const byWorker = stats.value?.byWorker ?? [];
   return byWorker.map(w => {
-    const deptId = orgStore.getWorkerDept(w.workerId);
-    const dept = deptId ? orgStore.departments.find(d => d.id === deptId)?.name ?? null : null;
+    const nodeId = orgStore.getWorkerNodeId(w.workerId);
+    const dept = nodeId ? orgStore.node(nodeId)?.name ?? null : null;
     return { ...w, dept };
   }).sort((a, b) => b.totalTokens - a.totalTokens);
 });
 
-// Department table data — aggregated from real worker data
+// Node table data — every node that has workers with token usage
 const deptTableData = computed(() => {
-  return orgStore.departments.map(dept => {
-    let input = 0, output = 0, value = 0;
-    for (const wId of dept.memberIds) {
-      const wt = stats.value?.byWorker.find(w => w.workerId === wId);
-      if (wt) { input += wt.inputTokens; output += wt.outputTokens; value += wt.totalTokens; }
-    }
-    return { deptId: dept.id, name: dept.name, input, output, value };
-  }).filter(d => d.value > 0).sort((a, b) => b.value - a.value);
+  return orgStore.allNodes()
+    .filter(n => n.memberIds.length > 0)
+    .map(n => {
+      let input = 0, output = 0, value = 0;
+      for (const wId of n.memberIds) {
+        const wt = stats.value?.byWorker.find(w => w.workerId === wId);
+        if (wt) { input += wt.inputTokens; output += wt.outputTokens; value += wt.totalTokens; }
+      }
+      return { deptId: n.id, name: n.name, input, output, value };
+    })
+    .filter(d => d.value > 0)
+    .sort((a, b) => b.value - a.value);
 });
 
-// Per-dept member breakdown
+// Per-node member breakdown
 const deptMemberBreakdown = computed(() => {
-  return orgStore.departments.map(dept => {
-    const members = dept.memberIds.map(wId => {
-      const worker = workersStore.workers.find(w => w.id === wId);
-      const wt = stats.value?.byWorker.find(w => w.workerId === wId);
-      return {
-        workerId: wId,
-        name: worker?.name ?? wId,
-        avatar: '🤖',
-        workerName: wt?.workerName ?? null,
-        tokens: wt?.totalTokens ?? 0,
-      };
-    });
-    const total = members.reduce((s, m) => s + m.tokens, 0);
-    return { deptId: dept.id, name: dept.name, members, total };
-  }).filter(d => d.total > 0);
+  return orgStore.allNodes()
+    .filter(n => n.memberIds.length > 0)
+    .map(n => {
+      const members = n.memberIds.map(wId => {
+        const worker = workersStore.workers.find(w => w.id === wId);
+        const wt = stats.value?.byWorker.find(w => w.workerId === wId);
+        return { workerId: wId, name: worker?.name ?? wId, avatar: '🤖', workerName: wt?.workerName ?? null, tokens: wt?.totalTokens ?? 0 };
+      });
+      const total = members.reduce((s, m) => s + m.tokens, 0);
+      return { deptId: n.id, name: n.name, members, total };
+    })
+    .filter(d => d.total > 0);
 });
 
 const donutColors = ['#165dff', '#722ed1', '#00b42a', '#ff7d00', '#f53f3f'];
