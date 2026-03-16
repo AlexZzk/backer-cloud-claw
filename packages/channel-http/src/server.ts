@@ -39,6 +39,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { readdir, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import { AgentEngine } from '@bcc/agent-engine';
 import { getBuiltinTool, findBuiltin, SkillRegistry, saveUserSkill, deleteUserSkill, SkillHub } from '@bcc/skills';
 import type { AgentInterface, AgentChunk, OrgMessage, Tool } from '@bcc/foundation';
@@ -779,7 +781,7 @@ export class HttpServer {
 
     // ── DELETE /api/sessions  (批量删除所有会话)
     if (method === 'DELETE' && path === '/api/sessions') {
-      this.handleDeleteAllSessions(res);
+      await this.handleDeleteAllSessions(res);
       return;
     }
 
@@ -1370,13 +1372,31 @@ export class HttpServer {
     }
   }
 
-  /** DELETE /api/sessions — 批量删除所有会话 */
-  private handleDeleteAllSessions(res: ServerResponse) {
+  /** DELETE /api/sessions — 批量删除所有会话（含 Worker 记忆文件） */
+  private async handleDeleteAllSessions(res: ServerResponse) {
+    // 1. 删除 HTTP 会话（SessionStore 管理的文件）
     const all = this.store.listAll();
     let count = 0;
     for (const session of all) {
       if (this.store.delete(session.id)) count++;
     }
+
+    // 2. 删除 Worker 的持久化记忆文件（worker-*.json in sessionDir）
+    if (this.config.defaults.enableMemory) {
+      const sessionDir = this.config.defaults.sessionDir;
+      try {
+        const files = await readdir(sessionDir);
+        for (const f of files) {
+          if (f.startsWith('worker-') && f.endsWith('.json')) {
+            await unlink(join(sessionDir, f)).catch(() => {});
+            count++;
+          }
+        }
+      } catch {
+        // 目录不存在时忽略
+      }
+    }
+
     ok(res, { deleted: count });
   }
 
@@ -1557,14 +1577,21 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary } = body;
-    if (!id?.trim())      { badRequest(res, '"id" is required'); return; }
+    const { id: rawId, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary } = body;
     if (!name?.trim())    { badRequest(res, '"name" is required'); return; }
     if (!modelId?.trim()) { badRequest(res, '"modelId" is required'); return; }
 
-    // ID 格式校验（只允许字母、数字、连字符、下划线）
-    if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
-      badRequest(res, '"id" must contain only letters, numbers, hyphens, or underscores'); return;
+    // ID：由客户端提供（可选），若不提供则系统自动生成
+    let id: string;
+    if (rawId?.trim()) {
+      // 如果提供了 ID，做格式校验
+      if (!/^[a-zA-Z0-9_-]+$/.test(rawId.trim())) {
+        badRequest(res, '"id" must contain only letters, numbers, hyphens, or underscores'); return;
+      }
+      id = rawId.trim();
+    } else {
+      // 自动生成：w + 8位随机十六进制，保证唯一且可读
+      id = 'w' + randomUUID().replace(/-/g, '').slice(0, 8);
     }
 
     const workers = this.config.workers ?? [];
@@ -1573,7 +1600,7 @@ export class HttpServer {
     }
 
     const newWorker: WorkerConfig = {
-      id: id.trim(),
+      id,
       name: name.trim(),
       modelId: modelId.trim(),
       ...(reviewModelId?.trim() && { reviewModelId: reviewModelId.trim() }),
@@ -1731,9 +1758,20 @@ export class HttpServer {
     this.evictAgent(workerId);
     this.company?.removeWorker(workerId);
 
+    // 删除 Worker 的持久化记忆文件（FileMemoryStore）
+    await this._deleteWorkerMemoryFile(workerId);
+
     cors(res);
     res.writeHead(204);
     res.end();
+  }
+
+  /** 删除 Worker 的 FileMemoryStore 文件（{sessionDir}/worker-{id}.json） */
+  private async _deleteWorkerMemoryFile(workerId: string): Promise<void> {
+    if (!this.config.defaults.enableMemory) return;
+    const sessionDir = this.config.defaults.sessionDir;
+    const filePath = join(sessionDir, `worker-${workerId}.json`);
+    await unlink(filePath).catch(() => {/* 文件不存在时静默忽略 */});
   }
 
   // ── 构建（或复用）Worker 专属的 AgentEngine ───────────────────────────────
