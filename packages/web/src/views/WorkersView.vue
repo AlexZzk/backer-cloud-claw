@@ -304,7 +304,23 @@
       </a-form-item>
 
       <a-form-item :label="t('workers.workerSkills')">
-        <a-input-tag v-model="form.skills" :placeholder="t('common.create') + '...'" allow-clear />
+        <a-select
+          v-model="form.skills"
+          multiple
+          allow-search
+          allow-clear
+          :max-tag-count="3"
+          :placeholder="t('workers.skillsPlaceholder')"
+        >
+          <a-option
+            v-for="opt in skillOptions"
+            :key="opt.value"
+            :value="opt.value"
+          >
+            <span style="font-weight: 500">{{ opt.label }}</span>
+            <span v-if="opt.extra" style="margin-left: 6px; font-size: 12px; color: var(--color-text-3)">{{ opt.extra }}</span>
+          </a-option>
+        </a-select>
       </a-form-item>
 
       <a-form-item label="Avatar">
@@ -323,12 +339,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue';
+import { ref, computed, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useWorkersStore } from '@/stores/workers';
 import { useModelsStore } from '@/stores/models';
 import { useChatStore } from '@/stores/chat';
+import { useSkillsStore } from '@/stores/skills';
 import { Modal, Message } from '@arco-design/web-vue';
 import type { MockWorker } from '@/stores/workers';
 
@@ -337,6 +354,25 @@ const router = useRouter();
 const workersStore = useWorkersStore();
 const modelsStore = useModelsStore();
 const chatStore = useChatStore();
+const skillsStore = useSkillsStore();
+
+onMounted(() => {
+  if (skillsStore.skills.length === 0) skillsStore.fetchSkills();
+});
+
+const skillOptions = computed(() => {
+  const groups: Record<string, { value: string; label: string; extra: string }[]> = {
+    builtin: [], user: [], project: [],
+  };
+  for (const s of skillsStore.skills) {
+    groups[s.source]?.push({ value: s.name, label: s.name, extra: s.description });
+  }
+  const result: { value: string; label: string; extra: string; group?: string }[] = [];
+  for (const [grp, items] of Object.entries(groups)) {
+    for (const item of items) result.push({ ...item, group: grp });
+  }
+  return result;
+});
 
 const searchText = ref('');
 const selectedId = ref<string | null>(null);

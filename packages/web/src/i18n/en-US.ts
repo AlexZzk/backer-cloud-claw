@@ -95,6 +95,7 @@ export default {
     confirmDelete: 'Delete this Worker?',
     deleteWarning: 'This action cannot be undone. Related chat history will also be deleted.',
     startChat: 'Start Chat',
+    skillsPlaceholder: 'Select skills...',
   },
   org: {
     title: 'Organization',
@@ -225,5 +226,7 @@ export default {
     promptPlaceholder: 'Prompt template; use {input} as a placeholder for user input',
     systemPlaceholder: 'Optional system prompt to override the default role',
     formRequired: 'Name, description, and prompt are required',
+    selectHint: '← Select a skill from the list to view details',
+    promptLabel: 'Prompt Template',
   },
 };

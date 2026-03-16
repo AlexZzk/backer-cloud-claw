@@ -16,3 +16,4 @@ export {
 } from './loader.js';
 export { SkillHub, defaultHub } from './hub.js';
 export type { HubSkill, HubSearchResult } from './hub.js';
+export { parseSkillMd, serializeSkillMd } from './loader.js';

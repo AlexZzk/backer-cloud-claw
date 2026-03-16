@@ -95,6 +95,7 @@ export default {
     confirmDelete: '确认删除这个 Worker？',
     deleteWarning: '删除后将无法恢复，相关对话历史也会被删除。',
     startChat: '开始对话',
+    skillsPlaceholder: '选择技能...',
   },
   org: {
     title: '组织架构',
@@ -225,5 +226,7 @@ export default {
     promptPlaceholder: '提示词模板，用 {input} 表示用户输入的位置',
     systemPlaceholder: '可选的 system prompt，用于临时切换角色',
     formRequired: '名称、描述和提示词为必填项',
+    selectHint: '← 从左侧选择一个技能查看详情',
+    promptLabel: '提示词模板',
   },
 };

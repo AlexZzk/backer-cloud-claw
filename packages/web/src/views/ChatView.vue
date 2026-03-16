@@ -158,7 +158,7 @@
                 <span class="contact-time">{{ chat.updatedAt ? formatTime(chat.updatedAt) : '' }}</span>
               </div>
               <div class="contact-last">
-                {{ chat.lastMessage ? chat.lastMessage.slice(0, 40) : '暂无消息' }}
+                {{ chat.lastMessage ? chat.lastMessage.content.slice(0, 40) : '暂无消息' }}
               </div>
             </div>
           </div>
