@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, readdir, access } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, readdir, unlink, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -218,6 +218,25 @@ export class ChatStore {
       msg.status = status;
       await this._save(file);
     }
+  }
+
+  /** 删除指定会话（删除磁盘文件） */
+  async deleteChat(chatId: string): Promise<boolean> {
+    const path = this._pathFor(chatId);
+    if (!(await this._exists(path))) return false;
+    await unlink(path).catch(() => {});
+    return true;
+  }
+
+  /** 删除所有会话（清空聊天目录） */
+  async deleteAllChats(): Promise<number> {
+    await this.ensureDir();
+    const files = await readdir(this.dir);
+    const jsonFiles = files.filter(f => f.endsWith('.json'));
+    for (const f of jsonFiles) {
+      await unlink(join(this.dir, f)).catch(() => {});
+    }
+    return jsonFiles.length;
   }
 
   /** 归档会话（不删除历史记录） */

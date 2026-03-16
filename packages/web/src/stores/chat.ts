@@ -1,6 +1,18 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { sessionsApi, dmApi, groupApi, chatsApi, sendMessageStream, type ApiSession, type ApiMessage, type SessionType, type ApiAsyncChat, type ApiAsyncChatMessage } from '@/api/client';
+
+/** 统一显示格式：将 ApiAsyncChatMessage 规范化为与 ApiMessage 兼容的消息 */
+export interface NormalizedMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  tokenUsage?: { inputTokens: number; outputTokens: number };
+  speakerId?: string;
+  /** 标记该消息来自异步通知渠道（Worker 主动 notify_user） */
+  isNotify?: boolean;
+}
 import { useWorkersStore } from './workers';
 
 export type { ApiMessage as MockMessage };
@@ -28,10 +40,13 @@ export const useChatStore = defineStore('chat', () => {
   const loading = ref(false);
   const sessionsLoaded = ref(false);  // 是否已完成初始加载
 
-  // ─── Async chats（CLI Worker 间异步消息，来自 send_message 工具）───────────
+  // ─── Async chats（Worker 间异步消息，来自 send_message 工具）───────────────
   const asyncChats = ref<ApiAsyncChat[]>([]);
   const activeAsyncChatId = ref<string | null>(null);
   const activeAsyncChatMessages = ref<ApiAsyncChatMessage[]>([]);
+
+  /** Worker → 用户 的主动通知消息（来自 notify_user 工具），用于在主聊天窗口展示 */
+  const activeWorkerNotifyMessages = ref<NormalizedMessage[]>([]);
 
   // ─── Computed ───────────────────────────────────────────────────────────
 
@@ -54,18 +69,33 @@ export const useChatStore = defineStore('chat', () => {
           .sort((a, b) => b.updatedAt - a.updatedAt);
         const latest = workerSessions[0];
         const lastMsg = latest?.messages[latest.messages.length - 1];
+
+        // 查找该 Worker 与用户的直接异步聊天（来自 notify_user）
+        const directChat = userWorkerDirectChats.value.find(c => c.participants.includes(worker.id));
+        const sessionUpdatedAt = latest?.updatedAt ?? 0;
+        const directChatUpdatedAt = directChat?.updatedAt ?? 0;
+        const updatedAt = Math.max(sessionUpdatedAt, directChatUpdatedAt);
+
+        // 最新消息：取时间最近的来源
+        let lastMessage = lastMsg?.content.slice(0, 50) ?? '';
+        if (directChat?.lastMessage && directChatUpdatedAt > sessionUpdatedAt) {
+          lastMessage = directChat.lastMessage.content.slice(0, 50);
+        }
+
         return {
           worker,
           latestSession: latest ?? null,
-          lastMessage: lastMsg?.content.slice(0, 50) ?? '',
-          updatedAt: latest?.updatedAt ?? 0,
+          lastMessage,
+          updatedAt,
           sessionCount: workerSessions.length,
+          hasDirectChat: !!directChat,
         };
       })
-      // 只显示有实际会话记录的 Worker（messages 已加载 或 messageCount > 0）
+      // 显示有会话记录 或 有 notify_user 直接消息的 Worker
       .filter(item =>
-        item.latestSession !== null &&
-        (item.latestSession.messages.length > 0 || item.latestSession.messageCount > 0)
+        item.hasDirectChat ||
+        (item.latestSession !== null &&
+          (item.latestSession.messages.length > 0 || item.latestSession.messageCount > 0))
       )
       .sort((a, b) => {
         if (a.worker.isPrimary) return -1;
@@ -88,9 +118,22 @@ export const useChatStore = defineStore('chat', () => {
       .sort((a, b) => b.updatedAt - a.updatedAt)
   );
 
-  /** 异步聊天列表（按更新时间降序） */
+  /**
+   * Worker → 用户 的直聊（notify_user 产生的 type=direct 且包含 'user' 的聊天）
+   * 这些消息应显示在"与我对话"的 Worker 聊天窗口中，而不是"员工间对话"
+   */
+  const userWorkerDirectChats = computed(() =>
+    asyncChats.value.filter(c => c.type === 'direct' && c.participants.includes('user'))
+  );
+
+  /**
+   * 员工间异步聊天列表（按更新时间降序）
+   * 排除 Worker → 用户 的直聊（已合并到主聊天窗口）
+   */
   const asyncChatList = computed(() =>
-    [...asyncChats.value].sort((a, b) => b.updatedAt - a.updatedAt)
+    [...asyncChats.value]
+      .filter(c => !(c.type === 'direct' && c.participants.includes('user')))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
   );
 
   // ─── Actions ────────────────────────────────────────────────────────────
@@ -151,6 +194,7 @@ export const useChatStore = defineStore('chat', () => {
   /**
    * 选中某个 Worker 并打开其最新会话（如有），懒加载消息
    * 参考微信风格：每个联系人只有一个对话窗口
+   * 同时加载来自 notify_user 的异步直聊消息（合并到同一窗口展示）
    */
   async function selectWorker(workerId: string): Promise<void> {
     activeWorkerId.value = workerId;
@@ -162,6 +206,33 @@ export const useChatStore = defineStore('chat', () => {
     // 懒加载消息：仅在未加载过时从后端获取
     if (latestSession && latestSession.messages.length === 0 && latestSession.messageCount > 0) {
       await loadSessionMessages(latestSession.id);
+    }
+
+    // 同时加载该 Worker 通过 notify_user 发给用户的异步消息
+    await loadWorkerNotifyMessages(workerId);
+  }
+
+  /**
+   * 加载指定 Worker 通过 notify_user 发给用户的异步直聊消息
+   * 将 ApiAsyncChatMessage 规范化为统一的 NormalizedMessage 格式
+   */
+  async function loadWorkerNotifyMessages(workerId: string): Promise<void> {
+    const directChat = userWorkerDirectChats.value.find(c => c.participants.includes(workerId));
+    if (!directChat) {
+      activeWorkerNotifyMessages.value = [];
+      return;
+    }
+    try {
+      const rawMessages = await chatsApi.getMessages(directChat.id);
+      activeWorkerNotifyMessages.value = rawMessages.map(m => ({
+        id: m.id,
+        role: (m.from === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: m.content,
+        timestamp: m.timestamp,
+        isNotify: true,
+      }));
+    } catch {
+      activeWorkerNotifyMessages.value = [];
     }
   }
 
@@ -363,6 +434,10 @@ export const useChatStore = defineStore('chat', () => {
   async function fetchAsyncChats(): Promise<void> {
     try {
       asyncChats.value = await chatsApi.list();
+      // 如果当前有活跃 Worker，刷新其 notify 消息
+      if (activeWorkerId.value) {
+        await loadWorkerNotifyMessages(activeWorkerId.value);
+      }
     } catch {
       asyncChats.value = [];
     }
@@ -384,11 +459,13 @@ export const useChatStore = defineStore('chat', () => {
   return {
     sessions, activeWorkerId, activeSessionId, activeSession,
     isThinking, loading, sessionsLoaded, contactList, dmList, groupSessionList,
-    asyncChats, asyncChatList, activeAsyncChatId, activeAsyncChatMessages,
+    asyncChats, asyncChatList, userWorkerDirectChats,
+    activeAsyncChatId, activeAsyncChatMessages,
+    activeWorkerNotifyMessages,
     getWorkerSessions, selectWorker, selectSession,
     newSession, newDmSession, newGroupSession, deleteSession, sendMessage, clearSession, renameSession, openWorkerChat,
     fetchAllSessions, loadSessionMessages,
-    fetchAsyncChats, selectAsyncChat,
+    fetchAsyncChats, selectAsyncChat, loadWorkerNotifyMessages,
   };
 });
 
