@@ -54,10 +54,21 @@ export const useWorkersStore = defineStore('workers', () => {
     { id: 'shell-exec', label: '执行 Shell 命令' },
   ];
 
+  /**
+   * 根据 SSE worker:state:changed 事件直接更新状态，无需重新请求。
+   * lifecycleState: 'idle' | 'processing' | 'sleeping' | 'blocked'
+   */
+  function applyStateChange(workerId: string, lifecycleState: string): void {
+    const w = workers.value.find(w => w.id === workerId);
+    if (!w) return;
+    w.status = lifecycleState === 'processing' ? 'busy' : 'online';
+  }
+
   return {
     workers, loading,
     fetchWorkers, getWorker,
     createWorker, updateWorker, deleteWorker,
+    applyStateChange,
     AVAILABLE_TOOLS,
   };
 });

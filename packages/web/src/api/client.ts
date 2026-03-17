@@ -27,7 +27,7 @@ export interface ApiWorker {
   role: string
   tools: string[]
   isPrimary: boolean
-  status: 'online' | 'idle' | 'offline'
+  status: 'online' | 'idle' | 'offline' | 'busy'
 }
 
 export type SessionType = 'chat' | 'dm' | 'group'

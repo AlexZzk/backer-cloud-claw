@@ -26,7 +26,7 @@ export interface ApiWorker {
   tools: string[];
   isPrimary: boolean;
   /** 运行时状态（简单标记，未来可接 heartbeat） */
-  status: 'online' | 'idle' | 'offline';
+  status: 'online' | 'idle' | 'offline' | 'busy';
 }
 
 // ─── Session ──────────────────────────────────────────────────────────────────

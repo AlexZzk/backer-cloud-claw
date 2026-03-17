@@ -861,9 +861,22 @@ export class HttpServer {
       role:        w.role,
       tools:       w.tools ?? [],
       isPrimary:   w.primary ?? false,
-      status:      'online' as const,
+      status:      this._resolveWorkerStatus(w.id),
     }));
     ok(res, workers);
+  }
+
+  /**
+   * 将 Worker 内部 lifecycle state 映射到 API status。
+   * - 未加入 Company（初始化失败 / 尚未启动）→ 'offline'
+   * - processing → 'busy'
+   * - idle / sleeping / blocked → 'online'
+   */
+  private _resolveWorkerStatus(workerId: string): ApiWorker['status'] {
+    if (!this.company) return 'offline';
+    const w = this.company.getWorker(workerId) as Worker | undefined;
+    if (!w) return 'offline';
+    return w.state === 'processing' ? 'busy' : 'online';
   }
 
   private async handleGetModels(res: ServerResponse) {
@@ -1747,7 +1760,7 @@ export class HttpServer {
       role:        newWorker.role,
       tools:       newWorker.tools ?? [],
       isPrimary:   newWorker.primary ?? false,
-      status:      'online',
+      status:      this._resolveWorkerStatus(newWorker.id),
     };
     ok(res, apiWorker, 201);
   }
@@ -1826,7 +1839,7 @@ export class HttpServer {
       role:        updated.role,
       tools:       updated.tools ?? [],
       isPrimary:   updated.primary ?? false,
-      status:      'online',
+      status:      this._resolveWorkerStatus(updated.id),
     };
     ok(res, apiWorker);
   }

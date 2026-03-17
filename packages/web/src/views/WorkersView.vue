@@ -333,7 +333,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted } from 'vue';
+import { ref, computed, reactive, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useWorkersStore } from '@/stores/workers';
@@ -350,8 +350,38 @@ const modelsStore = useModelsStore();
 const chatStore = useChatStore();
 const skillsStore = useSkillsStore();
 
+// ── SSE：监听 Worker 状态变更事件，实时更新在线/忙碌/下线 ──────────────────────
+let workerSse: EventSource | null = null;
+
+function startWorkerSse() {
+  if (workerSse) return;
+  workerSse = new EventSource('/api/events');
+  workerSse.addEventListener('org', (e: MessageEvent) => {
+    try {
+      const event = JSON.parse(e.data) as { type: string; workerId?: string; newState?: string };
+      if (event.type === 'worker:state:changed' && event.workerId && event.newState) {
+        workersStore.applyStateChange(event.workerId, event.newState);
+      }
+    } catch { /* ignore */ }
+  });
+  workerSse.onerror = () => {
+    stopWorkerSse();
+    setTimeout(startWorkerSse, 5_000);
+  };
+}
+
+function stopWorkerSse() {
+  workerSse?.close();
+  workerSse = null;
+}
+
 onMounted(() => {
   if (skillsStore.skills.length === 0) skillsStore.fetchSkills();
+  startWorkerSse();
+});
+
+onUnmounted(() => {
+  stopWorkerSse();
 });
 
 const skillOptions = computed(() => {
@@ -414,7 +444,7 @@ function workerAvatar(_worker: MockWorker) {
 }
 
 function statusColor(status: string) {
-  return { online: 'green', idle: 'orange', offline: 'gray' }[status] || 'gray';
+  return { online: 'green', idle: 'orange', offline: 'gray', busy: 'arcoblue' }[status] || 'gray';
 }
 
 function slugify(name: string) {
@@ -618,6 +648,11 @@ function confirmDelete(id: string) {
 .wl-status-dot.online { background: #00b42a; }
 .wl-status-dot.idle { background: #ff7d00; }
 .wl-status-dot.offline { background: #86909c; }
+.wl-status-dot.busy { background: #165dff; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 
 /* ─── Workers Main ───────────────────────────────────────────────────── */
 
