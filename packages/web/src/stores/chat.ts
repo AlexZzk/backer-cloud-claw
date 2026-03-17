@@ -79,7 +79,7 @@ export const useChatStore = defineStore('chat', () => {
         // 最新消息：取时间最近的来源
         let lastMessage = lastMsg?.content.slice(0, 50) ?? '';
         if (directChat?.lastMessage && directChatUpdatedAt > sessionUpdatedAt) {
-          lastMessage = directChat.lastMessage.content.slice(0, 50);
+          lastMessage = directChat.lastMessage.slice(0, 50);
         }
 
         return {
