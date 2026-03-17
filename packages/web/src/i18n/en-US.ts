@@ -218,6 +218,8 @@ export default {
     baseUrl: 'Base URL',
     baseUrlPlaceholder: 'https://api.example.com/v1',
     baseUrlHint: 'Leave blank to use the protocol default',
+    insecureSSL: 'Skip SSL Certificate Verification',
+    insecureSSLHint: 'Enable only when the endpoint uses a self-signed or private CA certificate',
     displayNamePlaceholder: 'e.g. Claude Sonnet',
     modelIdPlaceholder: 'e.g. claude-sonnet-4-6',
     confirmDeleteModel: 'Delete this model configuration?',

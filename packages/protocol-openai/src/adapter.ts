@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import https from 'node:https';
 import {
   ModelError,
   type CompletionParams,
@@ -52,6 +53,12 @@ export interface OpenAIAdapterOptions {
    * 例如："deepseek"、"bailian"、"custom"
    */
   provider?: string;
+
+  /**
+   * 跳过 HTTPS 证书验证（用于自签名证书或私有 CA）。
+   * 仅在 baseUrl 为 HTTPS 且证书不受信任时启用，存在安全风险。
+   */
+  insecure?: boolean;
 }
 
 const DEFAULT_MAX_TOKENS = 8192;
@@ -75,10 +82,14 @@ export class OpenAIAdapter implements ModelAdapter {
       supportStreaming: true,
       supportTools: options.supportTools ?? true,
     };
-    this.client = new OpenAI({
+    const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
       apiKey: options.apiKey ?? 'none',
       baseURL: options.baseUrl,
-    });
+    };
+    if (options.insecure) {
+      clientOptions.httpAgent = new https.Agent({ rejectUnauthorized: false });
+    }
+    this.client = new OpenAI(clientOptions);
   }
 
   async complete(params: CompletionParams): Promise<string> {

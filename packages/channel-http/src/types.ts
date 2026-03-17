@@ -74,6 +74,7 @@ export interface ApiModel {
   baseUrl?: string;
   isPrimary: boolean;
   isFallback: boolean;
+  insecure?: boolean;
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────

@@ -366,6 +366,13 @@
           />
           <div class="form-hint">{{ t('settings.baseUrlHint') }}</div>
         </a-form-item>
+
+        <a-form-item v-if="modelForm.protocol === 'openai-compatible'">
+          <a-checkbox v-model="modelForm.insecure">
+            {{ t('settings.insecureSSL') }}
+          </a-checkbox>
+          <div class="form-hint" style="margin-top: 4px;">{{ t('settings.insecureSSLHint') }}</div>
+        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -476,6 +483,7 @@ const modelForm = reactive({
   protocol: 'anthropic' as ModelProtocol,
   apiKey: '',
   baseUrl: '',
+  insecure: false,
 });
 
 function slugifyModelId(name: string) {
@@ -512,6 +520,7 @@ function openAddModal() {
   modelForm.protocol = 'anthropic';
   modelForm.apiKey = '';
   modelForm.baseUrl = '';
+  modelForm.insecure = false;
   modalVisible.value = true;
 }
 
@@ -522,6 +531,7 @@ function openEditModal(model: ConfiguredModel) {
   modelForm.protocol = model.protocol;
   modelForm.apiKey = '';
   modelForm.baseUrl = model.baseUrl ?? '';
+  modelForm.insecure = model.insecure ?? false;
   modalVisible.value = true;
 }
 
@@ -558,6 +568,7 @@ async function submitModelForm() {
         protocol: modelForm.protocol,
         apiKey:   modelForm.apiKey.trim() || undefined,
         baseUrl:  modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl.trim() || undefined) : undefined,
+        insecure: modelForm.protocol === 'openai-compatible' ? modelForm.insecure : false,
       });
     } else {
       await modelsStore.addModel({
@@ -566,6 +577,7 @@ async function submitModelForm() {
         protocol: modelForm.protocol,
         apiKey:   modelForm.apiKey.trim(),
         baseUrl:  modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl.trim() || undefined) : undefined,
+        insecure: modelForm.protocol === 'openai-compatible' ? modelForm.insecure : false,
       });
     }
     Message.success(t('settings.saveSuccess'));

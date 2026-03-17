@@ -219,6 +219,8 @@ export default {
     baseUrl: '接入地址 (Base URL)',
     baseUrlPlaceholder: 'https://api.example.com/v1',
     baseUrlHint: '留空使用协议默认地址',
+    insecureSSL: '跳过 SSL 证书验证',
+    insecureSSLHint: '仅在接入地址使用自签名证书或私有 CA 时启用',
     displayNamePlaceholder: '如：Claude Sonnet',
     modelIdPlaceholder: '如：claude-sonnet-4-6',
     confirmDeleteModel: '确认删除这个模型配置？',

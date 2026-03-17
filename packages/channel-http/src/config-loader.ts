@@ -23,6 +23,8 @@ export interface ModelInstanceConfig {
   baseUrl?: string;
   primary?: boolean;
   fallback?: boolean;
+  /** 跳过 HTTPS 证书验证（自签名证书 / 私有 CA 场景） */
+  insecure?: boolean;
 }
 
 export interface WorkerConfig {

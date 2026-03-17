@@ -65,6 +65,7 @@ export interface ApiModel {
   baseUrl?: string
   isPrimary: boolean
   isFallback: boolean
+  insecure?: boolean
 }
 
 export interface DailyTokenStats {
@@ -265,6 +266,7 @@ export interface ApiModelInput {
   baseUrl?: string
   isPrimary?: boolean
   isFallback?: boolean
+  insecure?: boolean
 }
 
 export const modelsApi = {

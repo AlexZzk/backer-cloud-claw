@@ -195,6 +195,7 @@ async function createAdapter(instance: ModelInstanceConfig) {
     model,
     provider: instance.provider,
     supportTools: true,
+    ...(instance.insecure && { insecure: true }),
   });
 }
 
@@ -870,8 +871,9 @@ export class HttpServer {
     const models: ApiModel[] = this.config.models.map(m => ({
       id:         m.id,
       provider:   m.provider,
-      ...(m.model   && { model:   m.model }),
-      ...(m.baseUrl && { baseUrl: m.baseUrl }),
+      ...(m.model    && { model:    m.model }),
+      ...(m.baseUrl  && { baseUrl:  m.baseUrl }),
+      ...(m.insecure && { insecure: m.insecure }),
       isPrimary:  m.primary  ?? false,
       isFallback: m.fallback ?? false,
     }));
@@ -1522,7 +1524,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id, provider, apiKey, model, baseUrl, isPrimary, isFallback } = body;
+    const { id, provider, apiKey, model, baseUrl, isPrimary, isFallback, insecure } = body;
     if (!id?.trim())       { badRequest(res, '"id" is required'); return; }
     if (!provider?.trim()) { badRequest(res, '"provider" is required'); return; }
     if (!apiKey?.trim())   { badRequest(res, '"apiKey" is required'); return; }
@@ -1539,8 +1541,9 @@ export class HttpServer {
       id: id.trim(),
       provider: provider.trim() as ModelInstanceConfig['provider'],
       apiKey: apiKey.trim(),
-      ...(model   && { model:   model.trim() }),
-      ...(baseUrl && { baseUrl: baseUrl.trim() }),
+      ...(model    && { model:    model.trim() }),
+      ...(baseUrl  && { baseUrl:  baseUrl.trim() }),
+      ...(insecure && { insecure: true }),
       primary:  isPrimary  ?? false,
       fallback: isFallback ?? false,
     };
@@ -1559,8 +1562,9 @@ export class HttpServer {
     const apiModel: ApiModel = {
       id:         newModel.id,
       provider:   newModel.provider,
-      ...(newModel.model   && { model:   newModel.model }),
-      ...(newModel.baseUrl && { baseUrl: newModel.baseUrl }),
+      ...(newModel.model    && { model:    newModel.model }),
+      ...(newModel.baseUrl  && { baseUrl:  newModel.baseUrl }),
+      ...(newModel.insecure && { insecure: newModel.insecure }),
       isPrimary:  newModel.primary  ?? false,
       isFallback: newModel.fallback ?? false,
     };
@@ -1599,6 +1603,12 @@ export class HttpServer {
     } else if (existing.baseUrl) {
       updated.baseUrl = existing.baseUrl;
     }
+    if (body.insecure !== undefined) {
+      if (body.insecure) updated.insecure = true;
+      // insecure: false → 不写入字段，相当于删除该配置
+    } else if (existing.insecure) {
+      updated.insecure = existing.insecure;
+    }
 
     if (updated.primary) {
       this.config.models.forEach(m => { m.primary = false; });
@@ -1614,8 +1624,9 @@ export class HttpServer {
     const apiModel: ApiModel = {
       id:         updated.id,
       provider:   updated.provider,
-      ...(updated.model   && { model:   updated.model }),
-      ...(updated.baseUrl && { baseUrl: updated.baseUrl }),
+      ...(updated.model    && { model:    updated.model }),
+      ...(updated.baseUrl  && { baseUrl:  updated.baseUrl }),
+      ...(updated.insecure && { insecure: updated.insecure }),
       isPrimary:  updated.primary  ?? false,
       isFallback: updated.fallback ?? false,
     };
