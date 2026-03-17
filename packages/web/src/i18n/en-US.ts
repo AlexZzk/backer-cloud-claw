@@ -96,6 +96,13 @@ export default {
     deleteWarning: 'This action cannot be undone. Related chat history will also be deleted.',
     startChat: 'Start Chat',
     skillsPlaceholder: 'Select skills...',
+    workspaceFiles: 'Workspace Files',
+    workspaceDir: 'Workspace Directory',
+    sharedDir: 'Shared Directory',
+    readOnly: 'Read-only',
+    workspaceEmpty: 'Workspace is empty',
+    sharedEmpty: 'Shared directory is empty',
+    confirmDeleteFile: 'Delete this file? This action cannot be undone.',
   },
   org: {
     title: 'Organization',

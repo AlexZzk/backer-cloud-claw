@@ -27,6 +27,25 @@ export interface ApiWorker {
   isPrimary: boolean;
   /** 运行时状态（简单标记，未来可接 heartbeat） */
   status: 'online' | 'idle' | 'offline' | 'busy';
+  /** 自定义工作空间路径（绝对路径，未设置时默认 ~/.bcc/workspaces/{id}） */
+  workspace?: string;
+}
+
+// ─── Workspace ────────────────────────────────────────────────────────────────
+
+export interface WorkspaceFileEntry {
+  name: string;
+  path: string;    // 相对于工作空间根目录
+  size: number;
+  mtime: number;
+  isDir: boolean;
+}
+
+export interface WorkspaceInfo {
+  workspaceDir: string;
+  sharedDir:    string;
+  files:        WorkspaceFileEntry[];
+  sharedFiles:  WorkspaceFileEntry[];
 }
 
 // ─── Session ──────────────────────────────────────────────────────────────────

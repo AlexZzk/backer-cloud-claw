@@ -126,6 +126,73 @@
               >{{ tool }}</a-tag>
             </div>
           </div>
+
+          <a-divider />
+
+          <!-- Workspace Files -->
+          <div class="detail-section workspace-section">
+            <div class="workspace-header">
+              <h3>{{ t('workers.workspaceFiles') }}</h3>
+              <a-button size="mini" type="text" :loading="wsLoading" @click="loadWorkspace(selectedWorker.id)">
+                <template #icon><icon-refresh /></template>
+              </a-button>
+            </div>
+
+            <div v-if="wsLoading" class="ws-loading">
+              <a-spin size="small" />
+            </div>
+
+            <template v-else-if="wsInfo">
+              <!-- Worker workspace files -->
+              <div class="ws-dir-label">
+                <icon-folder style="color: #165dff" />
+                <span>{{ t('workers.workspaceDir') }}：<code>{{ wsInfo.workspaceDir }}</code></span>
+              </div>
+              <div v-if="wsInfo.files.length === 0" class="ws-empty">{{ t('workers.workspaceEmpty') }}</div>
+              <div v-else class="ws-file-list">
+                <div v-for="f in wsInfo.files" :key="f.path" class="ws-file-item">
+                  <span class="ws-file-icon">{{ f.isDir ? '📁' : '📄' }}</span>
+                  <span class="ws-file-name">{{ f.path }}</span>
+                  <span class="ws-file-size">{{ formatFileSize(f.size) }}</span>
+                  <span class="ws-file-date">{{ formatDate(f.mtime) }}</span>
+                  <div class="ws-file-actions" v-if="!f.isDir">
+                    <a :href="workspaceApi.fileUrl(selectedWorker.id, f.path)" :download="f.name" class="ws-download-btn">
+                      <icon-download />
+                    </a>
+                    <a-popconfirm
+                      :content="t('workers.confirmDeleteFile')"
+                      @ok="deleteWorkspaceFile(selectedWorker.id, f.path)"
+                    >
+                      <a-button size="mini" type="text" status="danger">
+                        <template #icon><icon-delete /></template>
+                      </a-button>
+                    </a-popconfirm>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Shared files (read-only) -->
+              <div class="ws-dir-label" style="margin-top: 16px">
+                <icon-folder style="color: #ff7d00" />
+                <span>{{ t('workers.sharedDir') }}：<code>{{ wsInfo.sharedDir }}</code></span>
+                <a-tag size="mini" color="orange" style="margin-left: 4px">{{ t('workers.readOnly') }}</a-tag>
+              </div>
+              <div v-if="wsInfo.sharedFiles.length === 0" class="ws-empty">{{ t('workers.sharedEmpty') }}</div>
+              <div v-else class="ws-file-list">
+                <div v-for="f in wsInfo.sharedFiles" :key="f.path" class="ws-file-item">
+                  <span class="ws-file-icon">{{ f.isDir ? '📁' : '📄' }}</span>
+                  <span class="ws-file-name">{{ f.path }}</span>
+                  <span class="ws-file-size">{{ formatFileSize(f.size) }}</span>
+                  <span class="ws-file-date">{{ formatDate(f.mtime) }}</span>
+                  <div class="ws-file-actions" v-if="!f.isDir">
+                    <a :href="workspaceApi.sharedFileUrl(f.path)" :download="f.name" class="ws-download-btn">
+                      <icon-download />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
         </div>
       </template>
 
@@ -333,7 +400,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onUnmounted } from 'vue';
+import { ref, computed, reactive, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useWorkersStore } from '@/stores/workers';
@@ -342,6 +409,7 @@ import { useChatStore } from '@/stores/chat';
 import { useSkillsStore } from '@/stores/skills';
 import { Modal, Message } from '@arco-design/web-vue';
 import type { MockWorker } from '@/stores/workers';
+import { workspaceApi, type WorkspaceInfo } from '@/api/client';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -541,6 +609,49 @@ async function handleSave() {
 function startChat(workerId: string) {
   chatStore.openWorkerChat(workerId);
   router.push('/chat');
+}
+
+// ── Workspace ──────────────────────────────────────────────────────────────
+const wsInfo = ref<WorkspaceInfo | null>(null);
+const wsLoading = ref(false);
+
+async function loadWorkspace(workerId: string) {
+  wsLoading.value = true;
+  try {
+    const res = await workspaceApi.getInfo(workerId);
+    wsInfo.value = res.data;
+  } catch {
+    wsInfo.value = null;
+  } finally {
+    wsLoading.value = false;
+  }
+}
+
+watch(selectedId, (id) => {
+  wsInfo.value = null;
+  if (id) loadWorkspace(id);
+});
+
+async function deleteWorkspaceFile(workerId: string, filePath: string) {
+  try {
+    await workspaceApi.deleteFile(workerId, filePath);
+    Message.success('文件已删除');
+    await loadWorkspace(workerId);
+  } catch {
+    Message.error('删除失败');
+  }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function formatDate(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function confirmDelete(id: string) {
@@ -885,6 +996,137 @@ function confirmDelete(id: string) {
   padding: 14px;
   line-height: 1.7;
   border: 1px solid var(--border-color);
+}
+
+/* ─── Workspace Files ──────────────────────────────────────────────────── */
+
+.workspace-section {
+  margin-bottom: 24px;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.workspace-header h3 {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.ws-loading {
+  text-align: center;
+  padding: 16px;
+}
+
+.ws-dir-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.ws-dir-label code {
+  font-size: 11px;
+  background: var(--bg-base);
+  padding: 1px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  word-break: break-all;
+}
+
+.ws-empty {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 8px 12px;
+  background: var(--bg-base);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.ws-file-list {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ws-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.12s;
+}
+
+.ws-file-item:last-child {
+  border-bottom: none;
+}
+
+.ws-file-item:hover {
+  background: rgba(22, 93, 255, 0.03);
+}
+
+.ws-file-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.ws-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.ws-file-size {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  width: 56px;
+  text-align: right;
+}
+
+.ws-file-date {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  width: 120px;
+  text-align: right;
+}
+
+.ws-file-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ws-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  text-decoration: none;
+  transition: all 0.15s;
+}
+
+.ws-download-btn:hover {
+  color: #165dff;
+  background: rgba(22, 93, 255, 0.08);
 }
 
 /* Avatar picker */

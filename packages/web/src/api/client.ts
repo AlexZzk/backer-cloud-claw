@@ -28,6 +28,8 @@ export interface ApiWorker {
   tools: string[]
   isPrimary: boolean
   status: 'online' | 'idle' | 'offline' | 'busy'
+  /** 工作空间目录绝对路径（由服务端计算，不可为空） */
+  workspace: string
 }
 
 export type SessionType = 'chat' | 'dm' | 'group'
@@ -109,6 +111,45 @@ export interface ApiWorkerInput {
   skills: string[]
   tools: string[]
   isPrimary?: boolean
+  /** 自定义工作空间目录路径（留空则使用默认值 ~/.bcc/workspaces/{id}） */
+  workspace?: string
+}
+
+export interface WorkspaceFile {
+  name: string
+  path: string    // 相对于工作空间根
+  size: number
+  mtime: number   // Unix 毫秒时间戳
+  isDir: boolean
+}
+
+export interface WorkspaceInfo {
+  workspaceDir: string
+  sharedDir:    string
+  files:        WorkspaceFile[]
+  sharedFiles:  WorkspaceFile[]
+}
+
+export const workspaceApi = {
+  /** 获取工作空间信息 + 文件列表 */
+  getInfo: (workerId: string) =>
+    service.get<WorkspaceInfo>(`/workspace/${workerId}`),
+
+  /** 构造文件下载 URL（直接用 <a href> 或 window.open 打开） */
+  fileUrl: (workerId: string, filePath: string) =>
+    `${(import.meta as Record<string, unknown>).env?.VITE_APP_BASE_API ?? ''}/workspace/${workerId}/file/${encodeURIComponent(filePath)}`,
+
+  /** 构造共享文件下载 URL */
+  sharedFileUrl: (filePath: string) =>
+    `${(import.meta as Record<string, unknown>).env?.VITE_APP_BASE_API ?? ''}/shared/file/${encodeURIComponent(filePath)}`,
+
+  /** 删除工作空间文件 */
+  deleteFile: (workerId: string, filePath: string) =>
+    service.delete(`/workspace/${workerId}/file/${encodeURIComponent(filePath)}`),
+
+  /** 获取共享目录信息 */
+  getShared: () =>
+    service.get<{ sharedDir: string; files: WorkspaceFile[] }>('/shared'),
 }
 
 // class WorkerListApi {

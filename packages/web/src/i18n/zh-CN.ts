@@ -96,6 +96,13 @@ export default {
     deleteWarning: '删除后将无法恢复，相关对话历史也会被删除。',
     startChat: '开始对话',
     skillsPlaceholder: '选择技能...',
+    workspaceFiles: '工作空间文件',
+    workspaceDir: '工作空间目录',
+    sharedDir: '共享目录',
+    readOnly: '只读',
+    workspaceEmpty: '工作空间为空',
+    sharedEmpty: '共享目录为空',
+    confirmDeleteFile: '确认删除此文件？此操作不可撤销。',
   },
   org: {
     title: '组织架构',
