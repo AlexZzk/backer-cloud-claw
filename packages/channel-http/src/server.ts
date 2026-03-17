@@ -545,7 +545,7 @@ export class HttpServer {
 
     const sessionId = `worker-${workerCfg.id}`;
 
-    return Worker.create({
+    const worker = await Worker.create({
       profile: {
         id:          workerCfg.id,
         name:        workerCfg.name,
@@ -572,6 +572,24 @@ export class HttpServer {
       ...(taskService && { taskService }),
       sessionId,
     });
+
+    // 注册 Worker 配置中指定的工具（工作空间工具 + 内置工具）
+    const wsDir   = resolveWorkspaceDir(workerCfg, this.config);
+    const shdDir  = resolveSharedDir(this.config);
+    const wsTools = createWorkspaceTools(wsDir, shdDir);
+    for (const toolId of workerCfg.tools ?? []) {
+      const tool = wsTools[toolId] ?? getBuiltinTool(toolId);
+      if (tool) worker.registerTool(tool);
+    }
+
+    // 确保工作空间目录存在
+    if ((workerCfg.tools ?? []).some(t => t.startsWith('workspace-'))) {
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(wsDir,  { recursive: true }).catch(() => {});
+      await mkdir(shdDir, { recursive: true }).catch(() => {});
+    }
+
+    return worker;
   }
 
   /**
