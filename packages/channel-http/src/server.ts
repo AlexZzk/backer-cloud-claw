@@ -1656,6 +1656,7 @@ export class HttpServer {
       );
       for (const workerCfg of affectedWorkers) {
         try {
+          this.evictAgent(workerCfg.id);
           this.company.removeWorker(workerCfg.id);
           const worker = await this._createWorker(workerCfg);
           this.company.addWorker(worker);

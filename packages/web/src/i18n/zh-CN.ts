@@ -118,7 +118,6 @@ export default {
     editCompany: '编辑公司信息',
     editDepartment: '编辑部门信息',
     editNode: '编辑节点',
-    companyName: '公司名称',
     departmentNamePlaceholder: '如：技术部、产品部',
     departmentDescPlaceholder: '部门职责说明',
     nodeNamePlaceholder: '如：技术部、华北分公司、研发一组',

@@ -555,7 +555,7 @@ function openEditModal(model: ConfiguredModel) {
   modelForm.baseUrl = model.baseUrl ?? '';
   modelForm.insecure = model.insecure ?? false;
   modelForm.noProxyEnabled = !!model.noProxy;
-  modelForm.noProxyAddress = model.noProxy ?? '';
+  modelForm.noProxyAddress = (model.noProxy && model.noProxy !== '*') ? model.noProxy : '';
   modalVisible.value = true;
 }
 
@@ -588,8 +588,9 @@ async function submitModelForm() {
   try {
     const isCompat = modelForm.protocol === 'openai-compatible';
     // 禁用时传空字符串，让服务端明确清除字段（undefined 会被 store 忽略导致旧值保留）
+    // 启用但未填写地址时，用 '*' 占位，确保 noProxy 字段被保存（后端只检查是否为非空字符串）
     const noProxyVal = isCompat
-      ? (modelForm.noProxyEnabled ? (modelForm.noProxyAddress.trim() || '') : '')
+      ? (modelForm.noProxyEnabled ? (modelForm.noProxyAddress.trim() || '*') : '')
       : '';
     if (editingModel.value) {
       await modelsStore.updateModel(editingModel.value.id, {
