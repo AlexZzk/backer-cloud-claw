@@ -196,6 +196,7 @@ async function createAdapter(instance: ModelInstanceConfig) {
     provider: instance.provider,
     supportTools: true,
     ...(instance.insecure && { insecure: true }),
+    ...(instance.noProxy  && { noProxy:  instance.noProxy }),
   });
 }
 
@@ -887,6 +888,7 @@ export class HttpServer {
       ...(m.model    && { model:    m.model }),
       ...(m.baseUrl  && { baseUrl:  m.baseUrl }),
       ...(m.insecure && { insecure: m.insecure }),
+      ...(m.noProxy  && { noProxy:  m.noProxy }),
       isPrimary:  m.primary  ?? false,
       isFallback: m.fallback ?? false,
     }));
@@ -1537,7 +1539,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id, provider, apiKey, model, baseUrl, isPrimary, isFallback, insecure } = body;
+    const { id, provider, apiKey, model, baseUrl, isPrimary, isFallback, insecure, noProxy } = body;
     if (!id?.trim())       { badRequest(res, '"id" is required'); return; }
     if (!provider?.trim()) { badRequest(res, '"provider" is required'); return; }
     if (!apiKey?.trim())   { badRequest(res, '"apiKey" is required'); return; }
@@ -1557,6 +1559,7 @@ export class HttpServer {
       ...(model    && { model:    model.trim() }),
       ...(baseUrl  && { baseUrl:  baseUrl.trim() }),
       ...(insecure && { insecure: true }),
+      ...(noProxy  && { noProxy:  noProxy.trim() }),
       primary:  isPrimary  ?? false,
       fallback: isFallback ?? false,
     };
@@ -1578,6 +1581,7 @@ export class HttpServer {
       ...(newModel.model    && { model:    newModel.model }),
       ...(newModel.baseUrl  && { baseUrl:  newModel.baseUrl }),
       ...(newModel.insecure && { insecure: newModel.insecure }),
+      ...(newModel.noProxy  && { noProxy:  newModel.noProxy }),
       isPrimary:  newModel.primary  ?? false,
       isFallback: newModel.fallback ?? false,
     };
@@ -1622,6 +1626,13 @@ export class HttpServer {
     } else if (existing.insecure) {
       updated.insecure = existing.insecure;
     }
+    if (body.noProxy !== undefined) {
+      const np = body.noProxy?.trim();
+      if (np) updated.noProxy = np;
+      // noProxy: '' → 删除
+    } else if (existing.noProxy) {
+      updated.noProxy = existing.noProxy;
+    }
 
     if (updated.primary) {
       this.config.models.forEach(m => { m.primary = false; });
@@ -1640,6 +1651,7 @@ export class HttpServer {
       ...(updated.model    && { model:    updated.model }),
       ...(updated.baseUrl  && { baseUrl:  updated.baseUrl }),
       ...(updated.insecure && { insecure: updated.insecure }),
+      ...(updated.noProxy  && { noProxy:  updated.noProxy }),
       isPrimary:  updated.primary  ?? false,
       isFallback: updated.fallback ?? false,
     };

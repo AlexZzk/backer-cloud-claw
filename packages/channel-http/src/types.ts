@@ -75,6 +75,7 @@ export interface ApiModel {
   isPrimary: boolean;
   isFallback: boolean;
   insecure?: boolean;
+  noProxy?: string;
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────

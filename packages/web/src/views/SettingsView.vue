@@ -373,6 +373,24 @@
           </a-checkbox>
           <div class="form-hint" style="margin-top: 4px;">{{ t('settings.insecureSSLHint') }}</div>
         </a-form-item>
+
+        <a-form-item v-if="modelForm.protocol === 'openai-compatible'">
+          <a-checkbox v-model="modelForm.noProxyEnabled">
+            {{ t('settings.noProxy') }}
+          </a-checkbox>
+          <div class="form-hint" style="margin-top: 4px;">{{ t('settings.noProxyHint') }}</div>
+        </a-form-item>
+
+        <a-form-item
+          v-if="modelForm.protocol === 'openai-compatible' && modelForm.noProxyEnabled"
+          :label="t('settings.noProxyAddress')"
+        >
+          <a-input
+            v-model="modelForm.noProxyAddress"
+            :placeholder="t('settings.noProxyPlaceholder')"
+            allow-clear
+          />
+        </a-form-item>
       </a-form>
     </a-modal>
 
@@ -484,6 +502,8 @@ const modelForm = reactive({
   apiKey: '',
   baseUrl: '',
   insecure: false,
+  noProxyEnabled: false,
+  noProxyAddress: '',
 });
 
 function slugifyModelId(name: string) {
@@ -521,6 +541,8 @@ function openAddModal() {
   modelForm.apiKey = '';
   modelForm.baseUrl = '';
   modelForm.insecure = false;
+  modelForm.noProxyEnabled = false;
+  modelForm.noProxyAddress = '';
   modalVisible.value = true;
 }
 
@@ -532,6 +554,8 @@ function openEditModal(model: ConfiguredModel) {
   modelForm.apiKey = '';
   modelForm.baseUrl = model.baseUrl ?? '';
   modelForm.insecure = model.insecure ?? false;
+  modelForm.noProxyEnabled = !!model.noProxy;
+  modelForm.noProxyAddress = model.noProxy ?? '';
   modalVisible.value = true;
 }
 
@@ -562,13 +586,16 @@ async function submitModelForm() {
 
   modelSaving.value = true;
   try {
+    const isCompat = modelForm.protocol === 'openai-compatible';
+    const noProxyVal = isCompat && modelForm.noProxyEnabled ? (modelForm.noProxyAddress.trim() || undefined) : undefined;
     if (editingModel.value) {
       await modelsStore.updateModel(editingModel.value.id, {
         modelId:  modelForm.modelId.trim(),
         protocol: modelForm.protocol,
         apiKey:   modelForm.apiKey.trim() || undefined,
-        baseUrl:  modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl.trim() || undefined) : undefined,
-        insecure: modelForm.protocol === 'openai-compatible' ? modelForm.insecure : false,
+        baseUrl:  isCompat ? (modelForm.baseUrl.trim() || undefined) : undefined,
+        insecure: isCompat ? modelForm.insecure : false,
+        noProxy:  noProxyVal,
       });
     } else {
       await modelsStore.addModel({
@@ -576,8 +603,9 @@ async function submitModelForm() {
         modelId:  modelForm.modelId.trim(),
         protocol: modelForm.protocol,
         apiKey:   modelForm.apiKey.trim(),
-        baseUrl:  modelForm.protocol === 'openai-compatible' ? (modelForm.baseUrl.trim() || undefined) : undefined,
-        insecure: modelForm.protocol === 'openai-compatible' ? modelForm.insecure : false,
+        baseUrl:  isCompat ? (modelForm.baseUrl.trim() || undefined) : undefined,
+        insecure: isCompat ? modelForm.insecure : false,
+        noProxy:  noProxyVal,
       });
     }
     Message.success(t('settings.saveSuccess'));

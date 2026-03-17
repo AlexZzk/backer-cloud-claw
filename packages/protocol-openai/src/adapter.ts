@@ -59,6 +59,14 @@ export interface OpenAIAdapterOptions {
    * 仅在 baseUrl 为 HTTPS 且证书不受信任时启用，存在安全风险。
    */
   insecure?: boolean;
+
+  /**
+   * 绕过系统代理（no_proxy）。
+   * 设置后将使用直连 https.Agent，忽略 HTTPS_PROXY / HTTP_PROXY 环境变量。
+   * 适用于私有内网 API 不需要经过代理的场景。
+   * 值为需要直连的地址（仅作记录，实际行为是对该 adapter 强制直连）。
+   */
+  noProxy?: string;
 }
 
 const DEFAULT_MAX_TOKENS = 8192;
@@ -86,8 +94,12 @@ export class OpenAIAdapter implements ModelAdapter {
       apiKey: options.apiKey ?? 'none',
       baseURL: options.baseUrl,
     };
-    if (options.insecure) {
-      clientOptions.httpAgent = new https.Agent({ rejectUnauthorized: false });
+    // 需要直连（no_proxy）或跳过证书验证时，创建自定义 agent
+    // 自定义 https.Agent 本身就不走 HTTPS_PROXY/HTTP_PROXY，天然实现 no_proxy 效果
+    if (options.insecure || options.noProxy) {
+      clientOptions.httpAgent = new https.Agent({
+        rejectUnauthorized: options.insecure ? false : true,
+      });
     }
     this.client = new OpenAI(clientOptions);
   }
