@@ -98,6 +98,8 @@ export default {
     skillsPlaceholder: '选择技能...',
     workspaceFiles: '工作空间文件',
     workspaceDir: '工作空间目录',
+    workspaceDirHint: '留空则使用默认路径（~/.bcc/workspaces/{工号}）',
+    workspaceDirPlaceholder: '如 /home/user/.bcc/workspaces/custom，留空使用默认',
     sharedDir: '共享目录',
     readOnly: '只读',
     workspaceEmpty: '工作空间为空',

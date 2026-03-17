@@ -364,6 +364,18 @@
         </a-checkbox-group>
       </a-form-item>
 
+      <a-form-item
+        v-if="hasWorkspaceTools"
+        :label="t('workers.workspaceDir')"
+        :extra="t('workers.workspaceDirHint')"
+      >
+        <a-input
+          v-model="form.workspace"
+          :placeholder="t('workers.workspaceDirPlaceholder')"
+          allow-clear
+        />
+      </a-form-item>
+
       <a-form-item :label="t('workers.workerSkills')">
         <a-select
           v-model="form.skills"
@@ -489,7 +501,12 @@ const form = reactive({
   tools: [] as string[],
   isPrimary: false,
   avatar: '🤖',
+  workspace: '',
 });
+
+const hasWorkspaceTools = computed(() =>
+  form.tools.some(t => t.startsWith('workspace-'))
+);
 
 const selectedWorker = computed(() =>
   selectedId.value ? workersStore.getWorker(selectedId.value) : null
@@ -525,7 +542,7 @@ function openCreate() {
     id: '', name: '', description: '',
     modelId: defaultModelId.value, reviewModelId: '',
     heartbeatMode: 'active', heartbeatIntervalSec: 30,
-    role: '', skills: [], tools: [], isPrimary: false, avatar: '🤖',
+    role: '', skills: [], tools: [], isPrimary: false, avatar: '🤖', workspace: '',
   });
   showModal.value = true;
 }
@@ -547,6 +564,7 @@ function openEdit(worker: MockWorker) {
     tools: [...worker.tools],
     isPrimary: worker.isPrimary,
     avatar: '🤖',
+    workspace: worker.workspace ?? '',
   });
   showModal.value = true;
 }
@@ -581,6 +599,7 @@ async function handleSave() {
         skills:             form.skills,
         tools:              form.tools,
         isPrimary:          form.isPrimary,
+        workspace:          form.workspace.trim() || '',
       });
       Message.success('Worker 已更新');
     } else {
@@ -595,6 +614,7 @@ async function handleSave() {
         skills:             form.skills,
         tools:              form.tools,
         isPrimary:          form.isPrimary,
+        workspace:          form.workspace.trim() || undefined,
       });
       Message.success('Worker 已创建');
     }
