@@ -98,6 +98,8 @@ export default {
     skillsPlaceholder: 'Select skills...',
     workspaceFiles: 'Workspace Files',
     workspaceDir: 'Workspace Directory',
+    workspaceDirHint: 'Leave blank to use the default path (~/.bcc/workspaces/{id})',
+    workspaceDirPlaceholder: 'e.g. /home/user/.bcc/workspaces/custom, leave blank for default',
     sharedDir: 'Shared Directory',
     readOnly: 'Read-only',
     workspaceEmpty: 'Workspace is empty',

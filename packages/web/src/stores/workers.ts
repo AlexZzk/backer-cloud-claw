@@ -47,11 +47,16 @@ export const useWorkersStore = defineStore('workers', () => {
   }
 
   const AVAILABLE_TOOLS = [
-    { id: 'datetime',   label: '获取当前时间' },
-    { id: 'file-read',  label: '读取文件' },
-    { id: 'file-write', label: '写入文件' },
-    { id: 'web-fetch',  label: '获取网页内容' },
-    { id: 'shell-exec', label: '执行 Shell 命令' },
+    { id: 'datetime',         label: '获取当前时间' },
+    { id: 'file-read',        label: '读取文件' },
+    { id: 'file-write',       label: '写入文件' },
+    { id: 'web-fetch',        label: '获取网页内容' },
+    { id: 'shell-exec',       label: '执行 Shell 命令' },
+    { id: 'workspace-list',   label: '📁 工作空间 - 列出文件' },
+    { id: 'workspace-read',   label: '📁 工作空间 - 读取文件' },
+    { id: 'workspace-write',  label: '📁 工作空间 - 写入文件' },
+    { id: 'workspace-delete', label: '📁 工作空间 - 删除文件' },
+    { id: 'workspace-share',  label: '📁 工作空间 - 分享到共享目录' },
   ];
 
   /**
