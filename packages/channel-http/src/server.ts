@@ -670,6 +670,23 @@ export class HttpServer {
       return;
     }
 
+    // ── PUT /api/config/defaults  — 更新 defaults 可配置字段（工作空间目录等）
+    if (method === 'PUT' && path === '/api/config/defaults') {
+      const body = await readJson(req) as Partial<{
+        workspaceBaseDir: string;
+        sharedDir: string;
+      }>;
+      if (body.workspaceBaseDir !== undefined) {
+        this.config.defaults.workspaceBaseDir = body.workspaceBaseDir.trim() || this.config.defaults.workspaceBaseDir;
+      }
+      if (body.sharedDir !== undefined) {
+        this.config.defaults.sharedDir = body.sharedDir.trim() || this.config.defaults.sharedDir;
+      }
+      await saveConfig(this.config);
+      ok(res, { defaults: this.config.defaults });
+      return;
+    }
+
     // ── GET /api/analytics/tokens
     if (method === 'GET' && path === '/api/analytics/tokens') {
       this.handleGetAnalytics(res);

@@ -372,6 +372,23 @@ export const adminApi = {
     service.delete<{ deleted: number }>('/sessions'),
 }
 
+// ─── Config API ─────────────────────────────────────────────────────────
+
+export interface ApiConfigDefaults {
+  workspaceBaseDir: string
+  sharedDir: string
+  sessionDir: string
+  enableMemory: boolean
+  maxEpisodes: number
+}
+
+export const configApi = {
+  getDefaults: () =>
+    service.get<{ defaults: ApiConfigDefaults }>('/config'),
+  updateDefaults: (data: Partial<ApiConfigDefaults>) =>
+    service.put<{ defaults: ApiConfigDefaults }>('/config/defaults', data),
+}
+
 // ─── Skills API ─────────────────────────────────────────────────────────
 
 export interface ApiSkill {
