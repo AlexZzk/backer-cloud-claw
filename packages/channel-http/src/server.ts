@@ -882,16 +882,19 @@ export class HttpServer {
 
   private async handleGetModels(res: ServerResponse) {
     await this.reloadConfig();
-    const models: ApiModel[] = this.config.models.map(m => ({
-      id:         m.id,
-      provider:   m.provider,
-      ...(m.model    && { model:    m.model }),
-      ...(m.baseUrl  && { baseUrl:  m.baseUrl }),
-      ...(m.insecure && { insecure: m.insecure }),
-      ...(m.noProxy  && { noProxy:  m.noProxy }),
-      isPrimary:  m.primary  ?? false,
-      isFallback: m.fallback ?? false,
-    }));
+    const models: ApiModel[] = this.config.models.map(m => {
+      const item: ApiModel = {
+        id:         m.id,
+        provider:   m.provider,
+        isPrimary:  m.primary  ?? false,
+        isFallback: m.fallback ?? false,
+      };
+      if (m.model)    item.model    = m.model;
+      if (m.baseUrl)  item.baseUrl  = m.baseUrl;
+      if (m.insecure) item.insecure = m.insecure;
+      if (m.noProxy)  item.noProxy  = m.noProxy;
+      return item;
+    });
     ok(res, models);
   }
 
@@ -1578,13 +1581,13 @@ export class HttpServer {
     const apiModel: ApiModel = {
       id:         newModel.id,
       provider:   newModel.provider,
-      ...(newModel.model    && { model:    newModel.model }),
-      ...(newModel.baseUrl  && { baseUrl:  newModel.baseUrl }),
-      ...(newModel.insecure && { insecure: newModel.insecure }),
-      ...(newModel.noProxy  && { noProxy:  newModel.noProxy }),
       isPrimary:  newModel.primary  ?? false,
       isFallback: newModel.fallback ?? false,
     };
+    if (newModel.model)    apiModel.model    = newModel.model;
+    if (newModel.baseUrl)  apiModel.baseUrl  = newModel.baseUrl;
+    if (newModel.insecure) apiModel.insecure = newModel.insecure;
+    if (newModel.noProxy)  apiModel.noProxy  = newModel.noProxy;
     ok(res, apiModel, 201);
   }
 
@@ -1668,13 +1671,13 @@ export class HttpServer {
     const apiModel: ApiModel = {
       id:         updated.id,
       provider:   updated.provider,
-      ...(updated.model    && { model:    updated.model }),
-      ...(updated.baseUrl  && { baseUrl:  updated.baseUrl }),
-      ...(updated.insecure && { insecure: updated.insecure }),
-      ...(updated.noProxy  && { noProxy:  updated.noProxy }),
       isPrimary:  updated.primary  ?? false,
       isFallback: updated.fallback ?? false,
     };
+    if (updated.model)    apiModel.model    = updated.model;
+    if (updated.baseUrl)  apiModel.baseUrl  = updated.baseUrl;
+    if (updated.insecure) apiModel.insecure = updated.insecure;
+    if (updated.noProxy)  apiModel.noProxy  = updated.noProxy;
     ok(res, apiModel);
   }
 
