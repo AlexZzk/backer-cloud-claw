@@ -1629,9 +1629,10 @@ export class HttpServer {
     if (body.noProxy !== undefined) {
       const np = body.noProxy?.trim();
       if (np) updated.noProxy = np;
-      // noProxy: '' → 删除
-    } else if (existing.noProxy) {
-      updated.noProxy = existing.noProxy;
+      // noProxy: '' 或 undefined → 不写入字段，相当于删除
+    } else {
+      // 字段未传递（undefined）时保留旧值
+      if (existing.noProxy) updated.noProxy = existing.noProxy;
     }
 
     if (updated.primary) {
@@ -1643,6 +1644,25 @@ export class HttpServer {
       await saveConfig(this.config);
     } catch (err) {
       serverError(res, `Failed to save config: ${err instanceof Error ? err.message : String(err)}`); return;
+    }
+
+    // 重新初始化所有使用该模型的 Worker，使新配置（insecure / noProxy 等）立即生效
+    if (this.company && this.messagingService) {
+      const affectedWorkers = (this.config.workers ?? []).filter(
+        w => w.modelId === modelId || w.reviewModelId === modelId,
+      );
+      for (const workerCfg of affectedWorkers) {
+        try {
+          this.company.removeWorker(workerCfg.id);
+          const worker = await this._createWorker(workerCfg);
+          this.company.addWorker(worker);
+          if (workerCfg.heartbeatIntervalMs !== 0) {
+            this.company.scheduler.start(workerCfg.id, workerCfg.heartbeatIntervalMs ?? 30_000);
+          }
+        } catch (err) {
+          console.error(`  ⚠️  模型更新后重启 Worker "${workerCfg.id}" 失败: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     }
 
     const apiModel: ApiModel = {

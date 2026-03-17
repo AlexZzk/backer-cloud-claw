@@ -587,7 +587,10 @@ async function submitModelForm() {
   modelSaving.value = true;
   try {
     const isCompat = modelForm.protocol === 'openai-compatible';
-    const noProxyVal = isCompat && modelForm.noProxyEnabled ? (modelForm.noProxyAddress.trim() || undefined) : undefined;
+    // 禁用时传空字符串，让服务端明确清除字段（undefined 会被 store 忽略导致旧值保留）
+    const noProxyVal = isCompat
+      ? (modelForm.noProxyEnabled ? (modelForm.noProxyAddress.trim() || '') : '')
+      : '';
     if (editingModel.value) {
       await modelsStore.updateModel(editingModel.value.id, {
         modelId:  modelForm.modelId.trim(),
