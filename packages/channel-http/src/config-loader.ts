@@ -25,6 +25,8 @@ export interface ModelInstanceConfig {
   fallback?: boolean;
   /** 跳过 HTTPS 证书验证（自签名证书 / 私有 CA 场景） */
   insecure?: boolean;
+  /** 绕过系统代理，直连该地址（填写需直连的地址，留空表示不启用） */
+  noProxy?: string;
 }
 
 export interface WorkerConfig {

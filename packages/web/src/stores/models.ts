@@ -14,6 +14,7 @@ export interface ConfiguredModel {
   baseUrl?: string;
   isDefault: boolean;
   insecure?: boolean;
+  noProxy?: string;
 }
 
 const PROTOCOL_MAP: Record<string, ModelProtocol> = {
@@ -39,6 +40,7 @@ function apiModelToConfigured(m: ApiModel): ConfiguredModel {
     apiKey:      '',
     ...(m.baseUrl  && { baseUrl:  m.baseUrl }),
     ...(m.insecure && { insecure: m.insecure }),
+    ...(m.noProxy  && { noProxy:  m.noProxy }),
     isDefault:   m.isPrimary,
   };
 }
@@ -70,6 +72,7 @@ export const useModelsStore = defineStore('models', () => {
     apiKey: string;
     baseUrl?: string;
     insecure?: boolean;
+    noProxy?: string;
   }): Promise<ConfiguredModel> {
     const input: ApiModelInput = {
       id:       data.id,
@@ -79,6 +82,7 @@ export const useModelsStore = defineStore('models', () => {
       baseUrl:  data.baseUrl || undefined,
       isPrimary: models.value.length === 0, // 第一个模型自动设为默认
       ...(data.insecure && { insecure: true }),
+      ...(data.noProxy  && { noProxy:  data.noProxy }),
     };
     const created = await modelsApi.create(input);
     const cm = apiModelToConfigured(created);
@@ -93,6 +97,7 @@ export const useModelsStore = defineStore('models', () => {
     apiKey?: string;
     baseUrl?: string;
     insecure?: boolean;
+    noProxy?: string;
   }): Promise<ConfiguredModel> {
     const input: Partial<ApiModelInput> = {};
     if (data.protocol !== undefined) input.provider = PROVIDER_MAP[data.protocol];
@@ -100,6 +105,7 @@ export const useModelsStore = defineStore('models', () => {
     if (data.apiKey   !== undefined) input.apiKey   = data.apiKey;   // 空 = 不修改
     if (data.baseUrl  !== undefined) input.baseUrl  = data.baseUrl  || undefined;
     if (data.insecure !== undefined) input.insecure = data.insecure;
+    if (data.noProxy  !== undefined) input.noProxy  = data.noProxy  || undefined;
 
     const updated = await modelsApi.update(id, input);
     const cm = apiModelToConfigured(updated);

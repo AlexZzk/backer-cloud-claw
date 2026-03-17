@@ -27,7 +27,7 @@ export interface ApiWorker {
   role: string
   tools: string[]
   isPrimary: boolean
-  status: 'online' | 'idle' | 'offline'
+  status: 'online' | 'idle' | 'offline' | 'busy'
 }
 
 export type SessionType = 'chat' | 'dm' | 'group'
@@ -66,6 +66,7 @@ export interface ApiModel {
   isPrimary: boolean
   isFallback: boolean
   insecure?: boolean
+  noProxy?: string
 }
 
 export interface DailyTokenStats {
@@ -267,6 +268,7 @@ export interface ApiModelInput {
   isPrimary?: boolean
   isFallback?: boolean
   insecure?: boolean
+  noProxy?: string
 }
 
 export const modelsApi = {

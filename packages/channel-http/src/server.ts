@@ -196,6 +196,7 @@ async function createAdapter(instance: ModelInstanceConfig) {
     provider: instance.provider,
     supportTools: true,
     ...(instance.insecure && { insecure: true }),
+    ...(instance.noProxy  && { noProxy:  instance.noProxy }),
   });
 }
 
@@ -861,9 +862,22 @@ export class HttpServer {
       role:        w.role,
       tools:       w.tools ?? [],
       isPrimary:   w.primary ?? false,
-      status:      'online' as const,
+      status:      this._resolveWorkerStatus(w.id),
     }));
     ok(res, workers);
+  }
+
+  /**
+   * 将 Worker 内部 lifecycle state 映射到 API status。
+   * - 未加入 Company（初始化失败 / 尚未启动）→ 'offline'
+   * - processing → 'busy'
+   * - idle / sleeping / blocked → 'online'
+   */
+  private _resolveWorkerStatus(workerId: string): ApiWorker['status'] {
+    if (!this.company) return 'offline';
+    const w = this.company.getWorker(workerId) as Worker | undefined;
+    if (!w) return 'offline';
+    return w.state === 'processing' ? 'busy' : 'online';
   }
 
   private async handleGetModels(res: ServerResponse) {
@@ -874,6 +888,7 @@ export class HttpServer {
       ...(m.model    && { model:    m.model }),
       ...(m.baseUrl  && { baseUrl:  m.baseUrl }),
       ...(m.insecure && { insecure: m.insecure }),
+      ...(m.noProxy  && { noProxy:  m.noProxy }),
       isPrimary:  m.primary  ?? false,
       isFallback: m.fallback ?? false,
     }));
@@ -1524,7 +1539,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id, provider, apiKey, model, baseUrl, isPrimary, isFallback, insecure } = body;
+    const { id, provider, apiKey, model, baseUrl, isPrimary, isFallback, insecure, noProxy } = body;
     if (!id?.trim())       { badRequest(res, '"id" is required'); return; }
     if (!provider?.trim()) { badRequest(res, '"provider" is required'); return; }
     if (!apiKey?.trim())   { badRequest(res, '"apiKey" is required'); return; }
@@ -1544,6 +1559,7 @@ export class HttpServer {
       ...(model    && { model:    model.trim() }),
       ...(baseUrl  && { baseUrl:  baseUrl.trim() }),
       ...(insecure && { insecure: true }),
+      ...(noProxy  && { noProxy:  noProxy.trim() }),
       primary:  isPrimary  ?? false,
       fallback: isFallback ?? false,
     };
@@ -1565,6 +1581,7 @@ export class HttpServer {
       ...(newModel.model    && { model:    newModel.model }),
       ...(newModel.baseUrl  && { baseUrl:  newModel.baseUrl }),
       ...(newModel.insecure && { insecure: newModel.insecure }),
+      ...(newModel.noProxy  && { noProxy:  newModel.noProxy }),
       isPrimary:  newModel.primary  ?? false,
       isFallback: newModel.fallback ?? false,
     };
@@ -1609,6 +1626,13 @@ export class HttpServer {
     } else if (existing.insecure) {
       updated.insecure = existing.insecure;
     }
+    if (body.noProxy !== undefined) {
+      const np = body.noProxy?.trim();
+      if (np) updated.noProxy = np;
+      // noProxy: '' → 删除
+    } else if (existing.noProxy) {
+      updated.noProxy = existing.noProxy;
+    }
 
     if (updated.primary) {
       this.config.models.forEach(m => { m.primary = false; });
@@ -1627,6 +1651,7 @@ export class HttpServer {
       ...(updated.model    && { model:    updated.model }),
       ...(updated.baseUrl  && { baseUrl:  updated.baseUrl }),
       ...(updated.insecure && { insecure: updated.insecure }),
+      ...(updated.noProxy  && { noProxy:  updated.noProxy }),
       isPrimary:  updated.primary  ?? false,
       isFallback: updated.fallback ?? false,
     };
@@ -1747,7 +1772,7 @@ export class HttpServer {
       role:        newWorker.role,
       tools:       newWorker.tools ?? [],
       isPrimary:   newWorker.primary ?? false,
-      status:      'online',
+      status:      this._resolveWorkerStatus(newWorker.id),
     };
     ok(res, apiWorker, 201);
   }
@@ -1826,7 +1851,7 @@ export class HttpServer {
       role:        updated.role,
       tools:       updated.tools ?? [],
       isPrimary:   updated.primary ?? false,
-      status:      'online',
+      status:      this._resolveWorkerStatus(updated.id),
     };
     ok(res, apiWorker);
   }
