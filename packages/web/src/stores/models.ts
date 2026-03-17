@@ -105,7 +105,8 @@ export const useModelsStore = defineStore('models', () => {
     if (data.apiKey   !== undefined) input.apiKey   = data.apiKey;   // 空 = 不修改
     if (data.baseUrl  !== undefined) input.baseUrl  = data.baseUrl  || undefined;
     if (data.insecure !== undefined) input.insecure = data.insecure;
-    if (data.noProxy  !== undefined) input.noProxy  = data.noProxy  || undefined;
+    // 空串表示清除，总是传给服务端，让服务端决定是否删除字段
+    if (data.noProxy  !== undefined) input.noProxy  = data.noProxy;
 
     const updated = await modelsApi.update(id, input);
     const cm = apiModelToConfigured(updated);
