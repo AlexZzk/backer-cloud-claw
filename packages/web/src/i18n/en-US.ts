@@ -251,6 +251,12 @@ export default {
     episodicMemoryHint: 'When enabled, session summaries are generated automatically and injected into future conversations',
     maxEpisodes: 'Max Episodes',
     sessionDir: 'Session Directory',
+    workspaceConfig: 'Workspace Configuration',
+    workspaceConfigDesc: 'Configure the root paths for Worker workspaces and the shared directory',
+    workspaceBaseDir: 'Worker Workspace Root',
+    workspaceBaseDirHint: 'Each Worker\'s workspace will be created as a subfolder here (named by Worker ID). Leave blank for default: ~/.bcc/workspaces',
+    sharedDir: 'Shared Directory',
+    sharedDirHint: 'Read-only shared directory accessible by all Workers. Leave blank for default: ~/.bcc/shared',
   },
   skills: {
     tabLocal: 'Local Skills',

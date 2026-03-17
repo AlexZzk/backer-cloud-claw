@@ -251,6 +251,12 @@ export default {
     episodicMemoryHint: '开启后，每次会话结束时 AI 会自动生成会话摘要，并在下次对话时注入历史记忆',
     maxEpisodes: '最大情节数',
     sessionDir: '会话目录',
+    workspaceConfig: '工作空间配置',
+    workspaceConfigDesc: '配置 Worker 工作空间和共享目录的根路径，Worker 将在对应目录下读写文件',
+    workspaceBaseDir: 'Worker 工作空间根目录',
+    workspaceBaseDirHint: '每个 Worker 的工作空间将创建在此目录下的子文件夹中（以 Worker ID 命名），留空使用默认值 ~/.bcc/workspaces',
+    sharedDir: '共享目录',
+    sharedDirHint: '所有 Worker 共享的只读目录，Worker 可将文件复制至此供其他 Worker 访问，留空使用默认值 ~/.bcc/shared',
   },
   skills: {
     tabLocal: '本地技能',

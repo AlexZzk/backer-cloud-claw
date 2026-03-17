@@ -244,6 +244,31 @@
             </a-input>
           </a-form-item>
 
+          <a-divider />
+
+          <h3 style="margin: 0 0 12px; font-size: 14px; font-weight: 600;">{{ t('settings.workspaceConfig') }}</h3>
+          <p class="section-desc" style="margin-bottom: 16px;">{{ t('settings.workspaceConfigDesc') }}</p>
+
+          <a-form-item :label="t('settings.workspaceBaseDir')" :extra="t('settings.workspaceBaseDirHint')">
+            <a-input
+              v-model="storageForm.workspaceBaseDir"
+              :placeholder="'~/.bcc/workspaces/'"
+              allow-clear
+            >
+              <template #prepend>📁</template>
+            </a-input>
+          </a-form-item>
+
+          <a-form-item :label="t('settings.sharedDir')" :extra="t('settings.sharedDirHint')">
+            <a-input
+              v-model="storageForm.sharedDir"
+              :placeholder="'~/.bcc/shared/'"
+              allow-clear
+            >
+              <template #prepend>📂</template>
+            </a-input>
+          </a-form-item>
+
           <a-button type="primary" @click="saveStorage">{{ t('common.save') }}</a-button>
         </a-form>
 
@@ -443,7 +468,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import { useAppStore } from '@/stores/app';
@@ -451,7 +476,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useModelsStore, type ConfiguredModel, type ModelProtocol } from '@/stores/models';
 import { useWorkersStore } from '@/stores/workers';
 import { Message, Modal } from '@arco-design/web-vue';
-import { modelsApi, workersApi, chatsApi, adminApi } from '@/api/client';
+import { modelsApi, workersApi, chatsApi, adminApi, configApi } from '@/api/client';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -658,11 +683,31 @@ const storageForm = reactive({
   episodicEnabled: true,
   maxEpisodes: 50,
   sessionDir: '~/.bcc/sessions/',
+  workspaceBaseDir: '',
+  sharedDir: '',
 });
 
-function saveStorage() {
-  Message.success(t('settings.saveSuccess'));
+async function saveStorage() {
+  try {
+    await configApi.updateDefaults({
+      workspaceBaseDir: storageForm.workspaceBaseDir.trim() || undefined,
+      sharedDir:        storageForm.sharedDir.trim() || undefined,
+    });
+    Message.success(t('settings.saveSuccess'));
+  } catch {
+    Message.error(t('common.error'));
+  }
 }
+
+onMounted(async () => {
+  try {
+    const res = await configApi.getDefaults();
+    const d = res.data.defaults;
+    if (d.workspaceBaseDir) storageForm.workspaceBaseDir = d.workspaceBaseDir;
+    if (d.sharedDir)        storageForm.sharedDir        = d.sharedDir;
+    if (d.sessionDir)       storageForm.sessionDir       = d.sessionDir;
+  } catch { /* 忽略，保留默认值 */ }
+});
 
 // ─── About ────────────────────────────────────────────────────────────────────
 
