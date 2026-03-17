@@ -47,6 +47,11 @@ export interface WorkerConfig {
    */
   heartbeatIntervalMs?: number;
   primary?: boolean;
+  /**
+   * 工作空间目录（绝对路径）。
+   * 未设置时默认为 `${defaults.workspaceBaseDir}/${id}`。
+   */
+  workspace?: string;
 }
 
 export interface BccConfig {
@@ -59,6 +64,10 @@ export interface BccConfig {
     enableMemory: boolean;
     sessionDir: string;
     maxMessages: number;
+    /** Worker 工作空间根目录，默认 ~/.bcc/workspaces */
+    workspaceBaseDir: string;
+    /** 共享目录（所有 Worker 只读访问），默认 ~/.bcc/shared */
+    sharedDir: string;
   };
 }
 
@@ -88,19 +97,27 @@ interface LegacyConfig {
   workers?:  WorkerConfig[];
 }
 
+export const DEFAULT_WORKSPACE_BASE_DIR = join(BCC_HOME, 'workspaces');
+export const DEFAULT_SHARED_DIR         = join(BCC_HOME, 'shared');
+
 function makeDefaultDefaults(): BccConfig['defaults'] {
   return {
-    enableMemory: true,
-    sessionDir:   DEFAULT_SESSION_DIR,
-    maxMessages:  50,
+    enableMemory:     true,
+    sessionDir:       DEFAULT_SESSION_DIR,
+    maxMessages:      50,
+    workspaceBaseDir: DEFAULT_WORKSPACE_BASE_DIR,
+    sharedDir:        DEFAULT_SHARED_DIR,
   };
 }
 
 function migrate(raw: LegacyConfig): BccConfig {
+  const rawDefaults = raw.defaults as (typeof raw.defaults & { workspaceBaseDir?: string; sharedDir?: string }) | undefined;
   const defaults: BccConfig['defaults'] = {
-    enableMemory: raw.defaults?.enableMemory ?? true,
-    sessionDir:   raw.defaults?.sessionDir   ?? DEFAULT_SESSION_DIR,
-    maxMessages:  raw.defaults?.maxMessages  ?? 50,
+    enableMemory:     rawDefaults?.enableMemory     ?? true,
+    sessionDir:       rawDefaults?.sessionDir       ?? DEFAULT_SESSION_DIR,
+    maxMessages:      rawDefaults?.maxMessages      ?? 50,
+    workspaceBaseDir: rawDefaults?.workspaceBaseDir ?? DEFAULT_WORKSPACE_BASE_DIR,
+    sharedDir:        rawDefaults?.sharedDir        ?? DEFAULT_SHARED_DIR,
   };
 
   // 新格式：直接使用，透传 agents / workers

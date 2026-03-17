@@ -35,6 +35,13 @@
  * Worker 心跳机制（对标 OpenClaw heartbeat）：
  *   GET    /api/events                    SSE 全局事件流（心跳、消息、任务事件实时推送）
  *   POST   /api/workers/:id/heartbeat     手动触发某个 Worker 的一次心跳审视
+ *
+ * Worker 文件工作空间：
+ *   GET    /api/workspace/:workerId        工作空间信息 + 文件列表
+ *   GET    /api/workspace/:workerId/file/* 下载/读取工作空间文件（支持二进制）
+ *   DELETE /api/workspace/:workerId/file/* 删除工作空间文件
+ *   GET    /api/shared                     共享目录文件列表
+ *   GET    /api/shared/file/*             下载/读取共享目录文件
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -53,6 +60,12 @@ import type {
   WorkerConfig,
 } from './config-loader.js';
 import { saveConfig, loadConfig } from './config-loader.js';
+import {
+  resolveWorkspaceDir, resolveSharedDir, safePath,
+  listWorkspaceFiles, listSharedFiles, getMimeType,
+  createWorkspaceTools, buildWorkspaceSystemSection,
+  WORKSPACE_TOOL_LIST,
+} from './workspace.js';
 import { ChatStore, MessagingService } from '@bcc/messaging';
 import { TaskStore, TaskManager } from '@bcc/task';
 import { Company, Worker } from '@bcc/org';
@@ -504,7 +517,15 @@ export class HttpServer {
       const communicateSkill = findBuiltin('communicate');
       if (communicateSkill?.system) skillPrompts.push(communicateSkill.system);
     }
-    const system = [identityHeader, workerCfg.role || '', colleagueSection, ...skillPrompts]
+
+    // 若 Worker 配置了工作空间工具，注入工作空间相关系统提示
+    const workspaceDir = resolveWorkspaceDir(workerCfg, this.config);
+    const sharedDir    = resolveSharedDir(this.config);
+    const workspaceSection = buildWorkspaceSystemSection(
+      workspaceDir, sharedDir, workerCfg.tools ?? [],
+    );
+
+    const system = [identityHeader, workerCfg.role || '', colleagueSection, ...skillPrompts, workspaceSection]
       .filter(Boolean)
       .join('\n\n');
 
@@ -834,6 +855,51 @@ export class HttpServer {
       }
     }
 
+    // ── GET /api/workspace/:workerId        工作空间信息 + 文件列表
+    {
+      const m = matchRoute('/api/workspace/:workerId', path);
+      if (m && method === 'GET') {
+        await this.handleGetWorkspace(res, m.params['workerId']!);
+        return;
+      }
+    }
+
+    // ── GET /api/shared                    共享目录文件列表
+    if (method === 'GET' && path === '/api/shared') {
+      await this.handleGetShared(res);
+      return;
+    }
+
+    // ── GET /api/shared/file/*             下载共享文件（支持子路径）
+    if (method === 'GET' && path.startsWith('/api/shared/file/')) {
+      const filePath = decodeURIComponent(path.slice('/api/shared/file/'.length));
+      await this.handleGetSharedFile(res, filePath);
+      return;
+    }
+
+    // ── GET  /api/workspace/:workerId/file/*  下载文件（支持子路径）
+    // ── DELETE /api/workspace/:workerId/file/* 删除文件
+    {
+      const wsFilePrefix = '/api/workspace/';
+      const wsFileSuffix = '/file/';
+      if (path.startsWith(wsFilePrefix)) {
+        const rest = path.slice(wsFilePrefix.length);
+        const slashIdx = rest.indexOf(wsFileSuffix);
+        if (slashIdx !== -1) {
+          const wid = rest.slice(0, slashIdx);
+          const filePath = decodeURIComponent(rest.slice(slashIdx + wsFileSuffix.length));
+          if (method === 'GET') {
+            await this.handleGetWorkspaceFile(res, wid, filePath);
+            return;
+          }
+          if (method === 'DELETE') {
+            await this.handleDeleteWorkspaceFile(res, wid, filePath);
+            return;
+          }
+        }
+      }
+    }
+
     notFound(res);
   }
 
@@ -863,6 +929,7 @@ export class HttpServer {
       tools:       w.tools ?? [],
       isPrimary:   w.primary ?? false,
       status:      this._resolveWorkerStatus(w.id),
+      workspace:   resolveWorkspaceDir(w, this.config),
     }));
     ok(res, workers);
   }
@@ -1656,6 +1723,7 @@ export class HttpServer {
       );
       for (const workerCfg of affectedWorkers) {
         try {
+          this.evictAgent(workerCfg.id);
           this.company.removeWorker(workerCfg.id);
           const worker = await this._createWorker(workerCfg);
           this.company.addWorker(worker);
@@ -1713,7 +1781,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id: rawId, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary } = body;
+    const { id: rawId, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary, workspace } = body;
     if (!name?.trim())    { badRequest(res, '"name" is required'); return; }
     if (!modelId?.trim()) { badRequest(res, '"modelId" is required'); return; }
 
@@ -1755,6 +1823,7 @@ export class HttpServer {
       skills: skills ?? [],
       tools: tools ?? [],
       primary: primary ?? false,
+      ...(workspace?.trim() && { workspace: workspace.trim() }),
     };
 
     // 若设为主 Worker，取消其他 primary 标记
@@ -1796,6 +1865,7 @@ export class HttpServer {
       tools:       newWorker.tools ?? [],
       isPrimary:   newWorker.primary ?? false,
       status:      this._resolveWorkerStatus(newWorker.id),
+      workspace:   resolveWorkspaceDir(newWorker, this.config),
     };
     ok(res, apiWorker, 201);
   }
@@ -1821,6 +1891,10 @@ export class HttpServer {
     const newHeartbeatIntervalMs = body.heartbeatIntervalMs !== undefined
       ? body.heartbeatIntervalMs
       : existing.heartbeatIntervalMs;
+    // workspace: 传空字符串表示清除（使用默认路径），undefined 表示不修改
+    const newWorkspace = body.workspace !== undefined
+      ? (body.workspace.trim() || undefined)
+      : existing.workspace;
     const updated: WorkerConfig = {
       id:          workerId,
       name:        body.name?.trim()        ?? existing.name,
@@ -1832,6 +1906,7 @@ export class HttpServer {
       skills:      body.skills              ?? existing.skills,
       tools:       body.tools               ?? existing.tools ?? [],
       primary:     body.primary             ?? existing.primary ?? false,
+      ...(newWorkspace && { workspace: newWorkspace }),
     };
 
     if (updated.primary) {
@@ -1875,6 +1950,7 @@ export class HttpServer {
       tools:       updated.tools ?? [],
       isPrimary:   updated.primary ?? false,
       status:      this._resolveWorkerStatus(updated.id),
+      workspace:   resolveWorkspaceDir(updated, this.config),
     };
     ok(res, apiWorker);
   }
@@ -1917,6 +1993,93 @@ export class HttpServer {
     const sessionDir = this.config.defaults.sessionDir;
     const filePath = join(sessionDir, `worker-${workerId}.json`);
     await unlink(filePath).catch(() => {/* 文件不存在时静默忽略 */});
+  }
+
+  // ── 工作空间 API ──────────────────────────────────────────────────────────
+
+  /** GET /api/workspace/:workerId — 工作空间信息 + 文件列表 */
+  private async handleGetWorkspace(res: ServerResponse, workerId: string) {
+    const workerCfg = this.config.workers?.find(w => w.id === workerId);
+    if (!workerCfg) { notFound(res); return; }
+    const workspaceDir = resolveWorkspaceDir(workerCfg, this.config);
+    const sharedDir    = resolveSharedDir(this.config);
+    const [files, sharedFiles] = await Promise.all([
+      listWorkspaceFiles(workspaceDir),
+      listSharedFiles(sharedDir),
+    ]);
+    ok(res, { workspaceDir, sharedDir, files, sharedFiles });
+  }
+
+  /** GET /api/workspace/:workerId/file/:filePath — 下载工作空间文件 */
+  private async handleGetWorkspaceFile(res: ServerResponse, workerId: string, filePath: string) {
+    const workerCfg = this.config.workers?.find(w => w.id === workerId);
+    if (!workerCfg) { notFound(res); return; }
+    const workspaceDir = resolveWorkspaceDir(workerCfg, this.config);
+    const absPath = safePath(workspaceDir, filePath);
+    if (!absPath) { badRequest(res, '非法路径'); return; }
+    try {
+      const { readFile: rf } = await import('node:fs/promises');
+      const data = await rf(absPath);
+      const mime = getMimeType(filePath);
+      const fname = encodeURIComponent(filePath.split('/').pop() ?? filePath);
+      cors(res);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': data.length,
+        'Content-Disposition': `attachment; filename*=UTF-8''${fname}`,
+        'Cache-Control': 'no-cache',
+      });
+      res.end(data);
+    } catch {
+      notFound(res);
+    }
+  }
+
+  /** DELETE /api/workspace/:workerId/file/:filePath — 删除工作空间文件 */
+  private async handleDeleteWorkspaceFile(res: ServerResponse, workerId: string, filePath: string) {
+    const workerCfg = this.config.workers?.find(w => w.id === workerId);
+    if (!workerCfg) { notFound(res); return; }
+    const workspaceDir = resolveWorkspaceDir(workerCfg, this.config);
+    const absPath = safePath(workspaceDir, filePath);
+    if (!absPath) { badRequest(res, '非法路径'); return; }
+    try {
+      await unlink(absPath);
+      cors(res);
+      res.writeHead(204);
+      res.end();
+    } catch {
+      notFound(res);
+    }
+  }
+
+  /** GET /api/shared — 共享目录文件列表 */
+  private async handleGetShared(res: ServerResponse) {
+    const sharedDir = resolveSharedDir(this.config);
+    const files = await listSharedFiles(sharedDir);
+    ok(res, { sharedDir, files });
+  }
+
+  /** GET /api/shared/file/:filePath — 下载共享目录文件 */
+  private async handleGetSharedFile(res: ServerResponse, filePath: string) {
+    const sharedDir = resolveSharedDir(this.config);
+    const absPath = safePath(sharedDir, filePath);
+    if (!absPath) { badRequest(res, '非法路径'); return; }
+    try {
+      const { readFile: rf } = await import('node:fs/promises');
+      const data = await rf(absPath);
+      const mime = getMimeType(filePath);
+      const fname = encodeURIComponent(filePath.split('/').pop() ?? filePath);
+      cors(res);
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': data.length,
+        'Content-Disposition': `attachment; filename*=UTF-8''${fname}`,
+        'Cache-Control': 'no-cache',
+      });
+      res.end(data);
+    } catch {
+      notFound(res);
+    }
   }
 
   // ── 构建（或复用）Worker 专属的 AgentEngine ───────────────────────────────
@@ -1974,8 +2137,12 @@ export class HttpServer {
       system,
     });
 
+    // 注册内置工具（含工作空间工具）
+    const wsDir   = resolveWorkspaceDir(workerCfg, this.config);
+    const shdDir  = resolveSharedDir(this.config);
+    const wsTools = createWorkspaceTools(wsDir, shdDir);
     for (const toolId of workerCfg.tools ?? []) {
-      const tool = getBuiltinTool(toolId);
+      const tool = wsTools[toolId] ?? getBuiltinTool(toolId);
       if (tool) engine.registerTool(tool);
     }
 
