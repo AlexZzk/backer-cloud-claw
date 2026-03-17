@@ -13,6 +13,7 @@ export interface ConfiguredModel {
   apiKey: string;   // 后端不返回明文 key，始终为空字符串
   baseUrl?: string;
   isDefault: boolean;
+  insecure?: boolean;
 }
 
 const PROTOCOL_MAP: Record<string, ModelProtocol> = {
@@ -36,7 +37,8 @@ function apiModelToConfigured(m: ApiModel): ConfiguredModel {
     modelId:     m.model ?? m.id,
     protocol:    PROTOCOL_MAP[m.provider] ?? 'openai',
     apiKey:      '',
-    ...(m.baseUrl && { baseUrl: m.baseUrl }),
+    ...(m.baseUrl  && { baseUrl:  m.baseUrl }),
+    ...(m.insecure && { insecure: m.insecure }),
     isDefault:   m.isPrimary,
   };
 }
@@ -67,6 +69,7 @@ export const useModelsStore = defineStore('models', () => {
     protocol: ModelProtocol;
     apiKey: string;
     baseUrl?: string;
+    insecure?: boolean;
   }): Promise<ConfiguredModel> {
     const input: ApiModelInput = {
       id:       data.id,
@@ -75,6 +78,7 @@ export const useModelsStore = defineStore('models', () => {
       model:    data.modelId || undefined,
       baseUrl:  data.baseUrl || undefined,
       isPrimary: models.value.length === 0, // 第一个模型自动设为默认
+      ...(data.insecure && { insecure: true }),
     };
     const created = await modelsApi.create(input);
     const cm = apiModelToConfigured(created);
@@ -88,12 +92,14 @@ export const useModelsStore = defineStore('models', () => {
     protocol?: ModelProtocol;
     apiKey?: string;
     baseUrl?: string;
+    insecure?: boolean;
   }): Promise<ConfiguredModel> {
     const input: Partial<ApiModelInput> = {};
     if (data.protocol !== undefined) input.provider = PROVIDER_MAP[data.protocol];
     if (data.modelId  !== undefined) input.model    = data.modelId  || undefined;
     if (data.apiKey   !== undefined) input.apiKey   = data.apiKey;   // 空 = 不修改
     if (data.baseUrl  !== undefined) input.baseUrl  = data.baseUrl  || undefined;
+    if (data.insecure !== undefined) input.insecure = data.insecure;
 
     const updated = await modelsApi.update(id, input);
     const cm = apiModelToConfigured(updated);
