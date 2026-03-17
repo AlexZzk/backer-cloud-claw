@@ -690,7 +690,7 @@ export class HttpServer {
 
     // ── PUT /api/config/defaults  — 更新 defaults 可配置字段（工作空间目录等）
     if (method === 'PUT' && path === '/api/config/defaults') {
-      const body = await readJson(req) as Partial<{
+      const body = JSON.parse(await readBody(req)) as Partial<{
         workspaceBaseDir: string;
         sharedDir: string;
       }>;
