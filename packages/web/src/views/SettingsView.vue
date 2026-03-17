@@ -613,8 +613,6 @@ async function submitModelForm() {
     }
     Message.success(t('settings.saveSuccess'));
     closeModal();
-    // 保存后重新从服务端拉取，确保 insecure / noProxy 等字段在下次编辑时正确回填
-    await modelsStore.fetchModels();
   } catch (err) {
     Message.error(err instanceof Error ? err.message : (appStore.locale === 'zh-CN' ? '操作失败' : 'Operation failed'));
   } finally {

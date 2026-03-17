@@ -32,17 +32,18 @@ const PROVIDER_MAP: Record<ModelProtocol, string> = {
 };
 
 function apiModelToConfigured(m: ApiModel): ConfiguredModel {
-  return {
+  const cm: ConfiguredModel = {
     id:          m.id,
     displayName: `${m.id}${m.model ? ` (${m.model})` : ''}`,
     modelId:     m.model ?? m.id,
     protocol:    PROTOCOL_MAP[m.provider] ?? 'openai',
     apiKey:      '',
-    ...(m.baseUrl  && { baseUrl:  m.baseUrl }),
-    ...(m.insecure && { insecure: m.insecure }),
-    ...(m.noProxy  && { noProxy:  m.noProxy }),
     isDefault:   m.isPrimary,
   };
+  if (m.baseUrl)        cm.baseUrl  = m.baseUrl;
+  if (m.insecure)       cm.insecure = m.insecure;
+  if (m.noProxy)        cm.noProxy  = m.noProxy;
+  return cm;
 }
 
 export const useModelsStore = defineStore('models', () => {
