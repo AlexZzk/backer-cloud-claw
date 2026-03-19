@@ -247,6 +247,30 @@ export class ChatStore {
     await this._save(file);
   }
 
+  /**
+   * 获取会话摘要（Token 优化用）。
+   * 返回 null 表示该会话尚无摘要（首次交互）。
+   */
+  async getChatSummary(chatId: string): Promise<string | null> {
+    const file = await this._load(chatId);
+    return file?.chat.summary ?? null;
+  }
+
+  /**
+   * 更新会话摘要（Token 优化用）。
+   *
+   * Worker 处理完一批消息后调用，生成该会话的结构化摘要。
+   * 后续 processInbox() 加载上下文时优先使用摘要 + 最近 N 条消息，
+   * 而非加载完整历史，大幅减少 Worker 间通信的 token 消耗。
+   */
+  async updateChatSummary(chatId: string, summary: string): Promise<void> {
+    const file = await this._load(chatId);
+    if (!file) return;
+    file.chat.summary = summary;
+    file.chat.summaryUpdatedAt = Date.now();
+    await this._save(file);
+  }
+
   // ─── 私有工具 ────────────────────────────────────────────────────────────────
 
   private async findDirectChat(a: string, b: string): Promise<Chat | null> {

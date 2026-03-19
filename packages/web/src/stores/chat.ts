@@ -192,20 +192,28 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 选中某个 Worker 并打开其最新会话（如有），懒加载消息
-   * 参考微信风格：每个联系人只有一个对话窗口
-   * 同时加载来自 notify_user 的异步直聊消息（合并到同一窗口展示）
+   * 选中某个 Worker，展示其会话列表（不自动打开最新会话）。
+   *
+   * 参考 OpenClaw / Claude Code 风格：
+   * - 有多个会话时，显示会话列表让用户选择（继续旧会话或新建）
+   * - 只有一个会话时，直接打开（保持原有体验）
+   * - 同时加载来自 notify_user 的异步直聊消息
    */
   async function selectWorker(workerId: string): Promise<void> {
     activeWorkerId.value = workerId;
     activeAsyncChatId.value = null;  // 清除异步聊天选中状态
     const workerSessions = getWorkerSessions(workerId);
-    const latestSession = workerSessions[0] ?? null;
-    activeSessionId.value = latestSession?.id ?? null;
 
-    // 懒加载消息：仅在未加载过时从后端获取
-    if (latestSession && latestSession.messages.length === 0 && latestSession.messageCount > 0) {
-      await loadSessionMessages(latestSession.id);
+    if (workerSessions.length === 1) {
+      // 只有一个会话时直接打开（避免多余操作）
+      const session = workerSessions[0]!;
+      activeSessionId.value = session.id;
+      if (session.messages.length === 0 && session.messageCount > 0) {
+        await loadSessionMessages(session.id);
+      }
+    } else {
+      // 多个会话（或无会话）时：清除 activeSessionId，显示会话选择器
+      activeSessionId.value = null;
     }
 
     // 同时加载该 Worker 通过 notify_user 发给用户的异步消息

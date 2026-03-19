@@ -327,6 +327,14 @@ export interface Chat {
   updatedAt: number;
   /** 最后一条消息预览（UI 显示用） */
   lastMessage?: string;
+  /**
+   * 会话摘要（Token 优化用）。
+   * 由 Worker 处理完消息后异步生成，供后续 processInbox() 注入上下文。
+   * 有摘要时只需加载最近 N 条消息，无需加载完整历史，大幅减少 token。
+   */
+  summary?: string;
+  /** 摘要最后更新时间戳（ms） */
+  summaryUpdatedAt?: number;
 }
 
 /** ChatMessageStatus：消息送达状态。 */

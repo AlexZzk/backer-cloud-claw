@@ -325,8 +325,50 @@
 
         <!-- Messages -->
         <div class="messages-area" ref="messagesArea">
-          <!-- Empty state: no messages yet -->
-          <div v-if="mergedMessages.length === 0" class="chat-empty">
+
+          <!-- Session picker: worker selected but no session chosen (多会话选择器) -->
+          <div v-if="!chatStore.activeSessionId && workerSessions.length !== 1" class="session-picker">
+            <div class="session-picker-header">
+              <div class="session-picker-title">与 {{ activeWorker.name }} 的对话</div>
+              <div class="session-picker-desc">选择一个历史对话继续，或新建对话</div>
+            </div>
+            <a-button
+              type="primary"
+              class="session-new-btn"
+              @click="startNewSession(activeWorker.id)"
+              :loading="startingNewSession"
+            >
+              <template #icon><icon-plus /></template>
+              新建对话
+            </a-button>
+            <div v-if="workerSessions.length === 0" class="session-picker-empty">
+              还没有历史对话记录，点击上方按钮开始第一次对话
+            </div>
+            <div v-else class="session-list">
+              <div
+                v-for="session in workerSessions"
+                :key="session.id"
+                class="session-item"
+                @click="openSession(session.id)"
+              >
+                <div class="session-item-icon">💬</div>
+                <div class="session-item-info">
+                  <div class="session-item-title">{{ session.title }}</div>
+                  <div class="session-item-meta">
+                    <span class="session-item-count">{{ session.messageCount }} 条消息</span>
+                    <span class="session-item-time">{{ formatTime(session.updatedAt) }}</span>
+                  </div>
+                  <div v-if="getSessionPreview(session)" class="session-item-preview">
+                    {{ getSessionPreview(session) }}
+                  </div>
+                </div>
+                <icon-right class="session-item-arrow" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Empty state: no messages yet (session selected but empty) -->
+          <div v-else-if="mergedMessages.length === 0" class="chat-empty">
             <div class="empty-avatar">🤖</div>
             <h3>{{ activeWorker.name }}</h3>
             <p>{{ activeWorker.description }}</p>
@@ -385,8 +427,8 @@
           </div>
         </div>
 
-        <!-- Input -->
-        <div class="input-area">
+        <!-- Input (hidden when session picker is shown) -->
+        <div v-if="chatStore.activeSessionId || workerSessions.length === 1" class="input-area">
           <!-- @mention 自动补全下拉框（群聊专用） -->
           <div v-if="showMentionDropdown && filteredMentionWorkers.length > 0" class="mention-dropdown">
             <div class="mention-dropdown-title">选择 @ 成员</div>
@@ -627,6 +669,7 @@ const searchText = ref('');
 const showWorkerPicker = ref(false);
 const inputFocused = ref(false);
 const messagesArea = ref<HTMLElement>();
+const startingNewSession = ref(false);
 
 // New chat picker state (multi-select)
 const pickerSelectedIds = ref<string[]>([]);
@@ -655,6 +698,13 @@ const primaryWorker = computed(() =>
 );
 
 const activeSessionType = computed(() => chatStore.activeSession?.type ?? 'chat');
+
+/** 当前选中 Worker 的所有历史会话（按更新时间降序） */
+const workerSessions = computed(() =>
+  chatStore.activeWorkerId
+    ? chatStore.getWorkerSessions(chatStore.activeWorkerId)
+    : []
+);
 
 /**
  * 合并主会话消息 + Worker notify_user 异步消息，按时间戳排序
@@ -864,6 +914,34 @@ async function confirmGroupChat() {
 
 async function handleSelectWorker(workerId: string) {
   await chatStore.selectWorker(workerId);
+}
+
+/** 打开指定会话，懒加载消息 */
+async function openSession(sessionId: string) {
+  chatStore.selectSession(sessionId);
+  const session = chatStore.sessions.find(s => s.id === sessionId);
+  if (session && session.messages.length === 0 && session.messageCount > 0) {
+    await chatStore.loadSessionMessages(sessionId);
+  }
+}
+
+/** 新建会话（在会话列表页点击"新建对话"时调用） */
+async function startNewSession(workerId: string) {
+  startingNewSession.value = true;
+  try {
+    await chatStore.newSession(workerId);
+  } catch (e) {
+    Message.error('新建对话失败：' + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    startingNewSession.value = false;
+  }
+}
+
+/** 获取会话预览文本（最后一条消息的前 60 个字） */
+function getSessionPreview(session: ChatSession): string {
+  const last = session.messages[session.messages.length - 1];
+  if (!last) return '';
+  return last.content.slice(0, 60) + (last.content.length > 60 ? '…' : '');
 }
 
 function openDmSession(id: string) {
@@ -1880,6 +1958,125 @@ onMounted(async () => {
   font-weight: 500;
   color: var(--text-primary);
   border: 1px solid var(--border-color);
+}
+
+/* ─── Session Picker ─────────────────────────────────────────────────── */
+
+.session-picker {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 32px 40px;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.session-picker-header {
+  margin-bottom: 4px;
+}
+
+.session-picker-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.session-picker-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.session-new-btn {
+  align-self: flex-start;
+  border-radius: 10px;
+}
+
+.session-picker-empty {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  padding: 20px 0;
+  text-align: center;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-base);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.session-item:hover {
+  border-color: #165dff;
+  background: rgba(22, 93, 255, 0.04);
+  transform: translateX(2px);
+}
+
+.session-item-icon {
+  font-size: 22px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.session-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-item-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.session-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.session-item-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.session-item-time {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.session-item-preview {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-item-arrow {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 
 /* ─── Async Chat Notice ──────────────────────────────────────────────── */

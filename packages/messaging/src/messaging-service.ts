@@ -124,4 +124,20 @@ export class MessagingService {
       chatId,
     } satisfies OrgEvent);
   }
+
+  /**
+   * 获取会话摘要（Token 优化用）。
+   * 返回 null 表示尚无摘要（首次交互）。
+   */
+  async getChatSummary(chatId: string): Promise<string | null> {
+    return this.store.getChatSummary(chatId);
+  }
+
+  /**
+   * 更新会话摘要（Token 优化用）。
+   * Worker 处理完消息后调用，供后续 processInbox() 减少 context 加载量。
+   */
+  async updateChatSummary(chatId: string, summary: string): Promise<void> {
+    await this.store.updateChatSummary(chatId, summary);
+  }
 }
