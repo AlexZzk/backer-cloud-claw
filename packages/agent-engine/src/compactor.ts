@@ -11,7 +11,8 @@
  * - 防止单次文件读取/搜索结果撑爆 context window
  */
 
-import type { Message, ModelAdapter } from '@bcc/foundation';
+import type { Message } from '@bcc/foundation';
+import type { ModelAdapter } from '@bcc/model-core';
 
 export interface CompactorOptions {
   /**
