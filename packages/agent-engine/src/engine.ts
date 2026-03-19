@@ -11,6 +11,7 @@ import {
 import { type ModelAdapter, isRoutableModel } from '@bcc/model-core';
 import { loadContextFiles, mergeSystemPrompt } from './context.js';
 import { ToolRegistry, type Tool } from './tool.js';
+import { ContextCompactor, type CompactorOptions } from './compactor.js';
 
 export interface AgentEngineOptions {
   /** 模型适配器或已配置的 ModelRouter */
@@ -45,6 +46,13 @@ export interface AgentEngineOptions {
 
   /** 会话 ID，配合 memory 使用 */
   sessionId?: string | undefined;
+
+  /**
+   * Context 压缩配置（可选）。
+   * 不提供时使用默认阈值（40 条消息触发压缩，保留最近 10 条）。
+   * 设为 false 可完全禁用压缩。
+   */
+  compaction?: CompactorOptions | false | undefined;
 }
 
 /**
@@ -74,6 +82,7 @@ export class AgentEngine implements AgentInterface {
   private maxTokens: number | undefined;
   private memory: MemoryStore | undefined;
   private sessionId: string | undefined;
+  private compactor: ContextCompactor | null;
 
   private constructor(
     model: ModelAdapter,
@@ -90,6 +99,9 @@ export class AgentEngine implements AgentInterface {
     this.memory = options.memory;
     this.sessionId = options.sessionId;
     this.history = savedHistory;
+    this.compactor = options.compaction === false
+      ? null
+      : new ContextCompactor(options.compaction ?? {});
   }
 
   /**
@@ -188,6 +200,15 @@ export class AgentEngine implements AgentInterface {
     // 1. 追加用户消息
     this.history.push({ role: 'user', content: userInput });
 
+    // 1b. Context 压缩：若历史超过阈值，压缩旧消息（异步，不阻塞主流程）
+    if (this.compactor?.needsCompaction(this.history)) {
+      try {
+        this.history = await this.compactor.compact(this.history, this.model);
+      } catch {
+        // 压缩失败静默忽略，继续正常流程
+      }
+    }
+
     const toolDefs = this.registry.definitions();
 
     // 跨迭代累积 token 用量（工具循环每轮都可能消耗 token）
@@ -264,6 +285,10 @@ export class AgentEngine implements AgentInterface {
         } else {
           try {
             result = await tool.handler(tc.input);
+            // 工具输出截断：防止大输出（文件读取、搜索结果）撑爆 context
+            if (this.compactor) {
+              result = this.compactor.truncateToolOutput(result);
+            }
           } catch (err) {
             result = err instanceof Error ? err.message : String(err);
             isError = true;

@@ -20,6 +20,17 @@ export interface AnthropicAdapterOptions {
   model?: string;
   maxTokens?: number;
   baseURL?: string;
+
+  /**
+   * 是否启用 Prompt Caching（Anthropic 专有特性）。
+   *
+   * 启用后，system prompt 会被标记为 cache_control: ephemeral，
+   * 命中缓存时输入 token 成本降低 90%，延迟降低 85%。
+   * 适合 system prompt 较长且重复调用频繁的场景（如 Worker 的 SOUL.md + MEMORY.md）。
+   *
+   * 默认 true（自动启用，仅在 Anthropic 官方 API 有效）。
+   */
+  promptCaching?: boolean;
 }
 
 const DEFAULT_MODEL = 'claude-sonnet-4-5';
@@ -31,11 +42,13 @@ export class AnthropicAdapter implements ModelAdapter {
   private client: Anthropic;
   private model: string;
   private maxTokens: number;
+  private promptCaching: boolean;
 
   constructor(options: AnthropicAdapterOptions) {
     this.model = options.model ?? DEFAULT_MODEL;
     this.maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
     this.id = options.name;
+    this.promptCaching = options.promptCaching ?? true;
     this.info = {
       id: this.id,
       provider: 'anthropic',
@@ -60,11 +73,18 @@ export class AnthropicAdapter implements ModelAdapter {
   async *stream(params: CompletionParams): AsyncIterable<StreamChunk> {
     const { messages, system, maxTokens, tools } = params;
 
+    // Prompt Caching：将 system prompt 标记为 ephemeral，命中缓存可节省 90% 输入 token
+    const systemParam = system !== undefined
+      ? this.promptCaching
+        ? [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }]
+        : system
+      : undefined;
+
     try {
       const stream = await this.client.messages.stream({
         model: this.model,
         max_tokens: maxTokens ?? this.maxTokens,
-        ...(system !== undefined && { system }),
+        ...(systemParam !== undefined && { system: systemParam as Parameters<typeof this.client.messages.stream>[0]['system'] }),
         messages: this.convertMessages(messages),
         ...(tools && { tools: this.convertTools(tools) }),
       });
@@ -92,10 +112,19 @@ export class AnthropicAdapter implements ModelAdapter {
           };
         }),
       };
+      // cache_read_input_tokens：命中缓存的 token 数（成本仅为正常的 10%）
+      // cache_creation_input_tokens：首次写入缓存的 token 数（成本为正常的 125%）
+      const usage = final.usage as typeof final.usage & {
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
+      const effectiveInputTokens = (usage.input_tokens ?? 0)
+        + (usage.cache_read_input_tokens ?? 0)
+        + (usage.cache_creation_input_tokens ?? 0);
       const tokenUsage = {
-        inputTokens: final.usage.input_tokens,
+        inputTokens: effectiveInputTokens,
         outputTokens: final.usage.output_tokens,
-        totalTokens: final.usage.input_tokens + final.usage.output_tokens,
+        totalTokens: effectiveInputTokens + final.usage.output_tokens,
       };
       yield { type: 'done', message: assistantMsg, tokenUsage };
     } catch (err) {
