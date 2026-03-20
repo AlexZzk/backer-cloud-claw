@@ -34,7 +34,7 @@ import { LongTermMemory, buildConsolidationPrompt } from './long-term-memory.js'
 export interface AsyncInboxService {
   /** 获取该 Worker 的所有未读聊天消息，按时间升序 */
   getPendingMessages(workerId: string): Promise<Array<{
-    chat: { id: string; title?: string; participants: string[] };
+    chat: { id: string; type: string; title?: string; participants: string[] };
     message: { id: string; chatId: string; from: string; content: string; timestamp: number };
   }>>;
 
@@ -57,6 +57,15 @@ export interface AsyncInboxService {
     participants: string[],
     title?: string,
   ): Promise<{ id: string; participants: string[]; title?: string }>;
+
+  /**
+   * 向已有群聊追加新成员（幂等：已在群内的成员自动跳过）。
+   * 返回更新后的会话，若会话不存在则返回 null。
+   */
+  addMembersToGroup?(
+    chatId: string,
+    newParticipants: string[],
+  ): Promise<{ id: string; participants: string[] } | null>;
 
   /**
    * 列出某参与者相关的所有会话。
@@ -827,7 +836,7 @@ export class Worker implements Participant {
   private async _processChatMessages(
     chatId: string,
     items: Array<{
-      chat: { id: string; title?: string; participants: string[] };
+      chat: { id: string; type: string; title?: string; participants: string[] };
       message: { id: string; chatId: string; from: string; content: string; timestamp: number };
     }>,
   ): Promise<void> {
@@ -863,7 +872,10 @@ export class Worker implements Participant {
     const firstItem = items[0];
     const chatTitle = firstItem?.chat.title
       ?? `与 ${firstItem?.chat.participants.filter(p => p !== this.id).join(', ') ?? '未知'} 的对话`;
+    const chatType = firstItem?.chat.type ?? 'direct';
+    const isGroupChat = chatType === 'group';
     contextLines.push(`【聊天会话：${chatTitle}】`);
+    contextLines.push(`会话 ID：${chatId}（${isGroupChat ? '群聊' : '私聊'}）`);
 
     // 注入摘要（若有）
     if (existingSummary) {
@@ -913,7 +925,7 @@ export class Worker implements Participant {
       '     （在当前私信回复，不要在群聊回复，以保持沟通上下文连贯）',
       '  2. 执行任务（写代码、调用工具、收集信息等）',
       '  3. 如果任务需要其他同事协作：',
-      '     a. 用 create_group_chat 创建包含相关同事的群聊',
+      '     a. 用 create_group_chat 创建包含相关同事的群聊（会话 ID 见上方"会话 ID"）',
       '     b. 用 send_to_group 在群聊中分配子任务（@workerID 指派）',
       '  4. 任务完成后，通过 notify_user 将最终结果发给用户',
       '  5. 输出 [SKIP] 结束本轮处理',
@@ -921,8 +933,12 @@ export class Worker implements Participant {
       '▶ 收到来自用户的任务或委托 → 必须执行以下完整流程：',
       '  1. 先回复确认收到：告知发送方你已收到并会处理',
       '  2. 使用工具执行任务（写代码、创建提醒、发消息等）',
-      '  3. 任务完成后，通过 notify_user 将结果发给用户（如果最终受益方是用户）',
-      '  4. 完成第3步后，输出 [SKIP] 作为文本回复（绝不在群聊中再追加描述性文字）',
+      '  3. 如果任务需要其他同事协作：',
+      '     - 当前是群聊（会话 ID 见上方）→ 优先用 add_members_to_group 将新同事加入本群，',
+      '       再用 send_to_group 在本群分配子任务（@workerID 指派）',
+      '     - 当前是私聊 → 用 create_group_chat 新建群（把相关同事都拉进来）',
+      '  4. 任务完成后，通过 notify_user 将结果发给用户（如果最终受益方是用户）',
+      '  5. 完成第4步后，输出 [SKIP] 作为文本回复（绝不在群聊中再追加描述性文字）',
       '',
       '▶ 收到同事的任务完成通知（同事完成了你委托给他的任务）→ 执行以下流程：',
       '  1. 调用 notify_user 将结果转交给用户',
@@ -1238,6 +1254,57 @@ export class Worker implements Participant {
         ].join('\n');
       },
     });
+
+    // 工具：向已有群聊追加成员（在协作任务中扩展群而非新建群）
+    if (inboxService.addMembersToGroup) {
+      const _addMembersImpl = inboxService.addMembersToGroup.bind(inboxService);
+      this.engine.registerTool({
+        definition: {
+          name: 'add_members_to_group',
+          description:
+            '将新同事加入已有群聊（不新建群）。' +
+            '当任务在某个群聊中展开、你需要拉更多同事协作时，' +
+            '用此工具扩展该群，而非另建新群——这样所有协作过程都在同一个群里清晰可查。' +
+            '已在群内的成员会自动跳过（幂等）。',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              chatId: { type: 'string', description: '要追加成员的群聊 ID' },
+              newMembers: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '要加入的 Worker ID 数组（不需要包含自己或 user，系统自动过滤重复）',
+              },
+            },
+            required: ['chatId', 'newMembers'],
+          },
+        },
+        handler: async (input: Record<string, unknown>) => {
+          const { chatId: targetChatId, newMembers } = input as { chatId: string; newMembers: string[] };
+          // 校验所有新成员 ID 是否有效
+          if (peersProvider) {
+            const validIds = peersProvider();
+            const invalidIds = (newMembers as string[]).filter(p => p !== 'user' && !validIds.includes(p));
+            if (invalidIds.length > 0) {
+              return [
+                `❌ 操作失败：以下 Worker ID 在当前团队中不存在：${invalidIds.join('、')}`,
+                `   有效的同事 ID：${validIds.length > 0 ? validIds.join('、') : '（暂无同事）'}`,
+              ].join('\n');
+            }
+          }
+          const updated = await _addMembersImpl(targetChatId, newMembers as string[]);
+          if (!updated) {
+            return `❌ 操作失败：群聊 ID "${targetChatId}" 不存在，请确认 chatId 是否正确。`;
+          }
+          return [
+            `✅ 成员已添加`,
+            `   群聊 ID：${targetChatId}`,
+            `   当前成员：${updated.participants.join('、')}`,
+            `   提示：新成员已加入，可继续用 send_to_group 发消息并 @新成员 分配任务`,
+          ].join('\n');
+        },
+      });
+    }
 
     // 工具：在群聊中发送消息
     this.engine.registerTool({
