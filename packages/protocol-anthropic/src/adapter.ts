@@ -73,21 +73,26 @@ export class AnthropicAdapter implements ModelAdapter {
   async *stream(params: CompletionParams): AsyncIterable<StreamChunk> {
     const { messages, system, maxTokens, tools } = params;
 
+    type StreamParams = Parameters<typeof this.client.messages.stream>[0];
+    const baseParams: StreamParams = {
+      model: this.model,
+      max_tokens: maxTokens ?? this.maxTokens,
+      messages: this.convertMessages(messages),
+      ...(tools && { tools: this.convertTools(tools) }),
+    };
+
     // Prompt Caching：将 system prompt 标记为 ephemeral，命中缓存可节省 90% 输入 token
-    const systemParam = system !== undefined
-      ? this.promptCaching
-        ? [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }]
-        : system
-      : undefined;
+    const streamParams: StreamParams = system !== undefined
+      ? {
+          ...baseParams,
+          system: this.promptCaching
+            ? [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }]
+            : system,
+        }
+      : baseParams;
 
     try {
-      const stream = await this.client.messages.stream({
-        model: this.model,
-        max_tokens: maxTokens ?? this.maxTokens,
-        ...(systemParam !== undefined && { system: systemParam as Parameters<typeof this.client.messages.stream>[0]['system'] }),
-        messages: this.convertMessages(messages),
-        ...(tools && { tools: this.convertTools(tools) }),
-      });
+      const stream = await this.client.messages.stream(streamParams);
 
       for await (const event of stream) {
         if (
