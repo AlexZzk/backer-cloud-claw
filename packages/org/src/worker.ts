@@ -779,6 +779,16 @@ export class Worker implements Participant {
     return this.engine.getHistory();
   }
 
+  /** 清空 Worker 引擎的对话历史（用于会话隔离）。 */
+  clearHistory(): void {
+    this.engine.clearHistory();
+  }
+
+  /** 用外部消息列表替换引擎历史（多 chat 会话上下文切换用）。 */
+  loadHistory(messages: Message[]): void {
+    this.engine.loadHistory(messages);
+  }
+
   /**
    * 获取 Worker 当前状态的文本摘要。
    * 用于在对话开始前注入上下文，让 Worker 始终知道：
