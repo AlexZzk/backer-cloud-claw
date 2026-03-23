@@ -251,11 +251,11 @@ export const useChatStore = defineStore('chat', () => {
     if (session) activeWorkerId.value = session.workerId;
   }
 
-  async function newSession(workerId: string): Promise<ChatSession> {
+  async function newSession(workerId: string, options?: { force?: boolean }): Promise<ChatSession> {
     loading.value = true;
     try {
-      const apiSession = await sessionsApi.create(workerId);
-      // 幂等：如果后端返回的是已有会话，直接复用本地记录
+      const apiSession = await sessionsApi.create(workerId, options);
+      // 幂等路径：如果后端返回的是已有会话，直接复用本地记录
       const existing = sessions.value.find(s => s.id === apiSession.id);
       if (existing) {
         activeWorkerId.value = workerId;

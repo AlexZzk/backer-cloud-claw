@@ -177,8 +177,10 @@ export const workersApi = {
 // ─── Session API ────────────────────────────────────────────────────────
 
 export const sessionsApi = {
-  create: (workerId: string) =>
-      service.post<ApiSession>(`/workers/${workerId}/sessions`),
+  create: (workerId: string, options?: { force?: boolean }) =>
+      service.post<ApiSession>(
+        `/workers/${workerId}/sessions${options?.force ? '?force=true' : ''}`,
+      ),
 
   listByWorker: (workerId: string) =>
       service.get<ApiSession[]>(`/workers/${workerId}/sessions`),
