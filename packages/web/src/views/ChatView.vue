@@ -310,6 +310,12 @@
                 <template #icon><icon-info-circle /></template>
               </a-button>
             </a-tooltip>
+            <!-- 新建对话（仅普通 chat 会话显示） -->
+            <a-tooltip v-if="activeSessionType === 'chat'" content="新建对话">
+              <a-button type="text" @click="startNewSession(activeWorker!.id)" :loading="startingNewSession">
+                <template #icon><icon-plus /></template>
+              </a-button>
+            </a-tooltip>
             <a-tooltip :content="t('chat.clearHistory')">
               <a-button type="text" @click="chatStore.clearSession()">
                 <template #icon><icon-delete /></template>

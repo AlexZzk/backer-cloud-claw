@@ -830,6 +830,15 @@ export class HttpServer {
       }
     }
 
+    // ── PUT /api/chats/:chatId/participants  (追加群聊成员)
+    {
+      const m = matchRoute('/api/chats/:chatId/participants', path);
+      if (m && method === 'PUT') {
+        await this.handleAddChatParticipants(req, res, m.params['chatId']!);
+        return;
+      }
+    }
+
     // ── DELETE /api/chats/:chatId
     {
       const m = matchRoute('/api/chats/:chatId', path);
@@ -1545,6 +1554,33 @@ export class HttpServer {
       ok(res, chat);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : 'Failed to create chat');
+    }
+  }
+
+  /**
+   * PUT /api/chats/:chatId/participants
+   * 向已有群聊追加新成员（幂等：已在群内的成员自动跳过）。
+   * Body: { newParticipants: string[] }
+   */
+  private async handleAddChatParticipants(req: IncomingMessage, res: ServerResponse, chatId: string) {
+    let body: { newParticipants?: string[] };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+    const { newParticipants } = body;
+    if (!newParticipants || !Array.isArray(newParticipants) || newParticipants.length === 0) {
+      badRequest(res, '"newParticipants" must be a non-empty array'); return;
+    }
+    try {
+      const chat = this.messagingService
+        ? await this.messagingService.addMembersToGroup(chatId, newParticipants)
+        : await this.chatStore.addParticipants(chatId, newParticipants);
+      if (!chat) { notFound(res); return; }
+      ok(res, chat);
+    } catch (err) {
+      serverError(res, err instanceof Error ? err.message : 'Failed to add participants');
     }
   }
 

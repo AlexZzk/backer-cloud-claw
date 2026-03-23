@@ -116,6 +116,22 @@ export class MessagingService {
     return this.store.getChat(chatId);
   }
 
+  /**
+   * 向现有群聊追加新成员（幂等：已在群内的成员自动跳过）。
+   * 返回更新后的 Chat，若会话不存在则返回 null。
+   */
+  async addMembersToGroup(chatId: string, newParticipants: string[]): Promise<Chat | null> {
+    const chat = await this.store.addParticipants(chatId, newParticipants);
+    if (chat) {
+      this.eventBus.emit('org:event', {
+        type: 'chat:members:added',
+        chatId,
+        newParticipants,
+      } as Parameters<typeof this.eventBus.emit>[1]);
+    }
+    return chat;
+  }
+
   /** 归档会话 */
   async archiveChat(chatId: string): Promise<void> {
     await this.store.archiveChat(chatId);

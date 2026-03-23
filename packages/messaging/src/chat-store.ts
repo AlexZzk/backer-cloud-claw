@@ -239,6 +239,22 @@ export class ChatStore {
     return jsonFiles.length;
   }
 
+  /**
+   * 向群聊追加参与者（不影响已有成员）。
+   * 返回更新后的 Chat，若会话不存在则返回 null。
+   */
+  async addParticipants(chatId: string, newParticipants: string[]): Promise<Chat | null> {
+    const file = await this._load(chatId);
+    if (!file) return null;
+    const existing = new Set(file.chat.participants);
+    const added = newParticipants.filter(p => !existing.has(p));
+    if (added.length === 0) return file.chat;
+    file.chat.participants.push(...added);
+    file.chat.updatedAt = Date.now();
+    await this._save(file);
+    return file.chat;
+  }
+
   /** 归档会话（不删除历史记录） */
   async archiveChat(chatId: string): Promise<void> {
     const file = await this._load(chatId);
