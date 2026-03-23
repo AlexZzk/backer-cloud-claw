@@ -1046,11 +1046,17 @@ export class HttpServer {
       return;
     }
 
-    // 幂等：用户与同一 Worker 只有一个 1对1 会话，存在则直接返回
-    const existing = this.store.findChat(workerId);
-    if (existing) {
-      ok(res, this.store.toApiSession(existing));
-      return;
+    // ?force=true 时跳过幂等检查，强制新建会话
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const force = url.searchParams.get('force') === 'true';
+
+    if (!force) {
+      // 幂等：用户与同一 Worker 只有一个 1对1 会话，存在则直接返回
+      const existing = this.store.findChat(workerId);
+      if (existing) {
+        ok(res, this.store.toApiSession(existing));
+        return;
+      }
     }
 
     try {

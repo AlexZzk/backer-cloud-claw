@@ -931,11 +931,11 @@ async function openSession(sessionId: string) {
   }
 }
 
-/** 新建会话（在会话列表页点击"新建对话"时调用） */
+/** 新建会话（在会话列表页点击"新建对话"时调用，强制新建不复用旧会话） */
 async function startNewSession(workerId: string) {
   startingNewSession.value = true;
   try {
-    await chatStore.newSession(workerId);
+    await chatStore.newSession(workerId, { force: true });
   } catch (e) {
     Message.error('新建对话失败：' + (e instanceof Error ? e.message : String(e)));
   } finally {
