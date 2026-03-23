@@ -62,6 +62,8 @@ export interface ApiSession {
   /** group 会话中所有参与 Worker ID 列表 */
   workerIds?: string[];
   title: string;
+  /** LLM 生成的会话摘要，供跨会话上下文注入 */
+  summary?: string;
   createdAt: number;
   updatedAt: number;
   messageCount: number;

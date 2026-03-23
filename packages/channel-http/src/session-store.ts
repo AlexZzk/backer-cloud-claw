@@ -24,6 +24,8 @@ export interface SessionEntry {
   toWorkerId?: string;       // dm: 接收方 worker ID
   workerIds?: string[];      // group: 所有参与 worker IDs（含 workerId）
   title: string;
+  /** 会话内容摘要，由 LLM 生成，供后续新会话注入跨会话上下文时使用 */
+  summary?: string;
   createdAt: number;
   updatedAt: number;
   agent?: AgentInterface;    // chat: 唯一 agent；dm: 发起方 agent；group: 第一个 worker 的 agent（从磁盘恢复时为 undefined，按需重建）
@@ -40,6 +42,7 @@ interface PersistedSession {
   toWorkerId?: string;
   workerIds?: string[];
   title: string;
+  summary?: string;
   createdAt: number;
   updatedAt: number;
   messages: ApiMessage[];
@@ -167,6 +170,16 @@ export class SessionStore {
     return [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  /** 更新会话摘要（持久化到磁盘） */
+  setSummary(id: string, summary: string): boolean {
+    const entry = this.sessions.get(id);
+    if (!entry) return false;
+    entry.summary = summary;
+    entry.updatedAt = Date.now();
+    void this._save(entry);
+    return true;
+  }
+
   /** 更新会话标题（持久化到磁盘） */
   updateTitle(id: string, title: string): boolean {
     const entry = this.sessions.get(id);
@@ -228,6 +241,7 @@ export class SessionStore {
             // 可选字段仅在存在时设置（exactOptionalPropertyTypes 要求）
             ...(data.toWorkerId !== undefined && { toWorkerId: data.toWorkerId }),
             ...(data.workerIds  !== undefined && { workerIds:  data.workerIds }),
+            ...(data.summary    !== undefined && { summary:    data.summary }),
             // agent/toAgent/groupAgents 留 undefined，由 HttpServer 按需重建
           });
         }
@@ -247,6 +261,7 @@ export class SessionStore {
       ...(entry.toWorkerId  && { toWorkerId:  entry.toWorkerId }),
       ...(entry.workerIds   && { workerIds:   entry.workerIds }),
       title:        entry.title,
+      ...(entry.summary     && { summary:     entry.summary }),
       createdAt:    entry.createdAt,
       updatedAt:    entry.updatedAt,
       messageCount: entry.messages.length,
@@ -264,6 +279,7 @@ export class SessionStore {
       ...(entry.toWorkerId && { toWorkerId: entry.toWorkerId }),
       ...(entry.workerIds  && { workerIds:  entry.workerIds }),
       title:      entry.title,
+      ...(entry.summary    && { summary:    entry.summary }),
       createdAt:  entry.createdAt,
       updatedAt:  entry.updatedAt,
       messages:   entry.messages,

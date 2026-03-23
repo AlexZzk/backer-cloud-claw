@@ -299,25 +299,7 @@
                     {{ t(`workers.${activeWorker.status}`) }}
                   </a-tag>
                 </div>
-                <!-- 会话切换器：显示当前会话标题，点击展开选择其他会话 -->
-                <a-dropdown v-if="workerSessions.length > 1" trigger="click" @select="openSession">
-                  <div class="session-switcher-trigger">
-                    <span class="session-switcher-title">{{ chatStore.activeSession?.title ?? '当前会话' }}</span>
-                    <icon-down class="session-switcher-icon" />
-                  </div>
-                  <template #content>
-                    <a-doption
-                      v-for="s in workerSessions"
-                      :key="s.id"
-                      :value="s.id"
-                      :class="{ 'session-option-active': s.id === chatStore.activeSessionId }"
-                    >
-                      <div class="session-option-title">{{ s.title }}</div>
-                      <div class="session-option-meta">{{ s.messageCount }} 条 · {{ formatTime(s.updatedAt) }}</div>
-                    </a-doption>
-                  </template>
-                </a-dropdown>
-                <div v-else class="worker-model">{{ activeWorker.modelId }}</div>
+                <div class="worker-model">{{ activeWorker.modelId }}</div>
               </div>
             </template>
           </div>
@@ -328,8 +310,8 @@
                 <template #icon><icon-info-circle /></template>
               </a-button>
             </a-tooltip>
-            <!-- 新建对话（仅普通 chat 会话显示） -->
-            <a-tooltip v-if="activeSessionType === 'chat'" content="新建对话">
+            <!-- 新建对话（无侧边栏时才在 header 显示，有侧边栏时新建按钮在侧边栏内） -->
+            <a-tooltip v-if="activeSessionType === 'chat' && !showSessionSidebar" content="新建对话">
               <a-button type="text" @click="startNewSession(activeWorker!.id)" :loading="startingNewSession">
                 <template #icon><icon-plus /></template>
               </a-button>
@@ -347,14 +329,46 @@
           </div>
         </div>
 
+        <!-- Chat body: session sidebar (多会话时) + main content -->
+        <div class="chat-body">
+
+          <!-- Session sidebar: 当 chat 会话 ≥ 2 时显示左侧会话列表 -->
+          <div v-if="showSessionSidebar" class="session-sidebar">
+            <div class="session-sidebar-header">
+              <span class="session-sidebar-title">会话记录</span>
+              <a-tooltip content="新建对话">
+                <a-button size="mini" shape="circle" @click="startNewSession(activeWorker.id)" :loading="startingNewSession">
+                  <template #icon><icon-plus /></template>
+                </a-button>
+              </a-tooltip>
+            </div>
+            <div class="session-sidebar-list">
+              <div
+                v-for="session in workerSessions"
+                :key="session.id"
+                :class="['session-sidebar-item', { active: session.id === chatStore.activeSessionId }]"
+                @click="openSession(session.id)"
+              >
+                <div class="session-sidebar-item-title">{{ session.title }}</div>
+                <div v-if="getSessionPreview(session)" class="session-sidebar-item-preview">
+                  {{ getSessionPreview(session) }}
+                </div>
+                <div class="session-sidebar-item-meta">{{ session.messageCount }} 条 · {{ formatTime(session.updatedAt) }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Main chat content -->
+          <div class="chat-content">
+
         <!-- Messages -->
         <div class="messages-area" ref="messagesArea">
 
-          <!-- Session picker: worker selected but no session chosen (多会话选择器) -->
-          <div v-if="!chatStore.activeSessionId && workerSessions.length !== 1" class="session-picker">
+          <!-- 无会话：引导新建（无 sidebar 且无任何 session） -->
+          <div v-if="workerSessions.length === 0" class="session-picker">
             <div class="session-picker-header">
               <div class="session-picker-title">与 {{ activeWorker.name }} 的对话</div>
-              <div class="session-picker-desc">选择一个历史对话继续，或新建对话</div>
+              <div class="session-picker-desc">还没有历史对话记录，点击下方按钮开始第一次对话</div>
             </div>
             <a-button
               type="primary"
@@ -363,32 +377,15 @@
               :loading="startingNewSession"
             >
               <template #icon><icon-plus /></template>
-              新建对话
+              开始对话
             </a-button>
-            <div v-if="workerSessions.length === 0" class="session-picker-empty">
-              还没有历史对话记录，点击上方按钮开始第一次对话
-            </div>
-            <div v-else class="session-list">
-              <div
-                v-for="session in workerSessions"
-                :key="session.id"
-                class="session-item"
-                @click="openSession(session.id)"
-              >
-                <div class="session-item-icon">💬</div>
-                <div class="session-item-info">
-                  <div class="session-item-title">{{ session.title }}</div>
-                  <div class="session-item-meta">
-                    <span class="session-item-count">{{ session.messageCount }} 条消息</span>
-                    <span class="session-item-time">{{ formatTime(session.updatedAt) }}</span>
-                  </div>
-                  <div v-if="getSessionPreview(session)" class="session-item-preview">
-                    {{ getSessionPreview(session) }}
-                  </div>
-                </div>
-                <icon-right class="session-item-arrow" />
-              </div>
-            </div>
+          </div>
+
+          <!-- 侧边栏模式：未选中会话时的占位提示 -->
+          <div v-else-if="showSessionSidebar && !chatStore.activeSessionId" class="chat-empty">
+            <div class="empty-avatar">💬</div>
+            <h3>选择一个会话</h3>
+            <p>从左侧选择历史对话，或点击 + 新建对话</p>
           </div>
 
           <!-- Empty state: no messages yet (session selected but empty) -->
@@ -494,6 +491,9 @@
             </div>
           </div>
         </div>
+
+          </div><!-- end .chat-content -->
+        </div><!-- end .chat-body -->
       </template>
 
       <!-- No worker selected / Welcome screen -->
@@ -728,6 +728,11 @@ const workerSessions = computed(() =>
   chatStore.activeWorkerId
     ? chatStore.getWorkerSessions(chatStore.activeWorkerId)
     : []
+);
+
+/** chat 类型会话 ≥ 2 时显示左侧会话侧边栏（替代全屏 session picker） */
+const showSessionSidebar = computed(() =>
+  activeSessionType.value === 'chat' && workerSessions.value.length > 1
 );
 
 /**
@@ -1395,44 +1400,95 @@ onMounted(async () => {
   font-family: monospace;
 }
 
-.session-switcher-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  cursor: pointer;
-  padding: 1px 4px;
-  border-radius: 4px;
-  transition: background 0.15s;
-  max-width: 260px;
-}
-.session-switcher-trigger:hover {
-  background: var(--fill-2, rgba(0,0,0,0.06));
-}
-.session-switcher-title {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-family: monospace;
-  white-space: nowrap;
+/* ─── Session Sidebar ─────────────────────────────────────────────── */
+
+.chat-body {
+  flex: 1;
+  display: flex;
   overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
 }
-.session-switcher-icon {
-  font-size: 10px;
-  color: var(--text-quaternary, #bbb);
+
+.session-sidebar {
+  width: 220px;
+  min-width: 220px;
+  height: 100%;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-subpanel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.session-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
-.session-option-title {
+
+.session-sidebar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.session-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.session-sidebar-item {
+  padding: 9px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 2px 6px;
+  transition: background 0.15s;
+}
+
+.session-sidebar-item:hover {
+  background: var(--fill-2, rgba(0,0,0,0.04));
+}
+
+.session-sidebar-item.active {
+  background: rgb(var(--primary-1));
+}
+
+.session-sidebar-item-title {
   font-size: 13px;
   font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.session-option-meta {
+
+.session-sidebar-item.active .session-sidebar-item-title {
+  color: rgb(var(--primary-6));
+}
+
+.session-sidebar-item-preview {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.session-sidebar-item-meta {
   font-size: 11px;
   color: var(--text-tertiary);
-  margin-top: 1px;
+  margin-top: 2px;
 }
-:deep(.session-option-active .arco-dropdown-option-content) {
-  color: rgb(var(--primary-6));
+
+.chat-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .chat-header-right {
