@@ -51,7 +51,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { AgentEngine } from '@bcc/agent-engine';
 import { getBuiltinTool, findBuiltin, SkillRegistry, saveUserSkill, deleteUserSkill, SkillHub } from '@bcc/skills';
-import type { AgentInterface, AgentChunk, OrgMessage, Tool } from '@bcc/foundation';
+import type { AgentInterface, AgentChunk, OrgMessage, Tool, Message } from '@bcc/foundation';
 import { SessionStore } from './session-store.js';
 import type { ApiWorker, ApiModel, TokenStats, TokenRecord, SseEvent } from './types.js';
 import type {
@@ -228,6 +228,8 @@ async function createAdapter(instance: ModelInstanceConfig) {
  */
 class WorkerChatAdapter implements AgentInterface {
   private readonly threadId: string;
+  /** 本会话独立的对话历史，与其他会话隔离 */
+  private sessionHistory: Message[] = [];
 
   constructor(private readonly worker: Worker, threadId?: string) {
     this.threadId = threadId ?? randomUUID();
@@ -242,11 +244,16 @@ class WorkerChatAdapter implements AgentInterface {
   }
 
   getHistory() {
-    return this.worker.getHistory();
+    return this.sessionHistory;
   }
 
   clearHistory(): void {
-    this.worker.getHistory().length = 0;
+    this.sessionHistory = [];
+  }
+
+  /** 从外部（如磁盘恢复）加载初始对话历史 */
+  loadSessionHistory(messages: Message[]): void {
+    this.sessionHistory = [...messages];
   }
 
   dumpHistory(): string {
@@ -268,6 +275,9 @@ class WorkerChatAdapter implements AgentInterface {
   }
 
   async *stream(userInput: string): AsyncIterable<AgentChunk> {
+    // 将本会话的历史切换到 Worker 引擎，实现多会话隔离
+    this.worker.loadHistory(this.sessionHistory);
+
     // 注入当前工作现场上下文（未读消息 + 待处理任务），与 CLI WorkerSession 保持一致
     const stateContext = await this.worker.getStateContext();
     const enrichedInput = stateContext
@@ -296,6 +306,9 @@ class WorkerChatAdapter implements AgentInterface {
         yield tu ? { type: 'done', tokenUsage: tu } : { type: 'done' };
       }
     }
+
+    // 将本轮更新后的引擎历史保存回本会话，下次调用时可正确恢复
+    this.sessionHistory = this.worker.getHistory();
   }
 }
 
@@ -1060,12 +1073,21 @@ export class HttpServer {
     }
 
     try {
-      const agent = await this.getAgentForWorker(workerCfg);
+      // 每个 chat 会话创建独立的 WorkerChatAdapter，避免多会话间对话历史互相污染
+      const agent = this._newChatAdapter(workerCfg) ?? await this.getAgentForWorker(workerCfg);
       const entry = this.store.create(workerId, agent);
       ok(res, this.store.toApiSession(entry), 201);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /** 为 chat 类会话创建独立的 WorkerChatAdapter（有 Company Worker 时优先使用）。 */
+  private _newChatAdapter(workerCfg: WorkerConfig): WorkerChatAdapter | null {
+    if (!this.company) return null;
+    const companyWorker = this.company.getWorker(workerCfg.id);
+    if (!companyWorker) return null;
+    return new WorkerChatAdapter(companyWorker);
   }
 
   private handleListSessions(res: ServerResponse, workerId: string) {
@@ -1133,14 +1155,22 @@ export class HttpServer {
     entry: import('./session-store.js').SessionEntry,
     content: string,
   ) {
-    // 懒加载：会话从磁盘恢复时 agent 为 undefined，按需重建
+    // 懒加载：会话从磁盘恢复时 agent 为 undefined，按需重建（每个会话独立 adapter）
     if (!entry.agent) {
       const workerCfg = (this.config.workers ?? []).find(w => w.id === entry.workerId);
       if (!workerCfg) {
         writeSse(res, { event: 'error', data: { message: `Worker "${entry.workerId}" 配置不存在` } });
         res.end(); return;
       }
-      entry.agent = await this.getAgentForWorker(workerCfg);
+      const adapter = this._newChatAdapter(workerCfg);
+      if (adapter) {
+        // 从持久化消息恢复会话历史，让 LLM 拥有正确的对话上下文
+        const history: Message[] = entry.messages.map(m => ({ role: m.role, content: m.content }));
+        adapter.loadSessionHistory(history);
+        entry.agent = adapter;
+      } else {
+        entry.agent = await this.getAgentForWorker(workerCfg);
+      }
     }
 
     // 记录用户消息

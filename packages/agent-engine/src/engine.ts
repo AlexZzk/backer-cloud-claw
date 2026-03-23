@@ -151,6 +151,11 @@ export class AgentEngine implements AgentInterface {
     this.history = [];
   }
 
+  /** 用外部消息列表替换当前历史（用于多会话隔离时切换上下文）。 */
+  loadHistory(messages: Message[]): void {
+    this.history = [...messages];
+  }
+
   dumpHistory(): string {
     return this.history
       .map(m => `[${m.role}] ${extractText(m)}`)
