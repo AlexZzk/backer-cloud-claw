@@ -299,7 +299,25 @@
                     {{ t(`workers.${activeWorker.status}`) }}
                   </a-tag>
                 </div>
-                <div class="worker-model">{{ activeWorker.modelId }}</div>
+                <!-- 会话切换器：显示当前会话标题，点击展开选择其他会话 -->
+                <a-dropdown v-if="workerSessions.length > 1" trigger="click" @select="openSession">
+                  <div class="session-switcher-trigger">
+                    <span class="session-switcher-title">{{ chatStore.activeSession?.title ?? '当前会话' }}</span>
+                    <icon-down class="session-switcher-icon" />
+                  </div>
+                  <template #content>
+                    <a-doption
+                      v-for="s in workerSessions"
+                      :key="s.id"
+                      :value="s.id"
+                      :class="{ 'session-option-active': s.id === chatStore.activeSessionId }"
+                    >
+                      <div class="session-option-title">{{ s.title }}</div>
+                      <div class="session-option-meta">{{ s.messageCount }} 条 · {{ formatTime(s.updatedAt) }}</div>
+                    </a-doption>
+                  </template>
+                </a-dropdown>
+                <div v-else class="worker-model">{{ activeWorker.modelId }}</div>
               </div>
             </template>
           </div>
@@ -715,6 +733,7 @@ const workerSessions = computed(() =>
 /**
  * 合并主会话消息 + Worker notify_user 异步消息，按时间戳排序
  * 让用户与 Worker 的所有沟通都在同一窗口展示
+ * 注意：notify 消息按会话创建时间过滤，避免旧会话的通知出现在新会话中
  */
 const mergedMessages = computed(() => {
   const sessionMsgs = (chatStore.activeSession?.messages ?? []).map(m => ({
@@ -726,7 +745,10 @@ const mergedMessages = computed(() => {
     speakerId: m.speakerId,
     isNotify: false,
   }));
-  const notifyMsgs = chatStore.activeWorkerNotifyMessages;
+  const sessionCreatedAt = chatStore.activeSession?.createdAt ?? 0;
+  const notifyMsgs = chatStore.activeWorkerNotifyMessages.filter(
+    m => (m.timestamp ?? 0) >= sessionCreatedAt
+  );
   const all = [...sessionMsgs, ...notifyMsgs];
   return all.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 });
@@ -922,8 +944,9 @@ async function handleSelectWorker(workerId: string) {
   await chatStore.selectWorker(workerId);
 }
 
-/** 打开指定会话，懒加载消息 */
-async function openSession(sessionId: string) {
+/** 打开指定会话，懒加载消息（也用作 a-dropdown @select 回调） */
+async function openSession(sessionId: unknown) {
+  if (typeof sessionId !== 'string') return;
   chatStore.selectSession(sessionId);
   const session = chatStore.sessions.find(s => s.id === sessionId);
   if (session && session.messages.length === 0 && session.messageCount > 0) {
@@ -1370,6 +1393,46 @@ onMounted(async () => {
   font-size: 11px;
   color: var(--text-tertiary);
   font-family: monospace;
+}
+
+.session-switcher-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: background 0.15s;
+  max-width: 260px;
+}
+.session-switcher-trigger:hover {
+  background: var(--fill-2, rgba(0,0,0,0.06));
+}
+.session-switcher-title {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.session-switcher-icon {
+  font-size: 10px;
+  color: var(--text-quaternary, #bbb);
+  flex-shrink: 0;
+}
+.session-option-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+.session-option-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 1px;
+}
+:deep(.session-option-active .arco-dropdown-option-content) {
+  color: rgb(var(--primary-6));
 }
 
 .chat-header-right {
