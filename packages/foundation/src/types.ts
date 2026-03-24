@@ -529,6 +529,43 @@ export interface SkillEvolutionCapabilityConfig {
 }
 
 /**
+ * BrowserCapabilityConfig：浏览器访问能力配置。
+ *
+ * 启用后 Worker 可以自主打开浏览器、导航页面、执行点击/输入等操作，
+ * 适用于前端验收测试、UI 自动化验证等场景。
+ */
+export interface BrowserCapabilityConfig {
+  /**
+   * 是否以无头模式运行浏览器（默认 true）。
+   * 设为 false 可在调试时看到浏览器窗口。
+   */
+  headless?: boolean;
+  /**
+   * 默认操作超时（毫秒，默认 30000）。
+   * 影响 wait_for_selector、click、fill 等操作的超时阈值。
+   */
+  timeout?: number;
+  /**
+   * 允许访问的 URL 前缀白名单（空数组或未设置表示不限制）。
+   * 例如：["http://localhost", "https://staging.example.com"]
+   */
+  allowedUrls?: string[];
+  /**
+   * 截图保存目录（绝对路径，默认 ~/.bcc/screenshots）。
+   * 每次 browser_screenshot 调用后截图保存到此目录。
+   */
+  screenshotDir?: string;
+  /**
+   * 浏览器视口宽度（像素，默认 1280）。
+   */
+  viewportWidth?: number;
+  /**
+   * 浏览器视口高度（像素，默认 720）。
+   */
+  viewportHeight?: number;
+}
+
+/**
  * WorkerCapabilityConfig：Worker 可选能力的配置集合。
  *
  * 每项能力均可设为 `true`（使用默认配置）或具体配置对象。
@@ -553,6 +590,12 @@ export interface WorkerCapabilityConfig {
   reflection?: ReflectionCapabilityConfig | boolean;
   /** 技能进化：私有技能 + 晋升申请 */
   skillEvolution?: SkillEvolutionCapabilityConfig | boolean;
+  /**
+   * 浏览器访问能力：允许 Worker 自主打开浏览器并进行交互操作。
+   * 适用于前端验收测试、UI 自动化验证等场景。
+   * 设为 true 使用默认配置（无头模式，30s 超时）。
+   */
+  browser?: BrowserCapabilityConfig | boolean;
 }
 
 // ─── 审计日志 ─────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ function resolveEnabledCapabilities(config: WorkerCapabilityConfig): Set<string>
   if (config.soul) caps.add('soul');
   if (config.reflection) caps.add('reflection');
   if (config.skillEvolution) caps.add('skillEvolution');
+  if (config.browser) caps.add('browser');
 
   const mem = config.memory;
   if (mem) {

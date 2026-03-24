@@ -70,6 +70,7 @@ import { ChatStore, MessagingService } from '@bcc/messaging';
 import { TaskStore, TaskManager } from '@bcc/task';
 import { Company, Worker } from '@bcc/org';
 import { FileMemoryStore } from '@bcc/memory-fs';
+import { BrowserSession, createBrowserTools } from '@bcc/capability-browser';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -613,6 +614,22 @@ export class HttpServer {
       const { mkdir } = await import('node:fs/promises');
       await mkdir(wsDir,  { recursive: true }).catch(() => {});
       await mkdir(shdDir, { recursive: true }).catch(() => {});
+    }
+
+    // 注册浏览器工具（当 capabilities.browser 启用时）
+    const browserCap = workerCfg.capabilities?.browser;
+    if (browserCap) {
+      const browserSession = new BrowserSession(
+        typeof browserCap === 'object' ? browserCap : true,
+      );
+      const browserTools = createBrowserTools(browserSession);
+      for (const tool of browserTools) {
+        worker.registerTool(tool);
+      }
+      console.log(
+        `  [browser] Worker "${workerCfg.id}" 已启用浏览器访问能力` +
+        ` (headless=${browserSession.config.headless}, timeout=${browserSession.config.timeout}ms)`,
+      );
     }
 
     return worker;
