@@ -230,6 +230,8 @@ class WorkerChatAdapter implements AgentInterface {
   private readonly threadId: string;
   /** 本会话独立的对话历史，与其他会话隔离 */
   private sessionHistory: Message[] = [];
+  /** 历史会话的摘要，在本会话首条消息时注入跨会话上下文 */
+  private priorContextSummary = '';
 
   constructor(private readonly worker: Worker, threadId?: string) {
     this.threadId = threadId ?? randomUUID();
@@ -256,6 +258,11 @@ class WorkerChatAdapter implements AgentInterface {
     this.sessionHistory = [...messages];
   }
 
+  /** 设置历史会话摘要，将在首条消息时自动注入上下文 */
+  setPriorContextSummary(summary: string): void {
+    this.priorContextSummary = summary;
+  }
+
   dumpHistory(): string {
     return this.worker.getHistory()
       .map(m => {
@@ -278,11 +285,17 @@ class WorkerChatAdapter implements AgentInterface {
     // 将本会话的历史切换到 Worker 引擎，实现多会话隔离
     this.worker.loadHistory(this.sessionHistory);
 
+    // 首条消息：将历史会话摘要注入上下文，帮助 Worker 了解之前的工作背景
+    let effectiveInput = userInput;
+    if (this.sessionHistory.length === 0 && this.priorContextSummary) {
+      effectiveInput = `【历史会话摘要 - 此前与用户沟通的要点】\n${this.priorContextSummary}\n\n---\n\n${userInput}`;
+    }
+
     // 注入当前工作现场上下文（未读消息 + 待处理任务），与 CLI WorkerSession 保持一致
     const stateContext = await this.worker.getStateContext();
     const enrichedInput = stateContext
-      ? `【当前状态提醒 - 你的工作现场】\n${stateContext}\n\n【本条消息】\n${userInput}`
-      : userInput;
+      ? `【当前状态提醒 - 你的工作现场】\n${stateContext}\n\n【本条消息】\n${effectiveInput}`
+      : effectiveInput;
 
     const message: OrgMessage = {
       id: randomUUID(),
@@ -1074,12 +1087,77 @@ export class HttpServer {
 
     try {
       // 每个 chat 会话创建独立的 WorkerChatAdapter，避免多会话间对话历史互相污染
-      const agent = this._newChatAdapter(workerCfg) ?? await this.getAgentForWorker(workerCfg);
-      const entry = this.store.create(workerId, agent);
+      const adapter = this._newChatAdapter(workerCfg) ?? await this.getAgentForWorker(workerCfg);
+
+      // force=true 时，汇总此前所有 chat 会话的摘要，注入新会话的跨会话上下文
+      if (force && adapter instanceof WorkerChatAdapter) {
+        const existingSessions = this.store.listByWorker(workerId)
+          .filter(s => s.type === 'chat');
+
+        // 对尚未生成摘要且有消息的会话，调用 LLM 生成摘要并持久化
+        for (const session of existingSessions) {
+          if (!session.summary && session.messages.length > 0) {
+            try {
+              const summary = await this._summarizeSession(session, workerCfg);
+              if (summary) this.store.setSummary(session.id, summary);
+            } catch (err) {
+              console.warn(`  ⚠️  会话 ${session.id} 摘要生成失败: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        }
+
+        // 收集所有有摘要的历史会话，按时间顺序拼接成综合上下文
+        const summaries = existingSessions
+          .filter(s => s.summary)
+          .sort((a, b) => a.createdAt - b.createdAt)
+          .map((s, i) => `【第 ${i + 1} 段会话摘要】\n${s.summary!}`)
+          .join('\n\n');
+
+        if (summaries) {
+          adapter.setPriorContextSummary(summaries);
+        }
+      }
+
+      const entry = this.store.create(workerId, adapter);
       ok(res, this.store.toApiSession(entry), 201);
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /**
+   * 用 LLM 为指定会话生成摘要（100~200 字中文）。
+   * 优先使用 Worker 的 reviewModelId（更便宜的模型），其次主模型。
+   */
+  private async _summarizeSession(
+    entry: import('./session-store.js').SessionEntry,
+    workerCfg: WorkerConfig,
+  ): Promise<string> {
+    const transcript = entry.messages
+      .map(m => `[${m.role === 'user' ? '用户' : workerCfg.name}]\n${m.content}`)
+      .join('\n\n');
+
+    if (!transcript.trim()) return '';
+
+    const modelId = workerCfg.reviewModelId ?? workerCfg.modelId;
+    const modelInstance =
+      this.config.models.find(m => m.id === modelId)
+      ?? this.config.models.find(m => m.primary)
+      ?? this.config.models[0];
+
+    if (!modelInstance) return '';
+
+    const modelAdapter = await createAdapter(modelInstance);
+    const engine = await AgentEngine.create({ model: modelAdapter });
+
+    const prompt = `以下是一段对话记录，请用简洁的中文总结这段对话的主要内容、关键决策和待办事项（100~200字），供后续对话参考：\n\n${transcript}`;
+
+    let summary = '';
+    for await (const chunk of engine.stream(prompt)) {
+      if (chunk.type === 'text') summary += chunk.text;
+    }
+
+    return summary.trim();
   }
 
   /** 为 chat 类会话创建独立的 WorkerChatAdapter（有 Company Worker 时优先使用）。 */
