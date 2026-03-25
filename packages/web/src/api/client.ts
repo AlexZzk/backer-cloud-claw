@@ -9,6 +9,45 @@ import service from '@/http/axios.ts'
 
 // ─── 类型 ───────────────────────────────────────────────────────────────
 
+// ── Worker 能力配置类型 ────────────────────────────────────────────────────
+
+export interface BrowserCapConfig {
+  headless?: boolean
+  timeout?: number
+  allowedUrls?: string[]
+  screenshotDir?: string
+  viewportWidth?: number
+  viewportHeight?: number
+}
+
+export interface MemoryCapConfig {
+  episodic?: boolean
+  longTerm?: boolean
+  contextWindow?: number
+}
+
+export interface SoulCapConfig {
+  file?: string
+  userContext?: string
+}
+
+export interface ProactivityCapConfig {
+  heartbeat?: string
+  routine?: Array<'checkInbox' | 'reviewTasks' | 'planDay' | 'notify'>
+}
+
+export interface WorkerCapabilities {
+  browser?: BrowserCapConfig | boolean
+  task?: boolean
+  memory?: MemoryCapConfig | boolean
+  soul?: SoulCapConfig | boolean
+  reflection?: boolean
+  skillEvolution?: boolean
+  proactivity?: ProactivityCapConfig | boolean
+}
+
+// ── Worker ────────────────────────────────────────────────────────────────
+
 export interface ApiWorker {
   id: string
   name: string
@@ -30,6 +69,8 @@ export interface ApiWorker {
   status: 'online' | 'idle' | 'offline' | 'busy'
   /** 工作空间目录绝对路径（由服务端计算，不可为空） */
   workspace: string
+  /** Worker 可选能力配置 */
+  capabilities?: WorkerCapabilities
 }
 
 export type SessionType = 'chat' | 'dm' | 'group'
@@ -115,6 +156,8 @@ export interface ApiWorkerInput {
   isPrimary?: boolean
   /** 自定义工作空间目录路径（留空则使用默认值 ~/.bcc/workspaces/{id}） */
   workspace?: string
+  /** Worker 可选能力配置 */
+  capabilities?: WorkerCapabilities
 }
 
 export interface WorkspaceFile {
@@ -432,6 +475,61 @@ export const skillsApi = {
 
   searchHub: (query: string) =>
     service.get<{ skills: ApiHubSkill[]; total: number }>(`/skills/hub?q=${encodeURIComponent(query)}`),
+}
+
+// ─── Tools API ──────────────────────────────────────────────────────────
+
+export type ToolCategory = 'builtin' | 'browser' | 'user'
+
+export interface ApiToolInputParam {
+  type: 'string' | 'number' | 'boolean' | 'object' | 'array'
+  description?: string
+  enum?: string[]
+  default?: unknown
+  items?: { type: string }
+  properties?: Record<string, ApiToolInputParam>
+  required?: string[]
+}
+
+export interface ApiToolEntry {
+  id: string
+  name: string
+  description: string
+  category: ToolCategory
+  inputParams?: Record<string, ApiToolInputParam>
+  requiredParams?: string[]
+  requiresCapability?: string
+}
+
+export interface UserToolConfig {
+  id: string
+  name: string
+  description: string
+  webhookUrl: string
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH'
+  headers?: Record<string, string>
+  inputParams?: Record<string, ApiToolInputParam>
+  requiredParams?: string[]
+}
+
+export interface ApiToolsResponse {
+  builtin: ApiToolEntry[]
+  browser: ApiToolEntry[]
+  user: UserToolConfig[]
+}
+
+export const toolsApi = {
+  list: () =>
+    service.get<ApiToolsResponse>('/tools'),
+
+  create: (data: Omit<UserToolConfig, never>) =>
+    service.post<UserToolConfig>('/tools', data),
+
+  update: (id: string, data: Partial<UserToolConfig>) =>
+    service.put<UserToolConfig>(`/tools/${encodeURIComponent(id)}`, data),
+
+  delete: (id: string) =>
+    service.delete(`/tools/${encodeURIComponent(id)}`),
 }
 
 // ─── Analytics API ──────────────────────────────────────────────────────

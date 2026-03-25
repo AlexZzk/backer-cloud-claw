@@ -25,6 +25,10 @@
  *   POST   /api/skills                   创建用户技能
  *   DELETE /api/skills/:name             删除用户技能
  *   GET    /api/skills/hub?q=            在 SkillHub 搜索技能
+ *   GET    /api/tools                    列出所有工具（内置 + 浏览器 + 用户自定义）
+ *   POST   /api/tools                    创建用户自定义工具
+ *   PUT    /api/tools/:id               更新用户自定义工具
+ *   DELETE /api/tools/:id              删除用户自定义工具
  *
  * Worker 间异步聊天监控（依赖 @bcc/messaging）：
  *   GET    /api/chats                     列出所有 Worker 间聊天会话
@@ -53,7 +57,7 @@ import { AgentEngine } from '@bcc/agent-engine';
 import { getBuiltinTool, findBuiltin, SkillRegistry, saveUserSkill, deleteUserSkill, SkillHub } from '@bcc/skills';
 import type { AgentInterface, AgentChunk, OrgMessage, Tool, Message } from '@bcc/foundation';
 import { SessionStore } from './session-store.js';
-import type { ApiWorker, ApiModel, TokenStats, TokenRecord, SseEvent } from './types.js';
+import type { ApiWorker, ApiWorkerCapabilities, ApiModel, TokenStats, TokenRecord, SseEvent } from './types.js';
 import type {
   BccConfig,
   ModelInstanceConfig,
@@ -71,6 +75,11 @@ import { TaskStore, TaskManager } from '@bcc/task';
 import { Company, Worker } from '@bcc/org';
 import { FileMemoryStore } from '@bcc/memory-fs';
 import { BrowserSession, createBrowserTools } from '@bcc/capability-browser';
+import {
+  BUILTIN_TOOL_CATALOG, BROWSER_TOOL_CATALOG,
+  validateUserToolId,
+} from './user-tools.js';
+import type { UserToolConfig } from './types.js';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -781,6 +790,36 @@ export class HttpServer {
       }
     }
 
+    // ── GET /api/tools
+    if (method === 'GET' && path === '/api/tools') {
+      await this.handleGetTools(res);
+      return;
+    }
+
+    // ── POST /api/tools
+    if (method === 'POST' && path === '/api/tools') {
+      await this.handleCreateUserTool(req, res);
+      return;
+    }
+
+    // ── PUT /api/tools/:toolId
+    {
+      const m = matchRoute('/api/tools/:toolId', path);
+      if (m && method === 'PUT') {
+        await this.handleUpdateUserTool(req, res, m.params['toolId']!);
+        return;
+      }
+    }
+
+    // ── DELETE /api/tools/:toolId
+    {
+      const m = matchRoute('/api/tools/:toolId', path);
+      if (m && method === 'DELETE') {
+        await this.handleDeleteUserTool(res, m.params['toolId']!);
+        return;
+      }
+    }
+
     // ── POST /api/workers/:workerId/heartbeat  (手动触发一次心跳审视)
     {
       const m = matchRoute('/api/workers/:workerId/heartbeat', path);
@@ -1004,20 +1043,26 @@ export class HttpServer {
 
   private async handleGetWorkers(res: ServerResponse) {
     await this.reloadConfig();
-    const workers: ApiWorker[] = (this.config.workers ?? []).map(w => ({
-      id:          w.id,
-      name:        w.name,
-      description: w.description,
-      skills:      w.skills,
-      modelId:     w.modelId,
-      ...(w.reviewModelId && { reviewModelId: w.reviewModelId }),
-      ...(w.heartbeatIntervalMs !== undefined && { heartbeatIntervalMs: w.heartbeatIntervalMs }),
-      role:        w.role,
-      tools:       w.tools ?? [],
-      isPrimary:   w.primary ?? false,
-      status:      this._resolveWorkerStatus(w.id),
-      workspace:   resolveWorkspaceDir(w, this.config),
-    }));
+    const workers: ApiWorker[] = (this.config.workers ?? []).map(w => {
+      const entry: ApiWorker = {
+        id:          w.id,
+        name:        w.name,
+        description: w.description,
+        skills:      w.skills,
+        modelId:     w.modelId,
+        ...(w.reviewModelId && { reviewModelId: w.reviewModelId }),
+        ...(w.heartbeatIntervalMs !== undefined && { heartbeatIntervalMs: w.heartbeatIntervalMs }),
+        role:        w.role,
+        tools:       w.tools ?? [],
+        isPrimary:   w.primary ?? false,
+        status:      this._resolveWorkerStatus(w.id),
+        workspace:   resolveWorkspaceDir(w, this.config),
+      };
+      if (w.capabilities !== undefined) {
+        entry.capabilities = w.capabilities as ApiWorkerCapabilities;
+      }
+      return entry;
+    });
     ok(res, workers);
   }
 
@@ -1983,7 +2028,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id: rawId, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary, workspace } = body;
+    const { id: rawId, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary, workspace, capabilities } = body;
     if (!name?.trim())    { badRequest(res, '"name" is required'); return; }
     if (!modelId?.trim()) { badRequest(res, '"modelId" is required'); return; }
 
@@ -2026,6 +2071,7 @@ export class HttpServer {
       tools: tools ?? [],
       primary: primary ?? false,
       ...(workspace?.trim() && { workspace: workspace.trim() }),
+      ...(capabilities !== undefined && { capabilities }),
     };
 
     // 若设为主 Worker，取消其他 primary 标记
@@ -2069,6 +2115,9 @@ export class HttpServer {
       status:      this._resolveWorkerStatus(newWorker.id),
       workspace:   resolveWorkspaceDir(newWorker, this.config),
     };
+    if (newWorker.capabilities !== undefined) {
+      apiWorker.capabilities = newWorker.capabilities as ApiWorkerCapabilities;
+    }
     ok(res, apiWorker, 201);
   }
 
@@ -2097,6 +2146,10 @@ export class HttpServer {
     const newWorkspace = body.workspace !== undefined
       ? (body.workspace.trim() || undefined)
       : existing.workspace;
+    // capabilities: undefined 表示不修改，null 表示清除，对象表示替换
+    const newCapabilities = body.capabilities !== undefined
+      ? body.capabilities
+      : existing.capabilities;
     const updated: WorkerConfig = {
       id:          workerId,
       name:        body.name?.trim()        ?? existing.name,
@@ -2109,6 +2162,7 @@ export class HttpServer {
       tools:       body.tools               ?? existing.tools ?? [],
       primary:     body.primary             ?? existing.primary ?? false,
       ...(newWorkspace && { workspace: newWorkspace }),
+      ...(newCapabilities !== undefined && { capabilities: newCapabilities }),
     };
 
     if (updated.primary) {
@@ -2154,6 +2208,9 @@ export class HttpServer {
       status:      this._resolveWorkerStatus(updated.id),
       workspace:   resolveWorkspaceDir(updated, this.config),
     };
+    if (updated.capabilities !== undefined) {
+      apiWorker.capabilities = updated.capabilities as ApiWorkerCapabilities;
+    }
     ok(res, apiWorker);
   }
 
@@ -2775,5 +2832,99 @@ export class HttpServer {
     } catch (err) {
       serverError(res, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  // ── Tools CRUD ──────────────────────────────────────────────────────────────
+
+  private async handleGetTools(res: ServerResponse) {
+    const cfg = await loadConfig();
+    ok(res, {
+      builtin: BUILTIN_TOOL_CATALOG,
+      browser: BROWSER_TOOL_CATALOG,
+      user: cfg?.userTools ?? [],
+    });
+  }
+
+  private async handleCreateUserTool(req: IncomingMessage, res: ServerResponse) {
+    let body: Partial<UserToolConfig>;
+    try {
+      body = JSON.parse(await readBody(req)) as Partial<UserToolConfig>;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { id, name, description, webhookUrl } = body;
+    if (!id?.trim())          { badRequest(res, '"id" is required'); return; }
+    if (!name?.trim())        { badRequest(res, '"name" is required'); return; }
+    if (!description?.trim()) { badRequest(res, '"description" is required'); return; }
+    if (!webhookUrl?.trim())  { badRequest(res, '"webhookUrl" is required'); return; }
+
+    const idErr = validateUserToolId(id.trim());
+    if (idErr) { badRequest(res, idErr); return; }
+
+    const cfg = await loadConfig();
+    if (!cfg) { serverError(res, '配置加载失败'); return; }
+
+    const existing = (cfg.userTools ?? []).find(t => t.id === id.trim());
+    if (existing) { conflict(res, `工具 ID "${id}" 已存在`); return; }
+
+    const newTool: UserToolConfig = {
+      id: id.trim(),
+      name: name.trim(),
+      description: description.trim(),
+      webhookUrl: webhookUrl.trim(),
+      ...(body.method      !== undefined && { method: body.method }),
+      ...(body.headers     !== undefined && { headers: body.headers }),
+      ...(body.inputParams !== undefined && { inputParams: body.inputParams }),
+      ...(body.requiredParams !== undefined && { requiredParams: body.requiredParams }),
+    };
+
+    if (!cfg.userTools) cfg.userTools = [];
+    cfg.userTools.push(newTool);
+    await saveConfig(cfg);
+    ok(res, newTool, 201);
+  }
+
+  private async handleUpdateUserTool(req: IncomingMessage, res: ServerResponse, toolId: string) {
+    let body: Partial<UserToolConfig>;
+    try {
+      body = JSON.parse(await readBody(req)) as Partial<UserToolConfig>;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const cfg = await loadConfig();
+    if (!cfg) { serverError(res, '配置加载失败'); return; }
+
+    const idx = (cfg.userTools ?? []).findIndex(t => t.id === toolId);
+    if (idx === -1) { notFound(res); return; }
+
+    const existing = cfg.userTools![idx]!;
+    const updated: UserToolConfig = {
+      id: existing.id,
+      name: body.name?.trim() ?? existing.name,
+      description: body.description?.trim() ?? existing.description,
+      webhookUrl: body.webhookUrl?.trim() ?? existing.webhookUrl,
+    };
+    if (body.method      !== undefined) updated.method = body.method;
+    if (body.headers     !== undefined) updated.headers = body.headers;
+    if (body.inputParams !== undefined) updated.inputParams = body.inputParams;
+    if (body.requiredParams !== undefined) updated.requiredParams = body.requiredParams;
+
+    cfg.userTools![idx] = updated;
+    await saveConfig(cfg);
+    ok(res, updated);
+  }
+
+  private async handleDeleteUserTool(res: ServerResponse, toolId: string) {
+    const cfg = await loadConfig();
+    if (!cfg) { serverError(res, '配置加载失败'); return; }
+
+    const idx = (cfg.userTools ?? []).findIndex(t => t.id === toolId);
+    if (idx === -1) { notFound(res); return; }
+
+    cfg.userTools!.splice(idx, 1);
+    await saveConfig(cfg);
+    ok(res, { deleted: true, id: toolId });
   }
 }
