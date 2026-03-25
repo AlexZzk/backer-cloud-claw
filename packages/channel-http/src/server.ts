@@ -870,7 +870,7 @@ export class HttpServer {
 
     // ── GET /api/analytics/tokens
     if (method === 'GET' && path === '/api/analytics/tokens') {
-      this.handleGetAnalytics(res);
+      this.handleGetAnalytics(req, res);
       return;
     }
 
@@ -1208,22 +1208,45 @@ export class HttpServer {
     ok(res, models);
   }
 
-  private handleGetAnalytics(res: ServerResponse) {
-    const byWorker = [...this.tokenAcc.values()];
+  private handleGetAnalytics(req: IncomingMessage, res: ServerResponse) {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const period = url.searchParams.get('period') ?? '30days';
 
-    // 将明细记录按日期聚合（最近 30 天）
-    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const periodCutoff: Record<string, number> = {
+      today:   now - 1  * 24 * 60 * 60 * 1000,
+      week:    now - 7  * 24 * 60 * 60 * 1000,
+      month:   now - 30 * 24 * 60 * 60 * 1000,
+      '30days':now - 30 * 24 * 60 * 60 * 1000,
+    };
+    const cutoff = periodCutoff[period] ?? periodCutoff['30days']!;
+
+    // 按时间段聚合 byWorker 和 byDay
+    const workerMap = new Map<string, { workerId: string; workerName: string; inputTokens: number; outputTokens: number; totalTokens: number; callCount: number }>();
     const dayMap = new Map<string, { inputTokens: number; outputTokens: number; totalTokens: number }>();
+
     for (const r of this.tokenRecords) {
       if (r.timestamp < cutoff) continue;
+
+      // byWorker
+      const wAcc = workerMap.get(r.workerId) ?? { workerId: r.workerId, workerName: r.workerName, inputTokens: 0, outputTokens: 0, totalTokens: 0, callCount: 0 };
+      wAcc.inputTokens  += r.inputTokens;
+      wAcc.outputTokens += r.outputTokens;
+      wAcc.totalTokens  += r.totalTokens;
+      wAcc.callCount    += 1;
+      workerMap.set(r.workerId, wAcc);
+
+      // byDay
       const d = new Date(r.timestamp);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const acc = dayMap.get(key) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-      acc.inputTokens  += r.inputTokens;
-      acc.outputTokens += r.outputTokens;
-      acc.totalTokens  += r.totalTokens;
-      dayMap.set(key, acc);
+      const dAcc = dayMap.get(key) ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      dAcc.inputTokens  += r.inputTokens;
+      dAcc.outputTokens += r.outputTokens;
+      dAcc.totalTokens  += r.totalTokens;
+      dayMap.set(key, dAcc);
     }
+
+    const byWorker = [...workerMap.values()];
     const byDay = [...dayMap.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, v]) => ({ date, ...v }));

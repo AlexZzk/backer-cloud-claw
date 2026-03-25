@@ -294,7 +294,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useWorkersStore } from '@/stores/workers';
 import { analyticsApi, type TokenStats } from '@/api/client';
@@ -324,7 +324,7 @@ const dimensions = computed(() => [
 async function fetchData() {
   loading.value = true;
   try {
-    stats.value = await analyticsApi.tokens();
+    stats.value = await analyticsApi.tokens(selectedPeriod.value);
   } catch {
     // backend may not be running; ignore
   } finally {
@@ -336,6 +336,8 @@ onMounted(() => {
   void workersStore.fetchWorkers();
   void fetchData();
 });
+
+watch(selectedPeriod, () => { void fetchData(); });
 
 // ── Computed from real API ──────────────────────────────────────────────────
 
