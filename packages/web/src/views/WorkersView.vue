@@ -127,6 +127,40 @@
             </div>
           </div>
 
+          <!-- Capabilities -->
+          <div class="detail-section" v-if="selectedWorker.capabilities">
+            <h3>能力配置</h3>
+            <div class="cap-list">
+              <!-- browser -->
+              <div v-if="selectedWorker.capabilities.browser !== undefined" class="cap-item">
+                <div class="cap-item-header">
+                  <span class="cap-icon">🌐</span>
+                  <span class="cap-name">浏览器访问</span>
+                  <a-tag :color="selectedWorker.capabilities.browser ? 'green' : 'gray'" size="small">
+                    {{ selectedWorker.capabilities.browser ? '已启用' : '已禁用' }}
+                  </a-tag>
+                </div>
+                <template v-if="selectedWorker.capabilities.browser && typeof selectedWorker.capabilities.browser === 'object'">
+                  <div class="cap-config">
+                    <span v-if="selectedWorker.capabilities.browser.headless !== undefined">
+                      {{ selectedWorker.capabilities.browser.headless ? '无头模式' : '有界面模式' }}
+                    </span>
+                    <span v-if="selectedWorker.capabilities.browser.timeout">
+                      超时 {{ selectedWorker.capabilities.browser.timeout / 1000 }}s
+                    </span>
+                    <span v-if="selectedWorker.capabilities.browser.screenshotDir">
+                      截图目录：<code>{{ selectedWorker.capabilities.browser.screenshotDir }}</code>
+                    </span>
+                  </div>
+                  <div v-if="selectedWorker.capabilities.browser.allowedUrls?.length" class="cap-allowed-urls">
+                    允许 URL：
+                    <code v-for="u in selectedWorker.capabilities.browser.allowedUrls" :key="u" class="url-chip">{{ u }}</code>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
           <a-divider />
 
           <!-- Workspace Files -->
@@ -396,6 +430,57 @@
         </a-select>
       </a-form-item>
 
+      <!-- Capabilities -->
+      <a-form-item label="能力配置">
+        <div class="cap-form-section">
+          <div class="cap-form-item">
+            <div class="cap-form-header">
+              <a-switch v-model="form.capBrowserEnabled" size="small" />
+              <span class="cap-form-label">🌐 浏览器访问</span>
+            </div>
+            <div v-if="form.capBrowserEnabled" class="cap-form-body">
+              <a-row :gutter="12">
+                <a-col :span="12">
+                  <a-form-item label="模式" :style="{ marginBottom: '8px' }">
+                    <a-radio-group v-model="form.capBrowserHeadless" type="button" size="small">
+                      <a-radio :value="true">无头（推荐）</a-radio>
+                      <a-radio :value="false">有界面</a-radio>
+                    </a-radio-group>
+                  </a-form-item>
+                </a-col>
+                <a-col :span="12">
+                  <a-form-item label="超时（毫秒）" :style="{ marginBottom: '8px' }">
+                    <a-input-number
+                      v-model="form.capBrowserTimeout"
+                      :min="5000"
+                      :max="300000"
+                      :step="5000"
+                      size="small"
+                      style="width: 100%"
+                    />
+                  </a-form-item>
+                </a-col>
+              </a-row>
+              <a-form-item label="截图目录（可选）" :style="{ marginBottom: '8px' }">
+                <a-input
+                  v-model="form.capBrowserScreenshotDir"
+                  placeholder="留空则使用默认目录"
+                  size="small"
+                />
+              </a-form-item>
+              <a-form-item label="允许访问的 URL（每行一个，留空不限制）" :style="{ marginBottom: '0' }">
+                <a-textarea
+                  v-model="form.capBrowserAllowedUrls"
+                  placeholder="http://localhost:3000&#10;https://example.com"
+                  :auto-size="{ minRows: 2, maxRows: 5 }"
+                  size="small"
+                />
+              </a-form-item>
+            </div>
+          </div>
+        </div>
+      </a-form-item>
+
       <a-form-item label="Avatar">
         <div class="avatar-picker">
           <span
@@ -502,6 +587,12 @@ const form = reactive({
   isPrimary: false,
   avatar: '🤖',
   workspace: '',
+  // ── 能力配置 ──
+  capBrowserEnabled: false,
+  capBrowserHeadless: true,
+  capBrowserTimeout: 30000,
+  capBrowserScreenshotDir: '',
+  capBrowserAllowedUrls: '',  // 换行分隔
 });
 
 const hasWorkspaceTools = computed(() =>
@@ -543,12 +634,16 @@ function openCreate() {
     modelId: defaultModelId.value, reviewModelId: '',
     heartbeatMode: 'active', heartbeatIntervalSec: 30,
     role: '', skills: [], tools: [], isPrimary: false, avatar: '🤖', workspace: '',
+    capBrowserEnabled: false, capBrowserHeadless: true,
+    capBrowserTimeout: 30000, capBrowserScreenshotDir: '', capBrowserAllowedUrls: '',
   });
   showModal.value = true;
 }
 
 function openEdit(worker: MockWorker) {
   editingWorker.value = worker;
+  const bc = worker.capabilities?.browser;
+  const bcObj = bc && typeof bc === 'object' ? bc : null;
   Object.assign(form, {
     id: worker.id,
     name: worker.name,
@@ -565,6 +660,11 @@ function openEdit(worker: MockWorker) {
     isPrimary: worker.isPrimary,
     avatar: '🤖',
     workspace: worker.workspace ?? '',
+    capBrowserEnabled: !!bc,
+    capBrowserHeadless: bcObj?.headless ?? true,
+    capBrowserTimeout: bcObj?.timeout ?? 30000,
+    capBrowserScreenshotDir: bcObj?.screenshotDir ?? '',
+    capBrowserAllowedUrls: bcObj?.allowedUrls?.join('\n') ?? '',
   });
   showModal.value = true;
 }
@@ -586,6 +686,20 @@ async function handleSave() {
     ? 0
     : form.heartbeatIntervalSec * 1000;
 
+  // Build capabilities
+  const capabilities: import('@/api/client').WorkerCapabilities | undefined = form.capBrowserEnabled
+    ? {
+        browser: {
+          headless: form.capBrowserHeadless,
+          timeout:  form.capBrowserTimeout,
+          ...(form.capBrowserScreenshotDir.trim() && { screenshotDir: form.capBrowserScreenshotDir.trim() }),
+          ...(form.capBrowserAllowedUrls.trim() && {
+            allowedUrls: form.capBrowserAllowedUrls.split('\n').map(u => u.trim()).filter(Boolean),
+          }),
+        },
+      }
+    : undefined;
+
   saving.value = true;
   try {
     if (editingWorker.value) {
@@ -600,6 +714,7 @@ async function handleSave() {
         tools:              form.tools,
         isPrimary:          form.isPrimary,
         workspace:          form.workspace.trim() || '',
+        capabilities,
       });
       Message.success('Worker 已更新');
     } else {
@@ -615,6 +730,7 @@ async function handleSave() {
         tools:              form.tools,
         isPrimary:          form.isPrimary,
         workspace:          form.workspace.trim() || undefined,
+        capabilities,
       });
       Message.success('Worker 已创建');
     }
@@ -1172,4 +1288,113 @@ function confirmDelete(id: string) {
 
 .avatar-option:hover { border-color: #165dff; }
 .avatar-option.selected { border-color: #165dff; background: rgba(22, 93, 255, 0.1); }
+
+/* ─── Capabilities display ──────────────────────────────────────────── */
+
+.cap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cap-item {
+  padding: 10px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.dark .cap-item {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cap-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cap-icon { font-size: 16px; }
+
+.cap-name {
+  flex: 1;
+  color: var(--color-text-1);
+}
+
+.cap-config {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+.cap-config code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.dark .cap-config code {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.cap-allowed-urls {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text-3);
+}
+
+.url-chip {
+  display: inline-block;
+  background: rgba(22, 93, 255, 0.08);
+  color: #165dff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+/* ─── Capabilities form ──────────────────────────────────────────────── */
+
+.cap-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cap-form-item {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cap-form-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.02);
+  cursor: default;
+}
+
+.dark .cap-form-header {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cap-form-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-1);
+}
+
+.cap-form-body {
+  padding: 12px 14px 8px;
+  border-top: 1px solid var(--border-color);
+}
 </style>

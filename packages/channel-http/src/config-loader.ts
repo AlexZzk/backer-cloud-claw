@@ -8,6 +8,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkerCapabilityConfig } from '@bcc/foundation';
+import type { UserToolConfig } from './types.js';
 
 const BCC_HOME    = join(homedir(), '.bcc');
 const CONFIG_PATH = join(BCC_HOME, 'config.json');
@@ -68,6 +69,8 @@ export interface BccConfig {
   /** 旧版 Agent 字段，HTTP 服务器透传不使用 */
   agents?: unknown[];
   workers?: WorkerConfig[];
+  /** 用户自定义工具（Webhook 类型） */
+  userTools?: UserToolConfig[];
   defaults: {
     enableMemory: boolean;
     sessionDir: string;

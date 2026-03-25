@@ -689,11 +689,18 @@ const storageForm = reactive({
 
 async function saveStorage() {
   try {
-    await configApi.updateDefaults({
+    const res = await configApi.updateDefaults({
       workspaceBaseDir: storageForm.workspaceBaseDir.trim() || undefined,
       sharedDir:        storageForm.sharedDir.trim() || undefined,
+      sessionDir:       storageForm.sessionDir.trim() || undefined,
+      enableMemory:     storageForm.episodicEnabled,
     });
-    Message.success(t('settings.saveSuccess'));
+    const requiresRestart = (res as { defaults: unknown; requiresRestart?: boolean }).requiresRestart;
+    if (requiresRestart) {
+      Message.warning(t('settings.saveSuccessRestartRequired'));
+    } else {
+      Message.success(t('settings.saveSuccess'));
+    }
   } catch {
     Message.error(t('common.error'));
   }
@@ -702,10 +709,11 @@ async function saveStorage() {
 onMounted(async () => {
   try {
     const res = await configApi.getDefaults();
-    const d = res.data.defaults;
+    const d = res.defaults;
     if (d.workspaceBaseDir) storageForm.workspaceBaseDir = d.workspaceBaseDir;
     if (d.sharedDir)        storageForm.sharedDir        = d.sharedDir;
     if (d.sessionDir)       storageForm.sessionDir       = d.sessionDir;
+    storageForm.episodicEnabled = d.enableMemory ?? true;
   } catch { /* 忽略，保留默认值 */ }
 });
 
