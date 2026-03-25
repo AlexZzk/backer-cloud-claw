@@ -1112,6 +1112,12 @@ watch(() => mergedMessages.value.length, async () => {
   scrollToBottom();
 });
 
+// 切换会话时滚动到底部，显示最新消息
+watch(() => chatStore.activeSessionId, async () => {
+  await nextTick();
+  scrollToBottom();
+});
+
 // ─── 对话列表刷新 ──────────────────────────────────────────────────────────────
 
 const refreshing = ref(false);
