@@ -384,6 +384,9 @@ export class HttpServer {
   // ── 对外入口 ────────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
+    // SessionStore 初始化时 this.config 尚未注入（类字段先于构造函数赋值），
+    // 在 start() 中用正确的 sessionDir 重建，再从磁盘加载
+    this.store = new SessionStore(this.config.defaults.sessionDir);
     // 从磁盘恢复历史会话（元数据 + 消息，agent 按需重建）
     await this.store.loadFromDisk();
     // 恢复 token 明细记录
