@@ -1,0 +1,27 @@
+{
+  "name": "@bcc/capability-browser",
+  "version": "0.1.0",
+  "description": "backer-cloud-claw 浏览器访问能力：基于 Playwright 的浏览器自动化工具集，支持导航、点击、输入、截图等操作",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bcc/foundation": "workspace:*",
+    "playwright": "^1.56.1"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "@types/node": "*"
+  }
+}

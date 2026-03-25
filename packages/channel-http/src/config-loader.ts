@@ -7,6 +7,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import type { WorkerCapabilityConfig } from '@bcc/foundation';
 
 const BCC_HOME    = join(homedir(), '.bcc');
 const CONFIG_PATH = join(BCC_HOME, 'config.json');
@@ -52,6 +53,13 @@ export interface WorkerConfig {
    * 未设置时默认为 `${defaults.workspaceBaseDir}/${id}`。
    */
   workspace?: string;
+  /**
+   * Worker 可选能力配置。
+   * 例如启用浏览器访问能力：
+   *   capabilities: { browser: true }
+   *   capabilities: { browser: { headless: false, timeout: 60000 } }
+   */
+  capabilities?: WorkerCapabilityConfig;
 }
 
 export interface BccConfig {

@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@bcc/agent-engine": "workspace:*",
+    "@bcc/capability-browser": "workspace:*",
     "@bcc/foundation": "workspace:*",
     "@bcc/memory-fs": "workspace:*",
     "@bcc/messaging": "workspace:*",
