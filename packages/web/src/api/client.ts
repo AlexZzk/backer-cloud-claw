@@ -535,8 +535,8 @@ export const toolsApi = {
 // ─── Analytics API ──────────────────────────────────────────────────────
 
 export const analyticsApi = {
-  tokens: () =>
-      service.get<TokenStats>('/analytics/tokens')
+  tokens: (period?: string) =>
+      service.get<TokenStats>('/analytics/tokens' + (period ? `?period=${encodeURIComponent(period)}` : ''))
 }
 
 // ─── Health Check ───────────────────────────────────────────────────────
