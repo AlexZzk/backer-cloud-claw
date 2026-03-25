@@ -10,6 +10,12 @@
  *   POST   /api/workers                   创建 Worker
  *   PUT    /api/workers/:id               更新 Worker
  *   DELETE /api/workers/:id              删除 Worker
+ *   GET    /api/scenes                    获取场景列表（Scene Runtime）
+ *   GET    /api/scenes/:sceneId           获取场景定义
+ *   GET    /api/scenes/:sceneId/presence  获取场景内 Worker 在场快照
+ *   GET    /api/scenes/:sceneId/events    获取场景实时事件流（SSE）
+ *   GET    /api/scenes/:sceneId/residents 获取场景入驻员工配置
+ *   PUT    /api/scenes/:sceneId/residents/:workerId 更新场景入驻状态
  *   GET    /api/models                    获取模型列表（每次热重载 config）
  *   POST   /api/models                    创建模型实例
  *   PUT    /api/models/:id               更新模型实例
@@ -80,6 +86,12 @@ import {
   validateUserToolId,
 } from './user-tools.js';
 import type { UserToolConfig } from './types.js';
+import {
+  DEFAULT_SCENE_ID,
+  buildScenePresenceSnapshot,
+  getSceneDefinition,
+  listScenes,
+} from './space-runtime/service.js';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -349,12 +361,15 @@ interface WorkerTokenAcc {
 // ─── HttpServer ────────────────────────────────────────────────────────────────
 
 const TOKEN_RECORDS_PATH = join(homedir(), '.bcc', 'token-records.json');
+const SCENE_RESIDENCY_PATH = join(homedir(), '.bcc', 'scene-residency.json');
 
 export class HttpServer {
   private store = new SessionStore();
   private tokenAcc = new Map<string, WorkerTokenAcc>();
   /** 带时间戳的明细记录，用于按天/按周统计，持久化到 ~/.bcc/token-records.json */
   private tokenRecords: TokenRecord[] = [];
+  /** 场景入驻配置：sceneId -> workerId -> residency */
+  private sceneResidency = new Map<string, Map<string, { isResident: boolean; homeZoneId?: string }>>();
   /** 每个 Worker 共享同一 AgentEngine 实例，跨会话保持记忆 */
   private workerAgents = new Map<string, AgentInterface>();
   /** Worker 间异步聊天存储（与 CLI 模式共享同一 ~/.bcc/chats 目录） */
@@ -388,6 +403,8 @@ export class HttpServer {
     await this.store.loadFromDisk();
     // 恢复 token 明细记录
     await this._loadTokenRecords();
+    // 恢复场景入驻配置
+    await this._loadSceneResidency();
 
     // ── 初始化 Company（核心业务逻辑层：Worker 实例 + 调度器 + 心跳）──────────
     await this._initCompany();
@@ -698,6 +715,87 @@ export class HttpServer {
     if (method === 'GET' && path === '/api/workers') {
       await this.handleGetWorkers(res);
       return;
+    }
+
+    // ── GET /api/scenes
+    if (method === 'GET' && path === '/api/scenes') {
+      ok(res, listScenes());
+      return;
+    }
+
+    // ── GET /api/scenes/:sceneId
+    {
+      const m = matchRoute('/api/scenes/:sceneId', path);
+      if (m && method === 'GET') {
+        const sceneId = m.params['sceneId']!;
+        const scene = getSceneDefinition(sceneId);
+        if (!scene) {
+          notFound(res);
+          return;
+        }
+        ok(res, scene);
+        return;
+      }
+    }
+
+    // ── GET /api/scenes/:sceneId/presence
+    {
+      const m = matchRoute('/api/scenes/:sceneId/presence', path);
+      if (m && method === 'GET') {
+        await this.reloadConfig();
+        const sceneId = m.params['sceneId'] ?? DEFAULT_SCENE_ID;
+        const sceneWorkers = this._workersForScene(sceneId);
+        const hints = await this._buildSceneHints();
+        hints.homeZoneByWorkerId = this._homeZoneByWorker(sceneId);
+        const snapshot = buildScenePresenceSnapshot(
+          sceneId,
+          sceneWorkers,
+          (workerId) => this._resolveWorkerStatus(workerId),
+          hints,
+        );
+        if (!snapshot) {
+          notFound(res);
+          return;
+        }
+        ok(res, snapshot);
+        return;
+      }
+    }
+
+    // ── GET /api/scenes/:sceneId/events
+    {
+      const m = matchRoute('/api/scenes/:sceneId/events', path);
+      if (m && method === 'GET') {
+        await this.reloadConfig();
+        const sceneId = m.params['sceneId'] ?? DEFAULT_SCENE_ID;
+        await this.handleSceneSseEvents(req, res, sceneId);
+        return;
+      }
+    }
+
+    // ── GET /api/scenes/:sceneId/residents
+    {
+      const m = matchRoute('/api/scenes/:sceneId/residents', path);
+      if (m && method === 'GET') {
+        await this.reloadConfig();
+        await this.handleGetSceneResidents(res, m.params['sceneId'] ?? DEFAULT_SCENE_ID);
+        return;
+      }
+    }
+
+    // ── PUT /api/scenes/:sceneId/residents/:workerId
+    {
+      const m = matchRoute('/api/scenes/:sceneId/residents/:workerId', path);
+      if (m && method === 'PUT') {
+        await this.reloadConfig();
+        await this.handleUpsertSceneResident(
+          req,
+          res,
+          m.params['sceneId'] ?? DEFAULT_SCENE_ID,
+          m.params['workerId']!,
+        );
+        return;
+      }
     }
 
     // ── GET /api/models
@@ -2751,6 +2849,205 @@ export class HttpServer {
     // 客户端断开时清理
     req.on('close', () => {
       this.sseClients.delete(res);
+    });
+  }
+
+  private async handleGetSceneResidents(res: ServerResponse, sceneId: string): Promise<void> {
+    const scene = getSceneDefinition(sceneId);
+    if (!scene) {
+      notFound(res);
+      return;
+    }
+    const residency = this._residencyMap(sceneId);
+    const workers = this.config.workers ?? [];
+    const hasAnySetting = residency.size > 0;
+    const residents = workers.map((w) => {
+      const val = residency.get(w.id);
+      const isResident = hasAnySetting ? !!val?.isResident : true;
+      return {
+        workerId: w.id,
+        workerName: w.name,
+        isResident,
+        homeZoneId: val?.homeZoneId,
+      };
+    });
+    ok(res, { sceneId, residents });
+  }
+
+  private async handleUpsertSceneResident(
+    req: IncomingMessage,
+    res: ServerResponse,
+    sceneId: string,
+    workerId: string,
+  ): Promise<void> {
+    const scene = getSceneDefinition(sceneId);
+    if (!scene) {
+      notFound(res);
+      return;
+    }
+    const worker = (this.config.workers ?? []).find(w => w.id === workerId);
+    if (!worker) {
+      notFound(res);
+      return;
+    }
+    let body: { isResident?: boolean; homeZoneId?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body');
+      return;
+    }
+    if (typeof body.isResident !== 'boolean') {
+      badRequest(res, '"isResident" must be boolean');
+      return;
+    }
+    if (body.homeZoneId && !scene.zones.find(z => z.id === body.homeZoneId)) {
+      badRequest(res, `"homeZoneId" is invalid for scene "${sceneId}"`);
+      return;
+    }
+
+    const residency = this._residencyMap(sceneId);
+    residency.set(workerId, {
+      isResident: body.isResident,
+      ...(body.homeZoneId && { homeZoneId: body.homeZoneId }),
+    });
+    await this._persistSceneResidency();
+    ok(res, {
+      sceneId,
+      workerId,
+      isResident: body.isResident,
+      ...(body.homeZoneId && { homeZoneId: body.homeZoneId }),
+    });
+  }
+
+  /**
+   * 构建 Scene Presence 的动态提示：
+   * - 最近 5 分钟内有活跃群聊（>=2 参与者）视为 meeting
+   * - 最近 2 分钟内有活跃直聊（2 人）视为 focus
+   */
+  private async _buildSceneHints(): Promise<{
+    meetingWorkerIds: Set<string>;
+    focusWorkerIds: Set<string>;
+  }> {
+    const meetingWorkerIds = new Set<string>();
+    const focusWorkerIds = new Set<string>();
+    const now = Date.now();
+    const chats = await this.chatStore.listChats();
+
+    for (const chat of chats) {
+      if (chat.status !== 'active') continue;
+      const ageMs = now - chat.updatedAt;
+      if (chat.participants.length >= 2 && ageMs <= 5 * 60 * 1000) {
+        for (const p of chat.participants) meetingWorkerIds.add(p);
+      }
+      if (chat.participants.length === 2 && ageMs <= 2 * 60 * 1000) {
+        for (const p of chat.participants) focusWorkerIds.add(p);
+      }
+    }
+
+    return { meetingWorkerIds, focusWorkerIds };
+  }
+
+  private _residencyMap(sceneId: string): Map<string, { isResident: boolean; homeZoneId?: string }> {
+    let map = this.sceneResidency.get(sceneId);
+    if (!map) {
+      map = new Map();
+      this.sceneResidency.set(sceneId, map);
+    }
+    return map;
+  }
+
+  private _workersForScene(sceneId: string): Array<{ id: string; name: string; modelId: string }> {
+    const workers = this.config.workers ?? [];
+    const residency = this._residencyMap(sceneId);
+    const hasAnySetting = residency.size > 0;
+    if (!hasAnySetting) return workers;
+    return workers.filter((w) => residency.get(w.id)?.isResident);
+  }
+
+  private _homeZoneByWorker(sceneId: string): Map<string, string> {
+    const m = new Map<string, string>();
+    for (const [workerId, conf] of this._residencyMap(sceneId)) {
+      if (conf.homeZoneId) m.set(workerId, conf.homeZoneId);
+    }
+    return m;
+  }
+
+  private async _loadSceneResidency(): Promise<void> {
+    try {
+      const raw = await readFile(SCENE_RESIDENCY_PATH, 'utf-8');
+      const parsed = JSON.parse(raw) as Record<string, Record<string, { isResident: boolean; homeZoneId?: string }>>;
+      this.sceneResidency.clear();
+      for (const [sceneId, byWorker] of Object.entries(parsed)) {
+        const m = new Map<string, { isResident: boolean; homeZoneId?: string }>();
+        for (const [workerId, val] of Object.entries(byWorker)) {
+          m.set(workerId, { isResident: !!val.isResident, ...(val.homeZoneId && { homeZoneId: val.homeZoneId }) });
+        }
+        this.sceneResidency.set(sceneId, m);
+      }
+    } catch {
+      // 文件不存在或损坏时忽略
+    }
+  }
+
+  private async _persistSceneResidency(): Promise<void> {
+    const out: Record<string, Record<string, { isResident: boolean; homeZoneId?: string }>> = {};
+    for (const [sceneId, m] of this.sceneResidency) {
+      out[sceneId] = {};
+      for (const [workerId, val] of m) out[sceneId][workerId] = val;
+    }
+    try {
+      await mkdir(join(homedir(), '.bcc'), { recursive: true });
+      await writeFile(SCENE_RESIDENCY_PATH, JSON.stringify(out), 'utf-8');
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * GET /api/scenes/:sceneId/events
+   *
+   * 场景级 SSE 事件流：
+   * - connected: 建连成功
+   * - snapshot: 当前 Worker Presence 快照（每 5s 推送一次）
+   */
+  private async handleSceneSseEvents(req: IncomingMessage, res: ServerResponse, sceneId: string): Promise<void> {
+    const writeSceneEvent = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const emitSnapshot = async () => {
+      const sceneWorkers = this._workersForScene(sceneId);
+      const hints = await this._buildSceneHints();
+      hints.homeZoneByWorkerId = this._homeZoneByWorker(sceneId);
+      const snapshot = buildScenePresenceSnapshot(
+        sceneId,
+        sceneWorkers,
+        (workerId) => this._resolveWorkerStatus(workerId),
+        hints,
+      );
+      if (snapshot) writeSceneEvent('snapshot', snapshot);
+    };
+
+    cors(res);
+    res.writeHead(200, {
+      'Content-Type':  'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection':    'keep-alive',
+    });
+
+    if (!getSceneDefinition(sceneId)) {
+      writeSceneEvent('error', { message: `scene not found: ${sceneId}` });
+      res.end();
+      return;
+    }
+
+    writeSceneEvent('connected', { sceneId, timestamp: Date.now() });
+    await emitSnapshot();
+
+    const timer = setInterval(() => { void emitSnapshot(); }, 5000);
+    req.on('close', () => {
+      clearInterval(timer);
     });
   }
 
