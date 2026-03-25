@@ -198,6 +198,7 @@ export default {
     langZh: '中文',
     langEn: 'English',
     saveSuccess: 'Settings saved',
+    saveSuccessRestartRequired: 'Settings saved. Session dir / memory config requires a service restart to take effect.',
     username: 'Username',
     email: 'Email',
     avatar: 'Avatar',

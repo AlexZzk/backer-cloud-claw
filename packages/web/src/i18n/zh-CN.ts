@@ -198,6 +198,7 @@ export default {
     langZh: '中文',
     langEn: 'English',
     saveSuccess: '设置已保存',
+    saveSuccessRestartRequired: '设置已保存，会话目录/记忆配置需重启服务后生效',
     username: '用户名',
     email: '邮箱',
     avatar: '头像',

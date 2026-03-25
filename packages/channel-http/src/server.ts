@@ -745,6 +745,8 @@ export class HttpServer {
       const body = JSON.parse(await readBody(req)) as Partial<{
         workspaceBaseDir: string;
         sharedDir: string;
+        sessionDir: string;
+        enableMemory: boolean;
       }>;
       if (body.workspaceBaseDir !== undefined) {
         this.config.defaults.workspaceBaseDir = body.workspaceBaseDir.trim() || this.config.defaults.workspaceBaseDir;
@@ -752,8 +754,16 @@ export class HttpServer {
       if (body.sharedDir !== undefined) {
         this.config.defaults.sharedDir = body.sharedDir.trim() || this.config.defaults.sharedDir;
       }
+      if (body.sessionDir !== undefined) {
+        this.config.defaults.sessionDir = body.sessionDir.trim() || this.config.defaults.sessionDir;
+      }
+      if (body.enableMemory !== undefined) {
+        this.config.defaults.enableMemory = body.enableMemory;
+      }
       await saveConfig(this.config);
-      ok(res, { defaults: this.config.defaults });
+      // 返回 requiresRestart: true 提示前端 sessionDir/enableMemory 改动需重启生效
+      const requiresRestart = body.sessionDir !== undefined || body.enableMemory !== undefined;
+      ok(res, { defaults: this.config.defaults, requiresRestart });
       return;
     }
 
@@ -2701,6 +2711,13 @@ export class HttpServer {
    */
   private evictAgent(workerId: string) {
     this.workerAgents.delete(workerId);
+    // 同时清除所有属于该 Worker 的会话中已缓存的 agent 引用，
+    // 确保下次发消息时以最新配置（如新模型）重建 adapter
+    for (const entry of this.store.listByWorker(workerId)) {
+      delete entry.agent;
+      delete entry.toAgent;
+      entry.groupAgents?.delete(workerId);
+    }
   }
 
   // ─── 心跳 & SSE 事件流 ────────────────────────────────────────────────────────
