@@ -110,13 +110,15 @@ export function buildScenePresenceSnapshot(
       state = 'focus';
     }
     byState[state] += 1;
+    const homeZone = hints?.homeZoneByWorkerId?.get(w.id);
+    const useHomeZone = !!homeZone && (state === 'idle' || state === 'working');
     return {
       entityId: `worker:${w.id}`,
       workerId: w.id,
       displayName: w.name,
       modelId: w.modelId,
       presenceState: state,
-      zoneId: hints?.homeZoneByWorkerId?.get(w.id) ?? toZoneId(sceneId, state),
+      zoneId: useHomeZone ? homeZone : toZoneId(sceneId, state),
       activityLabel: toActivityLabel(state),
       updatedAt: now,
       assetBinding: {
