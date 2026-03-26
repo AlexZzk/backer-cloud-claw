@@ -104,16 +104,16 @@
           </g>
 
           <!-- 网格线（很淡） -->
-          <g opacity="0.04">
+          <g v-if="mapDef" opacity="0.04">
             <line
-              v-for="c in mapDef!.cols"
+              v-for="c in mapDef.cols"
               :key="`vl${c}`"
               :x1="c * TILE" y1="0"
               :x2="c * TILE" :y2="mapH"
               stroke="white" stroke-width="0.5"
             />
             <line
-              v-for="r in mapDef!.rows"
+              v-for="r in mapDef.rows"
               :key="`hl${r}`"
               x1="0" :y1="r * TILE"
               :x2="mapW" :y2="r * TILE"
