@@ -2954,6 +2954,7 @@ export class HttpServer {
   private async _buildSceneHints(): Promise<{
     meetingWorkerIds: Set<string>;
     focusWorkerIds: Set<string>;
+    homeZoneByWorkerId?: Map<string, string>;
   }> {
     const meetingWorkerIds = new Set<string>();
     const focusWorkerIds = new Set<string>();
