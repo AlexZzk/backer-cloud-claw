@@ -59,6 +59,11 @@ const router = createRouter({
           name: 'tools',
           component: () => import('@/views/ToolsView.vue'),
         },
+        {
+          path: 'space',
+          name: 'space',
+          component: () => import('@/views/SpaceView.vue'),
+        },
       ],
     },
     {

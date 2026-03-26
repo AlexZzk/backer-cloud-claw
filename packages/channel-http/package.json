@@ -29,6 +29,7 @@
     "@bcc/model-core": "workspace:*",
     "@bcc/org": "workspace:*",
     "@bcc/skills": "workspace:*",
+    "@bcc/scene-core": "workspace:*",
     "@bcc/task": "workspace:*",
     "@bcc/web3-ownership": "workspace:*"
   },

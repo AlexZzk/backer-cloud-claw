@@ -585,8 +585,9 @@ export interface SceneDefinition {
 export interface SceneListItem {
   id: string
   name: string
-  templateId: string
+  theme: string
   version: string
+  templateId?: string
 }
 
 export interface SceneEntity {

@@ -33,6 +33,7 @@ export default {
     analytics: 'Analytics',
     skills: 'Skills',
     tools: 'Tools',
+    space: 'Space',
     settings: 'Settings',
   },
   scene: {

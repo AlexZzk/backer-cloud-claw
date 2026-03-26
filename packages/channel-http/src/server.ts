@@ -98,13 +98,12 @@ import {
 import type { UserToolConfig } from './types.js';
 import {
   DEFAULT_SCENE_ID,
-  buildScenePresenceSnapshot,
+  buildSceneSnapshot,
   getSceneDefinition,
   listScenes,
 } from './space-runtime/service.js';
-import {
-  getSceneLayout,
-} from './space-runtime/layout.js';
+import { workerToEntityInput } from './space-runtime/bcc-adapter.js';
+import type { MapDef } from '@bcc/scene-core';
 import { OwnershipManager, DEFAULT_OWNER_ID } from '@bcc/web3-ownership';
 import type {
   OwnerableEntityType,
@@ -770,19 +769,9 @@ export class HttpServer {
       if (m && method === 'GET') {
         await this.reloadConfig();
         const sceneId = m.params['sceneId'] ?? DEFAULT_SCENE_ID;
-        const sceneWorkers = this._workersForScene(sceneId);
-        const hints = await this._buildSceneHints();
-        hints.homeZoneByWorkerId = this._homeZoneByWorker(sceneId);
-        const snapshot = buildScenePresenceSnapshot(
-          sceneId,
-          sceneWorkers,
-          (workerId) => this._resolveWorkerStatus(workerId),
-          hints,
-        );
-        if (!snapshot) {
-          notFound(res);
-          return;
-        }
+        const inputs = await this._buildEntityInputs(sceneId);
+        const snapshot = buildSceneSnapshot(sceneId, inputs);
+        if (!snapshot) { notFound(res); return; }
         ok(res, snapshot);
         return;
       }
@@ -1175,11 +1164,11 @@ export class HttpServer {
       }
     }
 
-    // ── GET /api/scenes/:sceneId/layout
+    // ── GET /api/scenes/:sceneId/layout  — scene-core MapDef（包含 zones/slots/decorations）
     {
       const m = matchRoute('/api/scenes/:sceneId/layout', path);
       if (m && method === 'GET') {
-        const layout = getSceneLayout(m.params['sceneId'] ?? DEFAULT_SCENE_ID);
+        const layout: MapDef | null = getSceneDefinition(m.params['sceneId'] ?? DEFAULT_SCENE_ID);
         if (!layout) { notFound(res); return; }
         ok(res, layout);
         return;
@@ -3099,6 +3088,33 @@ export class HttpServer {
     return map;
   }
 
+  /** 将 BCC Workers 转换为 scene-core EntityInput 列表（通过 BCC 适配器） */
+  private async _buildEntityInputs(sceneId: string): Promise<import('@bcc/scene-core').EntityInput[]> {
+    const workers = this.config.workers ?? [];
+    const residency = this._residencyMap(sceneId);
+    const hasAnySetting = residency.size > 0;
+    const visibleWorkers = hasAnySetting
+      ? workers.filter(w => residency.get(w.id)?.isResident)
+      : workers;
+
+    // 分析聊天状态推断 meeting/focus
+    const { meetingWorkerIds, focusWorkerIds } = await this._buildSceneHints();
+    const homeZoneMap = this._homeZoneByWorker(sceneId);
+
+    return visibleWorkers.map(w => {
+      const preferredZoneId = homeZoneMap.get(w.id);
+      return workerToEntityInput(
+        { id: w.id, name: w.name, ...(w.avatar !== undefined && { avatar: w.avatar }), ...(w.modelId !== undefined && { modelId: w.modelId }) },
+        this._resolveWorkerStatus(w.id),
+        {
+          isMeeting: meetingWorkerIds.has(w.id),
+          isFocus:   focusWorkerIds.has(w.id),
+          ...(preferredZoneId !== undefined && { preferredZoneId }),
+        },
+      );
+    });
+  }
+
   private _workersForScene(sceneId: string): Array<{ id: string; name: string; modelId: string }> {
     const workers = this.config.workers ?? [];
     const residency = this._residencyMap(sceneId);
@@ -3159,15 +3175,8 @@ export class HttpServer {
     };
 
     const emitSnapshot = async () => {
-      const sceneWorkers = this._workersForScene(sceneId);
-      const hints = await this._buildSceneHints();
-      hints.homeZoneByWorkerId = this._homeZoneByWorker(sceneId);
-      const snapshot = buildScenePresenceSnapshot(
-        sceneId,
-        sceneWorkers,
-        (workerId) => this._resolveWorkerStatus(workerId),
-        hints,
-      );
+      const inputs = await this._buildEntityInputs(sceneId);
+      const snapshot = buildSceneSnapshot(sceneId, inputs);
       if (snapshot) writeSceneEvent('snapshot', snapshot);
     };
 

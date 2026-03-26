@@ -1,141 +1,76 @@
-import type { ApiWorker } from '../types.js';
-import type {
-  PresenceState,
-  SceneDefinition,
-  SceneEntity,
-  SceneListItem,
-  ScenePresenceSnapshot,
-} from './types.js';
+/**
+ * space-runtime/service.ts — BCC HTTP 层的场景服务
+ *
+ * 职责：
+ * - 注册地图到 scene-core 引擎注册表
+ * - 为每个 mapId 维护一个 SceneEngine 实例
+ * - 提供给 server.ts 调用的公共函数
+ *
+ * 不了解 Worker 的具体实现，只调用 BCC 适配器获取 EntityInput。
+ */
 
-export const DEFAULT_SCENE_ID = 'default-office';
-const GAME_SCENE_ID = 'game-studio';
+import {
+  OFFICE_MAP,
+  GAME_STUDIO_MAP,
+  registerMap,
+  createEngine,
+  listMaps,
+  getMap,
+  type SceneSnapshot,
+  type MapDef,
+  type EntityInput,
+} from '@bcc/scene-core';
+import { SceneEngine } from '@bcc/scene-core';
 
-const SCENES: SceneDefinition[] = [
-  {
-    id: DEFAULT_SCENE_ID,
-    name: 'Default Office',
-    templateId: 'office-template',
-    version: 'v0.1',
-    zones: [
-      { id: 'workstations', name: 'Workstations', type: 'work', capacity: 200, tags: ['desk'] },
-      { id: 'meeting-room', name: 'Meeting Room', type: 'meeting', capacity: 50, tags: ['sync'] },
-      { id: 'break-room', name: 'Break Room', type: 'social', capacity: 50, tags: ['idle'] },
-      { id: 'outside', name: 'Outside', type: 'system', capacity: 9999, tags: ['offline'] },
-    ],
-  },
-  {
-    id: GAME_SCENE_ID,
-    name: 'Game Studio',
-    templateId: 'game-studio-template',
-    version: 'v0.1',
-    zones: [
-      { id: 'dev-pit', name: 'Dev Pit', type: 'work', capacity: 200, tags: ['coding'] },
-      { id: 'war-room', name: 'War Room', type: 'meeting', capacity: 30, tags: ['review'] },
-      { id: 'lounge', name: 'Lounge', type: 'social', capacity: 60, tags: ['idle'] },
-      { id: 'spawn-outside', name: 'Spawn Outside', type: 'system', capacity: 9999, tags: ['offline'] },
-    ],
-  },
-];
+// ── 注册内置地图 ──────────────────────────────────────────────────────────────
+registerMap(OFFICE_MAP);
+registerMap(GAME_STUDIO_MAP);
+
+export const DEFAULT_SCENE_ID = OFFICE_MAP.id;
+
+// ── 引擎实例缓存 ──────────────────────────────────────────────────────────────
+const engines = new Map<string, SceneEngine>();
+
+function getOrCreateEngine(mapId: string): SceneEngine | null {
+  if (engines.has(mapId)) return engines.get(mapId)!;
+  const engine = createEngine(mapId);
+  if (engine) engines.set(mapId, engine);
+  return engine;
+}
+
+// ── 公共 API（供 server.ts 调用）─────────────────────────────────────────────
+
+export interface SceneListItem {
+  id: string;
+  name: string;
+  theme: MapDef['theme'];
+  version: string;
+}
 
 export function listScenes(): SceneListItem[] {
-  return SCENES.map(scene => ({
-    id: scene.id,
-    name: scene.name,
-    templateId: scene.templateId,
-    version: scene.version,
+  return listMaps().map(m => ({
+    id: m.id, name: m.name, theme: m.theme, version: m.version,
   }));
 }
 
-export function getSceneDefinition(sceneId: string): SceneDefinition | null {
-  return SCENES.find(scene => scene.id === sceneId) ?? null;
+export function getSceneDefinition(sceneId: string): MapDef | null {
+  return getMap(sceneId);
 }
 
-function toPresenceState(status: ApiWorker['status']): PresenceState {
-  if (status === 'offline') return 'offline';
-  if (status === 'busy') return 'working';
-  return 'idle';
-}
-
-function toZoneId(sceneId: string, state: PresenceState): string {
-  if (sceneId === GAME_SCENE_ID) {
-    if (state === 'offline') return 'spawn-outside';
-    if (state === 'meeting') return 'war-room';
-    if (state === 'working' || state === 'focus') return 'dev-pit';
-    return 'lounge';
-  }
-  if (state === 'offline') return 'outside';
-  if (state === 'meeting') return 'meeting-room';
-  if (state === 'working' || state === 'focus') return 'workstations';
-  return 'break-room';
-}
-
-function toActivityLabel(state: PresenceState): string {
-  switch (state) {
-    case 'offline': return '模型不可用 / 连接异常';
-    case 'working': return '处理中';
-    case 'meeting': return '会议中';
-    case 'focus': return '专注工作';
-    case 'idle':
-    default:
-      return '空闲中';
-  }
-}
-
-export function buildScenePresenceSnapshot(
+/**
+ * buildSceneSnapshot：根据最新的 EntityInput 生成场景快照。
+ *
+ * 由 server.ts 在每次 /presence 请求或 SSE tick 时调用。
+ * inputs 由 BCC 适配器层（bcc-adapter.ts）准备好后传入。
+ */
+export function buildSceneSnapshot(
   sceneId: string,
-  workers: Array<{ id: string; name: string; modelId: string }>,
-  resolveStatus: (workerId: string) => ApiWorker['status'],
-  hints?: {
-    meetingWorkerIds?: Set<string>;
-    focusWorkerIds?: Set<string>;
-    homeZoneByWorkerId?: Map<string, string>;
-  },
-): ScenePresenceSnapshot | null {
-  if (!getSceneDefinition(sceneId)) return null;
-
-  const byState: Record<PresenceState, number> = {
-    working: 0,
-    idle: 0,
-    meeting: 0,
-    offline: 0,
-    focus: 0,
-  };
-
-  const now = Date.now();
-  const entities: SceneEntity[] = workers.map((w) => {
-    let state = toPresenceState(resolveStatus(w.id));
-    if (state !== 'offline' && hints?.meetingWorkerIds?.has(w.id)) {
-      state = 'meeting';
-    } else if (state === 'working' && hints?.focusWorkerIds?.has(w.id)) {
-      state = 'focus';
-    }
-    byState[state] += 1;
-    const homeZone = hints?.homeZoneByWorkerId?.get(w.id);
-    const useHomeZone = !!homeZone && (state === 'idle' || state === 'working');
-    return {
-      entityId: `worker:${w.id}`,
-      workerId: w.id,
-      displayName: w.name,
-      modelId: w.modelId,
-      presenceState: state,
-      zoneId: useHomeZone ? homeZone : toZoneId(sceneId, state),
-      activityLabel: toActivityLabel(state),
-      updatedAt: now,
-      assetBinding: {
-        assetType: 'avatar',
-        assetId: `avatar-${w.id}`,
-        ownerId: 'org:default',
-      },
-    };
-  });
-
-  return {
-    sceneId,
-    timestamp: now,
-    entities,
-    totals: {
-      total: entities.length,
-      byState,
-    },
-  };
+  inputs: EntityInput[],
+): SceneSnapshot | null {
+  const engine = getOrCreateEngine(sceneId);
+  if (!engine) return null;
+  engine.update(inputs);
+  return engine.buildSnapshot();
 }
+
+export { getMap };

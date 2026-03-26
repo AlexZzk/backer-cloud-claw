@@ -64,6 +64,7 @@ const navItems = [
   { to: '/analytics', icon: '📊', labelKey: 'nav.analytics' },
   { to: '/skills',    icon: '🧩', labelKey: 'nav.skills' },
   { to: '/tools',     icon: '🔧', labelKey: 'nav.tools' },
+  { to: '/space',     icon: '🌐', labelKey: 'nav.space' },
   { to: '/settings',  icon: '⚙️', labelKey: 'nav.settings' },
 ];
 
