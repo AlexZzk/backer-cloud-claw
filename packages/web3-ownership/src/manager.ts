@@ -98,13 +98,13 @@ export class OwnershipManager {
       );
     }
 
-    const transfer = {
+    const transfer: import('./types.js').OwnershipTransfer = {
       from: req.fromOwnerId,
       to: req.toOwnerId,
       price: req.price ?? 0,
       currency: req.currency ?? DEFAULT_CURRENCY,
       timestamp: Date.now(),
-      note: req.note,
+      ...(req.note !== undefined && { note: req.note }),
     };
 
     const updated: OwnershipRecord = {
@@ -182,17 +182,21 @@ export class OwnershipManager {
     const all = await this.store.listAll();
     return all
       .filter(r => r.listing.status === 'listed' && r.listing.price !== undefined)
-      .map(r => ({
-        entityType: r.entityType,
-        entityId: r.entityId,
-        entityName: entityNames?.get(r.entityId) ?? r.entityId,
-        entityDescription: entityDescriptions?.get(r.entityId),
-        ownerId: r.ownerId,
-        price: r.listing.price!,
-        currency: r.listing.currency ?? DEFAULT_CURRENCY,
-        listedAt: r.listing.listedAt ?? r.acquiredAt,
-        nft: r.nft,
-      }));
+      .map(r => {
+        const item: MarketplaceItem = {
+          entityType: r.entityType,
+          entityId: r.entityId,
+          entityName: entityNames?.get(r.entityId) ?? r.entityId,
+          ownerId: r.ownerId,
+          price: r.listing.price!,
+          currency: r.listing.currency ?? DEFAULT_CURRENCY,
+          listedAt: r.listing.listedAt ?? r.acquiredAt,
+        };
+        const desc = entityDescriptions?.get(r.entityId);
+        if (desc !== undefined) item.entityDescription = desc;
+        if (r.nft !== undefined) item.nft = r.nft;
+        return item;
+      });
   }
 
   /**
