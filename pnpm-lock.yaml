@@ -215,6 +215,9 @@ importers:
       '@bcc/org':
         specifier: workspace:*
         version: link:../org
+      '@bcc/scene-core':
+        specifier: workspace:*
+        version: link:../scene-core
       '@bcc/skills':
         specifier: workspace:*
         version: link:../skills
@@ -426,6 +429,15 @@ importers:
       vitest:
         specifier: '*'
         version: 2.1.9(@types/node@22.19.13)
+
+  packages/scene-core:
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
 
   packages/skills:
     dependencies:

@@ -1,0 +1,23 @@
+{
+  "name": "@bcc/scene-core",
+  "version": "0.1.0",
+  "description": "独立场景引擎：2D 空间地图、实体位置分配、邻近检测。零外部依赖，可脱离 BCC 独立运行。",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "@types/node": "*"
+  }
+}
