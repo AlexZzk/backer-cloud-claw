@@ -221,6 +221,9 @@ importers:
       '@bcc/task':
         specifier: workspace:*
         version: link:../task
+      '@bcc/web3-ownership':
+        specifier: workspace:*
+        version: link:../web3-ownership
     devDependencies:
       '@bcc/protocol-anthropic':
         specifier: workspace:*
@@ -495,6 +498,15 @@ importers:
       vue-tsc:
         specifier: ^2.0.6
         version: 2.2.12(typescript@5.9.3)
+
+  packages/web3-ownership:
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 22.19.13
+      typescript:
+        specifier: '*'
+        version: 5.9.3
 
 packages:
 

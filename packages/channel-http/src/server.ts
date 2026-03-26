@@ -3466,9 +3466,9 @@ export class HttpServer {
         entityId: id,
         fromOwnerId,
         toOwnerId,
-        price,
-        currency,
-        note,
+        ...(price    !== undefined && { price }),
+        ...(currency !== undefined && { currency }),
+        ...(note     !== undefined && { note }),
       });
       ok(res, updated);
     } catch (err) {
@@ -3500,7 +3500,7 @@ export class HttpServer {
         entityId: id,
         ownerId,
         price,
-        currency,
+        ...(currency !== undefined && { currency }),
       });
       ok(res, updated);
     } catch (err) {
