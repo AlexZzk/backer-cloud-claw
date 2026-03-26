@@ -1,0 +1,23 @@
+{
+  "name": "@bcc/web3-ownership",
+  "version": "0.1.0",
+  "description": "backer-cloud-claw Web3 所有权层：场景、Worker、公司的虚拟 NFT 所有权管理、转让与交易市场",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "typescript": "*",
+    "@types/node": "*"
+  }
+}

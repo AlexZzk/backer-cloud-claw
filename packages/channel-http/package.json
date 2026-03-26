@@ -29,7 +29,8 @@
     "@bcc/model-core": "workspace:*",
     "@bcc/org": "workspace:*",
     "@bcc/skills": "workspace:*",
-    "@bcc/task": "workspace:*"
+    "@bcc/task": "workspace:*",
+    "@bcc/web3-ownership": "workspace:*"
   },
   "peerDependencies": {
     "@bcc/protocol-anthropic": "workspace:*",
