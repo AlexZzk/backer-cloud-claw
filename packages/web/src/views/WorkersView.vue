@@ -34,199 +34,275 @@
     <!-- Detail / grid area -->
     <div class="workers-main">
       <template v-if="selectedWorker">
-        <!-- Worker detail card -->
+        <!-- Worker detail card (tabbed, decoupled) -->
         <div class="worker-detail">
-          <div class="detail-header">
-            <div class="detail-avatar">{{ workerAvatar(selectedWorker) }}</div>
-            <div class="detail-info">
-              <h2>{{ selectedWorker.name }}</h2>
-              <p>{{ selectedWorker.description }}</p>
-              <div class="detail-tags">
-                <a-tag v-for="skill in selectedWorker.skills" :key="skill" color="arcoblue" size="small">
-                  {{ skill }}
-                </a-tag>
+
+          <!-- ── Profile header ── -->
+          <div class="detail-profile">
+            <!-- Avatar with inline picker (Arco popover) -->
+            <a-popover v-model:popup-visible="showAvatarPicker" trigger="click" position="bottom">
+              <div class="detail-avatar-wrap" title="点击更换头像">
+                <div class="detail-avatar">{{ workerAvatar(selectedWorker) }}</div>
+                <div class="avatar-hover-hint"><icon-camera style="font-size:12px" /></div>
               </div>
+              <template #content>
+                <div class="avatar-picker-grid">
+                  <span
+                    v-for="emoji in avatarOptions"
+                    :key="emoji"
+                    class="avatar-picker-opt"
+                    :class="{ selected: workerAvatar(selectedWorker) === emoji }"
+                    @click="pickAvatar(emoji)"
+                  >{{ emoji }}</span>
+                </div>
+              </template>
+            </a-popover>
+
+            <div class="detail-meta">
+              <div class="detail-name-row">
+                <h2 class="detail-name">{{ selectedWorker.name }}</h2>
+                <a-tag v-if="selectedWorker.isPrimary" color="arcoblue" size="small">主 Worker</a-tag>
+                <a-tag :color="statusColor(selectedWorker.status)" size="small">{{ t(`workers.${selectedWorker.status}`) }}</a-tag>
+              </div>
+              <div class="detail-id">{{ selectedWorker.id }}</div>
+              <div v-if="selectedWorker.description" class="detail-desc">{{ selectedWorker.description }}</div>
             </div>
+
             <div class="detail-actions">
-              <a-button type="primary" @click="startChat(selectedWorker.id)">
+              <a-button type="primary" size="small" @click="startChat(selectedWorker.id)">
                 <template #icon><icon-message /></template>
                 {{ t('workers.startChat') }}
               </a-button>
-              <a-button type="outline" @click="openEdit(selectedWorker)">
+              <a-button type="outline" size="small" @click="openEdit(selectedWorker)">
                 <template #icon><icon-edit /></template>
                 {{ t('common.edit') }}
               </a-button>
-              <a-button status="danger" type="outline" @click="confirmDelete(selectedWorker.id)">
+              <a-button status="danger" type="text" size="small" @click="confirmDelete(selectedWorker.id)">
                 <template #icon><icon-delete /></template>
-                {{ t('common.delete') }}
               </a-button>
             </div>
           </div>
 
-          <a-divider />
+          <!-- ── Tabs ── -->
+          <a-tabs v-model:active-key="detailTab" size="small" class="detail-tabs" @change="onTabChange">
 
-          <!-- Stats -->
-          <div class="detail-stats">
-            <div class="stat-card">
-              <div class="stat-value">{{ selectedWorker.modelId }}</div>
-              <div class="stat-label">{{ t('workers.model') }}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value">{{ selectedWorker.skills.length }}</div>
-              <div class="stat-label">{{ t('workers.skills') }}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value">
-                <a-tag :color="statusColor(selectedWorker.status)">
-                  {{ t(`workers.${selectedWorker.status}`) }}
-                </a-tag>
-              </div>
-              <div class="stat-label">{{ t('workers.workerStatus') }}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value">{{ selectedWorker.tools.length }}</div>
-              <div class="stat-label">{{ t('workers.tools') }}</div>
-            </div>
-          </div>
-
-          <a-divider />
-
-          <!-- Configuration -->
-          <div class="detail-section">
-            <h3>{{ t('workers.workerModel') }}</h3>
-            <a-tag color="purple">{{ selectedWorker.modelId }}</a-tag>
-            <template v-if="selectedWorker.reviewModelId">
-              <span style="margin: 0 6px; color: var(--color-text-3); font-size: 12px">审视模型</span>
-              <a-tag color="arcoblue">{{ selectedWorker.reviewModelId }}</a-tag>
-            </template>
-            <span style="margin: 0 8px; color: var(--color-text-3); font-size: 12px">心跳</span>
-            <template v-if="selectedWorker.heartbeatIntervalMs === 0">
-              <a-tag color="gray">被动唤起</a-tag>
-            </template>
-            <template v-else>
-              <a-tag color="green">
-                主动轮询 · {{ ((selectedWorker.heartbeatIntervalMs ?? 30000) / 1000) }}s
-              </a-tag>
-            </template>
-          </div>
-
-          <div class="detail-section">
-            <h3>{{ t('workers.workerRole') }}</h3>
-            <div class="role-text">{{ selectedWorker.role }}</div>
-          </div>
-
-          <div class="detail-section" v-if="selectedWorker.tools.length">
-            <h3>{{ t('workers.workerTools') }}</h3>
-            <div class="detail-tags">
-              <a-tag
-                v-for="tool in selectedWorker.tools"
-                :key="tool"
-                color="orange"
-                size="small"
-              >{{ tool }}</a-tag>
-            </div>
-          </div>
-
-          <!-- Capabilities -->
-          <div class="detail-section" v-if="selectedWorker.capabilities">
-            <h3>能力配置</h3>
-            <div class="cap-list">
-              <!-- browser -->
-              <div v-if="selectedWorker.capabilities.browser !== undefined" class="cap-item">
-                <div class="cap-item-header">
-                  <span class="cap-icon">🌐</span>
-                  <span class="cap-name">浏览器访问</span>
-                  <a-tag :color="selectedWorker.capabilities.browser ? 'green' : 'gray'" size="small">
-                    {{ selectedWorker.capabilities.browser ? '已启用' : '已禁用' }}
-                  </a-tag>
+            <!-- Tab: 概览 -->
+            <a-tab-pane key="overview" title="概览">
+              <div class="tab-body">
+                <div class="info-section">
+                  <div class="info-section-title">模型</div>
+                  <div class="info-row">
+                    <span class="info-label">主模型</span>
+                    <a-tag color="purple" size="small">{{ selectedWorker.modelId }}</a-tag>
+                  </div>
+                  <div v-if="selectedWorker.reviewModelId" class="info-row">
+                    <span class="info-label">审视模型</span>
+                    <a-tag color="arcoblue" size="small">{{ selectedWorker.reviewModelId }}</a-tag>
+                  </div>
+                  <div class="info-row">
+                    <span class="info-label">心跳</span>
+                    <a-tag :color="selectedWorker.heartbeatIntervalMs === 0 ? 'gray' : 'green'" size="small">
+                      {{ selectedWorker.heartbeatIntervalMs === 0 ? '被动唤起' : `主动轮询 · ${(selectedWorker.heartbeatIntervalMs ?? 30000) / 1000}s` }}
+                    </a-tag>
+                  </div>
                 </div>
-                <template v-if="selectedWorker.capabilities.browser && typeof selectedWorker.capabilities.browser === 'object'">
-                  <div class="cap-config">
-                    <span v-if="selectedWorker.capabilities.browser.headless !== undefined">
-                      {{ selectedWorker.capabilities.browser.headless ? '无头模式' : '有界面模式' }}
-                    </span>
-                    <span v-if="selectedWorker.capabilities.browser.timeout">
-                      超时 {{ selectedWorker.capabilities.browser.timeout / 1000 }}s
-                    </span>
-                    <span v-if="selectedWorker.capabilities.browser.screenshotDir">
-                      截图目录：<code>{{ selectedWorker.capabilities.browser.screenshotDir }}</code>
-                    </span>
+
+                <div class="info-section">
+                  <div class="info-section-title">角色定义</div>
+                  <div class="role-text">{{ selectedWorker.role || '（未设置）' }}</div>
+                </div>
+
+                <div v-if="selectedWorker.capabilities" class="info-section">
+                  <div class="info-section-title">能力配置</div>
+                  <div class="cap-list">
+                    <div v-if="selectedWorker.capabilities.browser !== undefined" class="cap-item">
+                      <div class="cap-item-header">
+                        <span class="cap-icon">🌐</span>
+                        <span class="cap-name">浏览器访问</span>
+                        <a-tag :color="selectedWorker.capabilities.browser ? 'green' : 'gray'" size="small">
+                          {{ selectedWorker.capabilities.browser ? '已启用' : '已禁用' }}
+                        </a-tag>
+                      </div>
+                      <template v-if="selectedWorker.capabilities.browser && typeof selectedWorker.capabilities.browser === 'object'">
+                        <div class="cap-config">
+                          <span v-if="selectedWorker.capabilities.browser.headless !== undefined">
+                            {{ selectedWorker.capabilities.browser.headless ? '无头模式' : '有界面模式' }}
+                          </span>
+                          <span v-if="selectedWorker.capabilities.browser.timeout">
+                            超时 {{ selectedWorker.capabilities.browser.timeout / 1000 }}s
+                          </span>
+                          <span v-if="selectedWorker.capabilities.browser.screenshotDir">
+                            截图目录：<code>{{ selectedWorker.capabilities.browser.screenshotDir }}</code>
+                          </span>
+                        </div>
+                        <div v-if="selectedWorker.capabilities.browser.allowedUrls?.length" class="cap-allowed-urls">
+                          允许 URL：
+                          <code v-for="u in selectedWorker.capabilities.browser.allowedUrls" :key="u" class="url-chip">{{ u }}</code>
+                        </div>
+                      </template>
+                    </div>
                   </div>
-                  <div v-if="selectedWorker.capabilities.browser.allowedUrls?.length" class="cap-allowed-urls">
-                    允许 URL：
-                    <code v-for="u in selectedWorker.capabilities.browser.allowedUrls" :key="u" class="url-chip">{{ u }}</code>
+                </div>
+              </div>
+            </a-tab-pane>
+
+            <!-- Tab: 技能 -->
+            <a-tab-pane key="skills" :title="`技能 (${selectedWorker.skills.length})`">
+              <div class="tab-body">
+                <div v-if="selectedWorker.skills.length === 0" class="tab-empty">
+                  <p>尚未配置技能</p>
+                  <a-button size="small" type="outline" @click="openEdit(selectedWorker)">
+                    <template #icon><icon-plus /></template>添加技能
+                  </a-button>
+                </div>
+                <div v-else class="skill-cards">
+                  <div v-for="skillName in selectedWorker.skills" :key="skillName" class="skill-card">
+                    <div class="skill-card-header">
+                      <span class="skill-card-name">{{ skillName }}</span>
+                      <a-tag size="small" color="arcoblue">{{ getSkillSourceLabel(skillName) }}</a-tag>
+                    </div>
+                    <div class="skill-card-desc">{{ getSkillDescription(skillName) || '（无描述）' }}</div>
                   </div>
+                </div>
+              </div>
+            </a-tab-pane>
+
+            <!-- Tab: 工具 -->
+            <a-tab-pane key="tools" :title="`工具 (${selectedWorker.tools.length})`">
+              <div class="tab-body">
+                <div class="tools-grid">
+                  <div
+                    v-for="tool in workersStore.AVAILABLE_TOOLS"
+                    :key="tool.id"
+                    class="tool-row"
+                    :class="{ 'tool-enabled': selectedWorker.tools.includes(tool.id) }"
+                  >
+                    <span class="tool-dot" :class="{ enabled: selectedWorker.tools.includes(tool.id) }"></span>
+                    <div class="tool-row-info">
+                      <span class="tool-row-label">{{ tool.label }}</span>
+                      <span class="tool-row-id">{{ tool.id }}</span>
+                    </div>
+                    <a-tag v-if="selectedWorker.tools.includes(tool.id)" size="small" color="green">已启用</a-tag>
+                    <a-tag v-else size="small" color="gray">未启用</a-tag>
+                  </div>
+                </div>
+                <div style="margin-top: 12px; text-align: right;">
+                  <a-button size="mini" type="text" @click="openEdit(selectedWorker)">
+                    <template #icon><icon-edit /></template>修改工具配置
+                  </a-button>
+                </div>
+              </div>
+            </a-tab-pane>
+
+            <!-- Tab: 工作空间 -->
+            <a-tab-pane key="workspace" title="工作空间">
+              <div class="tab-body">
+                <!-- Directory path (inline editable) -->
+                <div class="ws-path-row">
+                  <icon-folder style="color: #165dff; flex-shrink: 0;" />
+                  <template v-if="!editingWorkspacePath">
+                    <code class="ws-path-code">{{ selectedWorker.workspace }}</code>
+                    <a-button size="mini" type="text" title="修改目录" @click="startEditWorkspacePath(selectedWorker.workspace)">
+                      <template #icon><icon-edit /></template>
+                    </a-button>
+                  </template>
+                  <template v-else>
+                    <a-input v-model="newWorkspacePath" size="small" style="flex: 1" allow-clear />
+                    <a-button size="mini" type="primary" :loading="savingWorkspace" @click="saveWorkspacePath(selectedWorker.id)">保存</a-button>
+                    <a-button size="mini" type="text" @click="cancelEditWorkspacePath">取消</a-button>
+                  </template>
+                </div>
+                <a-divider style="margin: 10px 0" />
+
+                <div class="workspace-refresh-row">
+                  <span class="info-section-title" style="margin-bottom: 0; flex: 1">文件列表</span>
+                  <a-button size="mini" type="text" :loading="wsLoading" @click="loadWorkspace(selectedWorker.id)">
+                    <template #icon><icon-refresh /></template>刷新
+                  </a-button>
+                </div>
+
+                <div v-if="wsLoading" class="ws-loading"><a-spin size="small" /></div>
+
+                <template v-else-if="wsInfo">
+                  <div v-if="wsInfo.files.length === 0" class="ws-empty">{{ t('workers.workspaceEmpty') }}</div>
+                  <div v-else class="ws-file-list">
+                    <div v-for="f in wsInfo.files" :key="f.path" class="ws-file-item">
+                      <span class="ws-file-icon">{{ f.isDir ? '📁' : '📄' }}</span>
+                      <span class="ws-file-name">{{ f.path }}</span>
+                      <span class="ws-file-size">{{ formatFileSize(f.size) }}</span>
+                      <span class="ws-file-date">{{ formatDate(f.mtime) }}</span>
+                      <div class="ws-file-actions" v-if="!f.isDir">
+                        <a :href="workspaceApi.fileUrl(selectedWorker.id, f.path)" :download="f.name" class="ws-download-btn">
+                          <icon-download />
+                        </a>
+                        <a-popconfirm
+                          :content="t('workers.confirmDeleteFile')"
+                          @ok="deleteWorkspaceFile(selectedWorker.id, f.path)"
+                        >
+                          <a-button size="mini" type="text" status="danger">
+                            <template #icon><icon-delete /></template>
+                          </a-button>
+                        </a-popconfirm>
+                      </div>
+                    </div>
+                  </div>
+
+                  <template v-if="wsInfo.sharedFiles.length > 0">
+                    <div class="ws-dir-label" style="margin-top: 16px">
+                      <icon-folder style="color: #ff7d00" />
+                      <span>{{ t('workers.sharedDir') }}：<code>{{ wsInfo.sharedDir }}</code></span>
+                      <a-tag size="mini" color="orange" style="margin-left: 4px">{{ t('workers.readOnly') }}</a-tag>
+                    </div>
+                    <div class="ws-file-list">
+                      <div v-for="f in wsInfo.sharedFiles" :key="f.path" class="ws-file-item">
+                        <span class="ws-file-icon">{{ f.isDir ? '📁' : '📄' }}</span>
+                        <span class="ws-file-name">{{ f.path }}</span>
+                        <span class="ws-file-size">{{ formatFileSize(f.size) }}</span>
+                        <span class="ws-file-date">{{ formatDate(f.mtime) }}</span>
+                        <div class="ws-file-actions" v-if="!f.isDir">
+                          <a :href="workspaceApi.sharedFileUrl(f.path)" :download="f.name" class="ws-download-btn">
+                            <icon-download />
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                 </template>
               </div>
-            </div>
-          </div>
+            </a-tab-pane>
 
-          <a-divider />
-
-          <!-- Workspace Files -->
-          <div class="detail-section workspace-section">
-            <div class="workspace-header">
-              <h3>{{ t('workers.workspaceFiles') }}</h3>
-              <a-button size="mini" type="text" :loading="wsLoading" @click="loadWorkspace(selectedWorker.id)">
-                <template #icon><icon-refresh /></template>
-              </a-button>
-            </div>
-
-            <div v-if="wsLoading" class="ws-loading">
-              <a-spin size="small" />
-            </div>
-
-            <template v-else-if="wsInfo">
-              <!-- Worker workspace files -->
-              <div class="ws-dir-label">
-                <icon-folder style="color: #165dff" />
-                <span>{{ t('workers.workspaceDir') }}：<code>{{ wsInfo.workspaceDir }}</code></span>
-              </div>
-              <div v-if="wsInfo.files.length === 0" class="ws-empty">{{ t('workers.workspaceEmpty') }}</div>
-              <div v-else class="ws-file-list">
-                <div v-for="f in wsInfo.files" :key="f.path" class="ws-file-item">
-                  <span class="ws-file-icon">{{ f.isDir ? '📁' : '📄' }}</span>
-                  <span class="ws-file-name">{{ f.path }}</span>
-                  <span class="ws-file-size">{{ formatFileSize(f.size) }}</span>
-                  <span class="ws-file-date">{{ formatDate(f.mtime) }}</span>
-                  <div class="ws-file-actions" v-if="!f.isDir">
-                    <a :href="workspaceApi.fileUrl(selectedWorker.id, f.path)" :download="f.name" class="ws-download-btn">
-                      <icon-download />
-                    </a>
-                    <a-popconfirm
-                      :content="t('workers.confirmDeleteFile')"
-                      @ok="deleteWorkspaceFile(selectedWorker.id, f.path)"
-                    >
-                      <a-button size="mini" type="text" status="danger">
-                        <template #icon><icon-delete /></template>
-                      </a-button>
-                    </a-popconfirm>
+            <!-- Tab: 待办 -->
+            <a-tab-pane key="todos" :title="selectedWorker.skills.includes('todolist') ? `待办 (${workerTasks.length})` : '待办'">
+              <div class="tab-body">
+                <template v-if="selectedWorker.skills.includes('todolist')">
+                  <div v-if="tasksLoading" class="ws-loading"><a-spin size="small" /></div>
+                  <div v-else-if="workerTasks.length === 0" class="tab-empty">
+                    <p>暂无待办任务</p>
                   </div>
+                  <div v-else class="task-list">
+                    <div v-for="task in workerTasks" :key="task.id" class="task-item">
+                      <div class="task-item-header">
+                        <span class="task-item-title">{{ task.title }}</span>
+                        <div class="task-item-badges">
+                          <a-tag size="small" :color="taskStatusColor(task.status)">{{ taskStatusLabel(task.status) }}</a-tag>
+                          <a-tag size="small" :color="taskPriorityColor(task.priority)">{{ task.priority }}</a-tag>
+                        </div>
+                      </div>
+                      <div v-if="task.description" class="task-item-desc">{{ task.description }}</div>
+                      <div class="task-item-meta">{{ formatDate(task.updatedAt) }}</div>
+                    </div>
+                  </div>
+                </template>
+                <div v-else class="tab-empty">
+                  <p style="font-size: 13px; color: var(--text-secondary)">需要 <code>todolist</code> 技能以启用任务管理</p>
+                  <a-button size="small" type="outline" @click="openEdit(selectedWorker)">
+                    <template #icon><icon-edit /></template>编辑技能
+                  </a-button>
                 </div>
               </div>
+            </a-tab-pane>
 
-              <!-- Shared files (read-only) -->
-              <div class="ws-dir-label" style="margin-top: 16px">
-                <icon-folder style="color: #ff7d00" />
-                <span>{{ t('workers.sharedDir') }}：<code>{{ wsInfo.sharedDir }}</code></span>
-                <a-tag size="mini" color="orange" style="margin-left: 4px">{{ t('workers.readOnly') }}</a-tag>
-              </div>
-              <div v-if="wsInfo.sharedFiles.length === 0" class="ws-empty">{{ t('workers.sharedEmpty') }}</div>
-              <div v-else class="ws-file-list">
-                <div v-for="f in wsInfo.sharedFiles" :key="f.path" class="ws-file-item">
-                  <span class="ws-file-icon">{{ f.isDir ? '📁' : '📄' }}</span>
-                  <span class="ws-file-name">{{ f.path }}</span>
-                  <span class="ws-file-size">{{ formatFileSize(f.size) }}</span>
-                  <span class="ws-file-date">{{ formatDate(f.mtime) }}</span>
-                  <div class="ws-file-actions" v-if="!f.isDir">
-                    <a :href="workspaceApi.sharedFileUrl(f.path)" :download="f.name" class="ws-download-btn">
-                      <icon-download />
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
+          </a-tabs>
         </div>
       </template>
 
@@ -247,7 +323,7 @@
             class="worker-card"
             @click="selectedId = w.id"
           >
-            <div class="card-avatar">🤖</div>
+            <div class="card-avatar">{{ workerAvatar(w) }}</div>
             <div class="card-name">{{ w.name }}</div>
             <div class="card-id" style="font-size: 11px; color: var(--text-secondary); margin: -6px 0 4px; font-family: monospace;">{{ w.id }}</div>
             <div class="card-desc">{{ w.description }}</div>
@@ -506,7 +582,7 @@ import { useChatStore } from '@/stores/chat';
 import { useSkillsStore } from '@/stores/skills';
 import { Modal, Message } from '@arco-design/web-vue';
 import type { MockWorker } from '@/stores/workers';
-import { workspaceApi, type WorkspaceInfo } from '@/api/client';
+import { workspaceApi, tasksApi, type WorkspaceInfo, type WorkerTask } from '@/api/client';
 
 const { t } = useI18n();
 const router = useRouter();
@@ -569,6 +645,15 @@ const showModal = ref(false);
 const saving = ref(false);
 const editingWorker = ref<MockWorker | null>(null);
 
+// ── Detail panel state ────────────────────────────────────────────────────
+const detailTab = ref('overview');
+const showAvatarPicker = ref(false);
+const editingWorkspacePath = ref(false);
+const newWorkspacePath = ref('');
+const savingWorkspace = ref(false);
+const workerTasks = ref<WorkerTask[]>([]);
+const tasksLoading = ref(false);
+
 const avatarOptions = ['🤖', '🔬', '💻', '✍️', '📊', '🎯', '🚀', '💡', '🧠', '🎨', '📋', '🔭'];
 
 const form = reactive({
@@ -614,9 +699,8 @@ const filteredWorkers = computed(() => {
 // 默认使用第一个模型实例 ID
 const defaultModelId = computed(() => modelsStore.models[0]?.id ?? '');
 
-function workerAvatar(_worker: MockWorker) {
-  // ApiWorker 暂无 avatar 字段，使用固定 emoji
-  return '🤖';
+function workerAvatar(worker: MockWorker) {
+  return worker.avatar ?? '🤖';
 }
 
 function statusColor(status: string) {
@@ -658,7 +742,7 @@ function openEdit(worker: MockWorker) {
     skills: [...worker.skills],
     tools: [...worker.tools],
     isPrimary: worker.isPrimary,
-    avatar: '🤖',
+    avatar: worker.avatar ?? '🤖',
     workspace: worker.workspace ?? '',
     capBrowserEnabled: !!bc,
     capBrowserHeadless: bcObj?.headless ?? true,
@@ -706,6 +790,7 @@ async function handleSave() {
       await workersStore.updateWorker(editingWorker.value.id, {
         name:               form.name.trim(),
         description:        form.description.trim(),
+        avatar:             form.avatar,
         modelId:            form.modelId,
         reviewModelId:      form.reviewModelId || undefined,
         heartbeatIntervalMs,
@@ -722,6 +807,7 @@ async function handleSave() {
         id:                 '',  // 空字符串让后端自动生成员工号
         name:               form.name.trim(),
         description:        form.description.trim(),
+        avatar:             form.avatar,
         modelId:            form.modelId,
         reviewModelId:      form.reviewModelId || undefined,
         heartbeatIntervalMs,
@@ -765,8 +851,86 @@ async function loadWorkspace(workerId: string) {
 
 watch(selectedId, (id) => {
   wsInfo.value = null;
+  workerTasks.value = [];
+  editingWorkspacePath.value = false;
+  showAvatarPicker.value = false;
+  detailTab.value = 'overview';
   if (id) loadWorkspace(id);
 });
+
+// ── Detail panel helpers ─────────────────────────────────────────────────
+
+async function pickAvatar(emoji: string) {
+  if (!selectedWorker.value) return;
+  showAvatarPicker.value = false;
+  try {
+    await workersStore.updateWorker(selectedWorker.value.id, { avatar: emoji });
+  } catch {
+    Message.error('头像更新失败');
+  }
+}
+
+function startEditWorkspacePath(current: string) {
+  newWorkspacePath.value = current;
+  editingWorkspacePath.value = true;
+}
+
+function cancelEditWorkspacePath() {
+  editingWorkspacePath.value = false;
+  newWorkspacePath.value = '';
+}
+
+async function saveWorkspacePath(workerId: string) {
+  savingWorkspace.value = true;
+  try {
+    await workersStore.updateWorker(workerId, { workspace: newWorkspacePath.value.trim() });
+    editingWorkspacePath.value = false;
+    Message.success('工作空间目录已更新');
+    await loadWorkspace(workerId);
+  } catch (err) {
+    Message.error(err instanceof Error ? err.message : '更新失败');
+  } finally {
+    savingWorkspace.value = false;
+  }
+}
+
+function getSkillDescription(name: string): string {
+  return skillsStore.skills.find(s => s.name === name)?.description ?? '';
+}
+
+function getSkillSourceLabel(name: string): string {
+  const src = skillsStore.skills.find(s => s.name === name)?.source ?? 'builtin';
+  return src === 'builtin' ? '内置' : src === 'user' ? '用户' : '项目';
+}
+
+async function loadWorkerTasks(workerId: string) {
+  tasksLoading.value = true;
+  try {
+    workerTasks.value = await tasksApi.list(workerId);
+  } catch {
+    workerTasks.value = [];
+  } finally {
+    tasksLoading.value = false;
+  }
+}
+
+function onTabChange(key: string | number) {
+  if (key === 'todos' && selectedWorker.value) {
+    loadWorkerTasks(selectedWorker.value.id);
+  }
+}
+
+function taskStatusColor(status: string): string {
+  return ({ todo: 'blue', in_progress: 'orange', done: 'green', blocked: 'red', cancelled: 'gray' } as Record<string, string>)[status] ?? 'gray';
+}
+
+function taskStatusLabel(status: string): string {
+  return ({ todo: '待处理', in_progress: '进行中', done: '已完成', blocked: '已阻塞', cancelled: '已取消' } as Record<string, string>)[status] ?? status;
+}
+
+function taskPriorityColor(priority: string): string {
+  return ({ urgent: 'red', high: 'orange', medium: 'blue', low: 'gray' } as Record<string, string>)[priority] ?? 'gray';
+}
 
 async function deleteWorkspaceFile(workerId: string, filePath: string) {
   try {
@@ -1042,74 +1206,329 @@ function confirmDelete(id: string) {
   background: rgba(22, 93, 255, 0.12);
 }
 
-/* ─── Detail ──────────────────────────────────────────────────────────── */
+/* ─── Detail (tabbed redesign) ────────────────────────────────────────── */
 
 .worker-detail {
-  max-width: 700px;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
-.detail-header {
+/* Profile header */
+.detail-profile {
   display: flex;
   align-items: flex-start;
-  gap: 20px;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 0;
+  position: relative;
+}
+
+.detail-avatar-wrap {
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .detail-avatar {
-  font-size: 60px;
+  font-size: 52px;
   line-height: 1;
-  flex-shrink: 0;
 }
 
-.detail-info {
-  flex: 1;
+.avatar-hover-hint {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  background: rgba(22, 93, 255, 0.85);
+  color: #fff;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
 }
 
-.detail-info h2 {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 6px;
+.detail-avatar-wrap:hover .avatar-hover-hint {
+  opacity: 1;
 }
 
-.detail-info p {
-  color: var(--text-secondary);
-  margin-bottom: 10px;
-}
-
-.detail-tags {
+.avatar-picker-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  width: 200px;
+}
+
+.avatar-picker-opt {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  background: var(--bg-base);
+  transition: all 0.12s;
+}
+
+.avatar-picker-opt:hover { border-color: #165dff; }
+.avatar-picker-opt.selected { border-color: #165dff; background: rgba(22, 93, 255, 0.1); }
+
+.detail-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.detail-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.detail-id {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+  margin-bottom: 4px;
+}
+
+.detail-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 
 .detail-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
+  align-items: flex-start;
 }
 
-.detail-stats {
+/* Tabs */
+.detail-tabs {
+  flex: 1;
+}
+
+.tab-body {
+  padding: 16px 0 0;
+  min-height: 200px;
+}
+
+.tab-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 32px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* Info sections (overview tab) */
+.info-section {
+  margin-bottom: 20px;
+}
+
+.info-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.info-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 64px;
+}
+
+/* Skill cards */
+.skill-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
 }
 
-.stat-card {
+.skill-card {
   background: var(--bg-base);
-  border-radius: 12px;
-  padding: 16px;
-  text-align: center;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 12px;
 }
 
-.stat-value {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
+.skill-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   margin-bottom: 6px;
 }
 
-.stat-label {
+.skill-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.skill-card-desc {
   font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Tools list */
+.tools-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-color);
+  transition: background 0.12s;
+}
+
+.tool-row.tool-enabled {
+  border-color: rgba(0, 180, 42, 0.2);
+  background: rgba(0, 180, 42, 0.03);
+}
+
+.tool-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+
+.tool-dot.enabled { background: #00b42a; }
+
+.tool-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-row-label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.tool-row-id {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: monospace;
+}
+
+/* Workspace path row */
+.ws-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.ws-path-code {
+  flex: 1;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-primary);
+  background: var(--bg-base);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  word-break: break-all;
+}
+
+.workspace-refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* Task list */
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-item {
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-base);
+}
+
+.task-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.task-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.task-item-badges {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.task-item-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.task-item-meta {
+  font-size: 11px;
   color: var(--text-tertiary);
 }
 

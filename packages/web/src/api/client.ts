@@ -52,6 +52,8 @@ export interface ApiWorker {
   id: string
   name: string
   description: string
+  /** Worker 头像（emoji 字符），未设置时默认 🤖 */
+  avatar?: string
   skills: string[]
   modelId: string
   /** 可选：心跳/收件箱审视用的轻量模型 ID */
@@ -143,6 +145,8 @@ export interface ApiWorkerInput {
   id: string
   name: string
   description: string
+  /** Worker 头像（emoji 字符） */
+  avatar?: string
   role: string
   modelId: string
   /** 可选：心跳/收件箱审视用的轻量模型 ID */
@@ -205,6 +209,31 @@ export const workspaceApi = {
 //     })
 //   }
 // }
+
+// ─── Worker Task（TodoList）─────────────────────────────────────────────────
+
+export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'blocked' | 'cancelled'
+export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
+
+export interface WorkerTask {
+  id: string
+  assignedTo: string
+  createdBy: string
+  chatId?: string
+  messageId?: string
+  title: string
+  description: string
+  status: TaskStatus
+  priority: TaskPriority
+  createdAt: number
+  updatedAt: number
+  dueAt?: number
+}
+
+export const tasksApi = {
+  list: (workerId: string) =>
+    service.get<WorkerTask[]>(`/workers/${workerId}/tasks`),
+}
 
 export const workersApi = {
   list: () => service.get<ApiWorker[]>('/workers'),

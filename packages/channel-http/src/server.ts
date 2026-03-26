@@ -940,6 +940,21 @@ export class HttpServer {
       }
     }
 
+    // ── GET /api/workers/:workerId/tasks  (Worker 待办任务列表)
+    {
+      const m = matchRoute('/api/workers/:workerId/tasks', path);
+      if (m && method === 'GET') {
+        const wid = m.params['workerId']!;
+        const workerCfg = (this.config.workers ?? []).find(w => w.id === wid);
+        if (!workerCfg) { notFound(res); return; }
+        if (!workerCfg.skills?.includes('todolist')) { ok(res, []); return; }
+        const taskMgr = this.getTaskManagerForWorker(wid);
+        const tasks = await taskMgr.list();
+        ok(res, tasks);
+        return;
+      }
+    }
+
     // ── POST /api/workers/:workerId/sessions
     {
       const m = matchRoute('/api/workers/:workerId/sessions', path);
@@ -1168,6 +1183,7 @@ export class HttpServer {
         isPrimary:   w.primary ?? false,
         status:      this._resolveWorkerStatus(w.id),
         workspace:   resolveWorkspaceDir(w, this.config),
+        ...(w.avatar && { avatar: w.avatar }),
       };
       if (w.capabilities !== undefined) {
         entry.capabilities = w.capabilities as ApiWorkerCapabilities;
@@ -2162,7 +2178,7 @@ export class HttpServer {
       badRequest(res, 'Invalid JSON body'); return;
     }
 
-    const { id: rawId, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary, workspace, capabilities } = body;
+    const { id: rawId, name, modelId, reviewModelId, heartbeatIntervalMs, role, description, skills, tools, primary, workspace, capabilities, avatar } = body;
     if (!name?.trim())    { badRequest(res, '"name" is required'); return; }
     if (!modelId?.trim()) { badRequest(res, '"modelId" is required'); return; }
 
@@ -2206,6 +2222,7 @@ export class HttpServer {
       primary: primary ?? false,
       ...(workspace?.trim() && { workspace: workspace.trim() }),
       ...(capabilities !== undefined && { capabilities }),
+      ...(avatar?.trim() && { avatar: avatar.trim() }),
     };
 
     // 若设为主 Worker，取消其他 primary 标记
@@ -2241,6 +2258,7 @@ export class HttpServer {
       description: newWorker.description,
       skills:      newWorker.skills,
       modelId:     newWorker.modelId,
+      ...(newWorker.avatar && { avatar: newWorker.avatar }),
       ...(newWorker.reviewModelId && { reviewModelId: newWorker.reviewModelId }),
       ...(newWorker.heartbeatIntervalMs !== undefined && { heartbeatIntervalMs: newWorker.heartbeatIntervalMs }),
       role:        newWorker.role,
@@ -2284,6 +2302,7 @@ export class HttpServer {
     const newCapabilities = body.capabilities !== undefined
       ? body.capabilities
       : existing.capabilities;
+    const newAvatar = body.avatar !== undefined ? body.avatar : existing.avatar;
     const updated: WorkerConfig = {
       id:          workerId,
       name:        body.name?.trim()        ?? existing.name,
@@ -2297,6 +2316,7 @@ export class HttpServer {
       primary:     body.primary             ?? existing.primary ?? false,
       ...(newWorkspace && { workspace: newWorkspace }),
       ...(newCapabilities !== undefined && { capabilities: newCapabilities }),
+      ...(newAvatar && { avatar: newAvatar }),
     };
 
     if (updated.primary) {
@@ -2334,6 +2354,7 @@ export class HttpServer {
       description: updated.description,
       skills:      updated.skills,
       modelId:     updated.modelId,
+      ...(updated.avatar && { avatar: updated.avatar }),
       ...(updated.reviewModelId && { reviewModelId: updated.reviewModelId }),
       ...(updated.heartbeatIntervalMs !== undefined && { heartbeatIntervalMs: updated.heartbeatIntervalMs }),
       role:        updated.role,
