@@ -74,12 +74,12 @@
         <div class="panel-card">
           <h3>{{ t('scene.summary') }}</h3>
           <div class="summary-grid">
-            <div class="summary-item"><span>{{ t('scene.total') }}</span><b>{{ snapshot.totals.total }}</b></div>
-            <div class="summary-item"><span>{{ t('scene.working') }}</span><b class="c-green">{{ snapshot.totals.byState.working }}</b></div>
-            <div class="summary-item"><span>{{ t('scene.idle') }}</span><b class="c-blue">{{ snapshot.totals.byState.idle }}</b></div>
-            <div class="summary-item"><span>{{ t('scene.meeting') }}</span><b class="c-purple">{{ snapshot.totals.byState.meeting }}</b></div>
-            <div class="summary-item"><span>{{ t('scene.focus') }}</span><b class="c-orange">{{ snapshot.totals.byState.focus }}</b></div>
-            <div class="summary-item"><span>{{ t('scene.offline') }}</span><b class="c-gray">{{ snapshot.totals.byState.offline }}</b></div>
+            <div class="summary-item"><span>{{ t('scene.total') }}</span><b>{{ snapshot?.totals?.total ?? 0 }}</b></div>
+            <div class="summary-item"><span>{{ t('scene.working') }}</span><b class="c-green">{{ snapshot?.totals?.byState?.working ?? 0 }}</b></div>
+            <div class="summary-item"><span>{{ t('scene.idle') }}</span><b class="c-blue">{{ snapshot?.totals?.byState?.idle ?? 0 }}</b></div>
+            <div class="summary-item"><span>{{ t('scene.meeting') }}</span><b class="c-purple">{{ snapshot?.totals?.byState?.meeting ?? 0 }}</b></div>
+            <div class="summary-item"><span>{{ t('scene.focus') }}</span><b class="c-orange">{{ snapshot?.totals?.byState?.focus ?? 0 }}</b></div>
+            <div class="summary-item"><span>{{ t('scene.offline') }}</span><b class="c-gray">{{ snapshot?.totals?.byState?.offline ?? 0 }}</b></div>
           </div>
         </div>
 
