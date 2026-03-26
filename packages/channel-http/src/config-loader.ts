@@ -54,6 +54,8 @@ export interface WorkerConfig {
    * 未设置时默认为 `${defaults.workspaceBaseDir}/${id}`。
    */
   workspace?: string;
+  /** Worker 头像（emoji 字符），未设置时前端默认显示 🤖 */
+  avatar?: string;
   /**
    * Worker 可选能力配置。
    * 例如启用浏览器访问能力：

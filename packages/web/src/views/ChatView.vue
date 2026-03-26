@@ -364,8 +364,8 @@
         <!-- Messages -->
         <div class="messages-area" ref="messagesArea">
 
-          <!-- 无会话：引导新建（无 sidebar 且无任何 session） -->
-          <div v-if="workerSessions.length === 0" class="session-picker">
+          <!-- 无会话：引导新建（无 sidebar 且无任何 session，也无 notify 消息） -->
+          <div v-if="workerSessions.length === 0 && mergedMessages.length === 0" class="session-picker">
             <div class="session-picker-header">
               <div class="session-picker-title">与 {{ activeWorker.name }} 的对话</div>
               <div class="session-picker-desc">还没有历史对话记录，点击下方按钮开始第一次对话</div>
@@ -449,7 +449,7 @@
         </div>
 
         <!-- Input (hidden when session picker is shown) -->
-        <div v-if="chatStore.activeSessionId || workerSessions.length === 1" class="input-area">
+        <div v-if="chatStore.activeSessionId || workerSessions.length === 1 || (workerSessions.length === 0 && mergedMessages.length > 0)" class="input-area">
           <!-- @mention 自动补全下拉框（群聊专用） -->
           <div v-if="showMentionDropdown && filteredMentionWorkers.length > 0" class="mention-dropdown">
             <div class="mention-dropdown-title">选择 @ 成员</div>
@@ -978,8 +978,12 @@ function getSessionPreview(session: ChatSession): string {
   return last.content.slice(0, 60) + (last.content.length > 60 ? '…' : '');
 }
 
-function openDmSession(id: string) {
+async function openDmSession(id: string) {
   chatStore.selectSession(id);
+  const session = chatStore.sessions.find(s => s.id === id);
+  if (session && session.messages.length === 0 && session.messageCount > 0) {
+    await chatStore.loadSessionMessages(id);
+  }
 }
 
 function getDmTitle(dm: ChatSession): string {
@@ -1076,12 +1080,11 @@ async function createDmSession() {
   }
 }
 
-function openGroupSession(sessionId: string) {
+async function openGroupSession(sessionId: string) {
   chatStore.selectSession(sessionId);
-  // 为 header 显示设置 activeWorkerId（群聊的第一个 worker）
   const session = chatStore.sessions.find(s => s.id === sessionId);
-  if (session?.workerIds?.[0]) {
-    // activeWorkerId is set by selectSession only for worker context; for group, set it here
+  if (session && session.messages.length === 0 && session.messageCount > 0) {
+    await chatStore.loadSessionMessages(sessionId);
   }
 }
 
@@ -1114,6 +1117,18 @@ watch(() => mergedMessages.value.length, async () => {
 
 // 切换会话时滚动到底部，显示最新消息
 watch(() => chatStore.activeSessionId, async () => {
+  await nextTick();
+  scrollToBottom();
+});
+
+// 异步聊天消息更新时滚动到底部
+watch(() => chatStore.activeAsyncChatMessages.length, async () => {
+  await nextTick();
+  scrollToBottom();
+});
+
+// 切换异步聊天时滚动到底部
+watch(() => chatStore.activeAsyncChatId, async () => {
   await nextTick();
   scrollToBottom();
 });
