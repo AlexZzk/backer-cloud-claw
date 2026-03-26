@@ -59,6 +59,7 @@ const authStore = useAuthStore();
 const navItems = [
   { to: '/chat',      icon: '💬', labelKey: 'nav.chat' },
   { to: '/workers',   icon: '🤖', labelKey: 'nav.workers' },
+  { to: '/scenes',    icon: '🗺️', labelKey: 'nav.scenes' },
   { to: '/org',       icon: '🏢', labelKey: 'nav.org' },
   { to: '/analytics', icon: '📊', labelKey: 'nav.analytics' },
   { to: '/skills',    icon: '🧩', labelKey: 'nav.skills' },
