@@ -16,6 +16,16 @@
  *   GET    /api/scenes/:sceneId/events    获取场景实时事件流（SSE）
  *   GET    /api/scenes/:sceneId/residents 获取场景入驻员工配置
  *   PUT    /api/scenes/:sceneId/residents/:workerId 更新场景入驻状态
+ *   GET    /api/scenes/:sceneId/layout    获取场景 2D 布局（Gather 风格地图）
+ *
+ * Web3 所有权 & 交易市场：
+ *   GET    /api/ownership/:type/:id        获取实体所有权记录（type=scene|worker|company）
+ *   POST   /api/ownership/:type/:id/transfer 转让所有权
+ *   POST   /api/ownership/:type/:id/list   挂牌出售
+ *   DELETE /api/ownership/:type/:id/list   下架出售
+ *   POST   /api/ownership/:type/:id/buy    购买（模拟）
+ *   POST   /api/ownership/company/:id/sell-all 整体出售公司
+ *   GET    /api/marketplace                获取市场上在售实体列表
  *   GET    /api/models                    获取模型列表（每次热重载 config）
  *   POST   /api/models                    创建模型实例
  *   PUT    /api/models/:id               更新模型实例
@@ -92,6 +102,15 @@ import {
   getSceneDefinition,
   listScenes,
 } from './space-runtime/service.js';
+import {
+  getSceneLayout,
+} from './space-runtime/layout.js';
+import { OwnershipManager, DEFAULT_OWNER_ID } from '@bcc/web3-ownership';
+import type {
+  OwnerableEntityType,
+  TransferRequest,
+  ListForSaleRequest,
+} from '@bcc/web3-ownership';
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
@@ -390,6 +409,8 @@ export class HttpServer {
    * GET /api/events 的每个订阅者对应一个 ServerResponse 对象。
    */
   private sseClients = new Set<ServerResponse>();
+  /** Web3 所有权管理器 */
+  private ownershipManager = new OwnershipManager();
 
   constructor(
     private config: BccConfig,
@@ -411,6 +432,8 @@ export class HttpServer {
 
     // ── 初始化 Company（核心业务逻辑层：Worker 实例 + 调度器 + 心跳）──────────
     await this._initCompany();
+    // ── 初始化 Web3 所有权记录（确保所有 scene / worker / company 有所有权条目）──
+    await this._initOwnershipRecords();
 
     return new Promise(resolve => {
       const server = createServer((req, res) => {
@@ -1149,6 +1172,77 @@ export class HttpServer {
             return;
           }
         }
+      }
+    }
+
+    // ── GET /api/scenes/:sceneId/layout
+    {
+      const m = matchRoute('/api/scenes/:sceneId/layout', path);
+      if (m && method === 'GET') {
+        const layout = getSceneLayout(m.params['sceneId'] ?? DEFAULT_SCENE_ID);
+        if (!layout) { notFound(res); return; }
+        ok(res, layout);
+        return;
+      }
+    }
+
+    // ── GET /api/marketplace
+    if (method === 'GET' && path === '/api/marketplace') {
+      await this.handleGetMarketplace(res);
+      return;
+    }
+
+    // ── GET /api/ownership/:type/:id
+    {
+      const m = matchRoute('/api/ownership/:type/:id', path);
+      if (m && method === 'GET') {
+        await this.handleGetOwnership(res, m.params['type'] as OwnerableEntityType, m.params['id']!);
+        return;
+      }
+    }
+
+    // ── POST /api/ownership/:type/:id/transfer
+    {
+      const m = matchRoute('/api/ownership/:type/:id/transfer', path);
+      if (m && method === 'POST') {
+        await this.handleOwnershipTransfer(req, res, m.params['type'] as OwnerableEntityType, m.params['id']!);
+        return;
+      }
+    }
+
+    // ── POST /api/ownership/:type/:id/list
+    {
+      const m = matchRoute('/api/ownership/:type/:id/list', path);
+      if (m && method === 'POST') {
+        await this.handleOwnershipList(req, res, m.params['type'] as OwnerableEntityType, m.params['id']!);
+        return;
+      }
+    }
+
+    // ── DELETE /api/ownership/:type/:id/list  (下架)
+    {
+      const m = matchRoute('/api/ownership/:type/:id/list', path);
+      if (m && method === 'DELETE') {
+        await this.handleOwnershipDelist(req, res, m.params['type'] as OwnerableEntityType, m.params['id']!);
+        return;
+      }
+    }
+
+    // ── POST /api/ownership/:type/:id/buy
+    {
+      const m = matchRoute('/api/ownership/:type/:id/buy', path);
+      if (m && method === 'POST') {
+        await this.handleOwnershipBuy(req, res, m.params['type'] as OwnerableEntityType, m.params['id']!);
+        return;
+      }
+    }
+
+    // ── POST /api/ownership/company/:companyId/sell-all  (整体出售公司)
+    {
+      const m = matchRoute('/api/ownership/company/:companyId/sell-all', path);
+      if (m && method === 'POST') {
+        await this.handleCompanySellAll(req, res, m.params['companyId']!);
+        return;
       }
     }
 
@@ -3288,5 +3382,211 @@ export class HttpServer {
     cfg.userTools!.splice(idx, 1);
     await saveConfig(cfg);
     ok(res, { deleted: true, id: toolId });
+  }
+
+  // ── Web3 所有权初始化 ────────────────────────────────────────────────────────
+
+  /**
+   * 在服务器启动后，确保所有 scene、worker、company 都有对应的所有权记录。
+   * 首次运行时创建默认记录（ownerId = 'org:default'）。
+   */
+  private async _initOwnershipRecords(): Promise<void> {
+    try {
+      // 公司
+      await this.ownershipManager.ensureRecord('company', 'default-company');
+      // 所有场景
+      for (const scene of listScenes()) {
+        await this.ownershipManager.ensureRecord('scene', scene.id);
+      }
+      // 所有 Worker
+      for (const worker of this.config.workers ?? []) {
+        await this.ownershipManager.ensureRecord('worker', worker.id);
+      }
+    } catch (err) {
+      console.error('  ⚠️  Web3 所有权初始化失败:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // ── Web3 所有权 / Marketplace 处理函数 ──────────────────────────────────────
+
+  private async handleGetOwnership(
+    res: ServerResponse,
+    type: OwnerableEntityType,
+    id: string,
+  ) {
+    const record = await this.ownershipManager.getRecord(type, id);
+    if (!record) {
+      // 按需初始化
+      const init = await this.ownershipManager.ensureRecord(type, id);
+      ok(res, init);
+      return;
+    }
+    ok(res, record);
+  }
+
+  private async handleGetMarketplace(res: ServerResponse) {
+    await this.reloadConfig();
+    const nameMap = new Map<string, string>();
+    const descMap = new Map<string, string>();
+    // 场景名称
+    for (const s of listScenes()) {
+      nameMap.set(s.id, s.name);
+    }
+    // Worker 名称
+    for (const w of this.config.workers ?? []) {
+      nameMap.set(w.id, w.name);
+      descMap.set(w.id, w.description ?? '');
+    }
+    nameMap.set('default-company', 'BCC Company');
+    const items = await this.ownershipManager.getMarketplace(nameMap, descMap);
+    ok(res, items);
+  }
+
+  private async handleOwnershipTransfer(
+    req: IncomingMessage,
+    res: ServerResponse,
+    type: OwnerableEntityType,
+    id: string,
+  ) {
+    let body: Partial<TransferRequest>;
+    try {
+      body = JSON.parse(await readBody(req)) as Partial<TransferRequest>;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { fromOwnerId, toOwnerId, price, currency, note } = body;
+    if (!fromOwnerId || !toOwnerId) {
+      badRequest(res, '"fromOwnerId" and "toOwnerId" are required'); return;
+    }
+
+    try {
+      const updated = await this.ownershipManager.transfer({
+        entityType: type,
+        entityId: id,
+        fromOwnerId,
+        toOwnerId,
+        price,
+        currency,
+        note,
+      });
+      ok(res, updated);
+    } catch (err) {
+      badRequest(res, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async handleOwnershipList(
+    req: IncomingMessage,
+    res: ServerResponse,
+    type: OwnerableEntityType,
+    id: string,
+  ) {
+    let body: Partial<ListForSaleRequest>;
+    try {
+      body = JSON.parse(await readBody(req)) as Partial<ListForSaleRequest>;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { ownerId, price, currency } = body;
+    if (!ownerId || price === undefined) {
+      badRequest(res, '"ownerId" and "price" are required'); return;
+    }
+
+    try {
+      const updated = await this.ownershipManager.listForSale({
+        entityType: type,
+        entityId: id,
+        ownerId,
+        price,
+        currency,
+      });
+      ok(res, updated);
+    } catch (err) {
+      badRequest(res, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async handleOwnershipDelist(
+    req: IncomingMessage,
+    res: ServerResponse,
+    type: OwnerableEntityType,
+    id: string,
+  ) {
+    let body: { ownerId?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { ownerId } = body;
+    if (!ownerId) { badRequest(res, '"ownerId" is required'); return; }
+
+    try {
+      const updated = await this.ownershipManager.delist({
+        entityType: type,
+        entityId: id,
+        ownerId,
+      });
+      ok(res, updated);
+    } catch (err) {
+      badRequest(res, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async handleOwnershipBuy(
+    req: IncomingMessage,
+    res: ServerResponse,
+    type: OwnerableEntityType,
+    id: string,
+  ) {
+    let body: { buyerId?: string };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { buyerId } = body;
+    if (!buyerId) { badRequest(res, '"buyerId" is required'); return; }
+
+    try {
+      const updated = await this.ownershipManager.buy(type, id, buyerId);
+      ok(res, updated);
+    } catch (err) {
+      badRequest(res, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async handleCompanySellAll(
+    req: IncomingMessage,
+    res: ServerResponse,
+    companyId: string,
+  ) {
+    let body: { fromOwnerId?: string; toOwnerId?: string; price?: number };
+    try {
+      body = JSON.parse(await readBody(req)) as typeof body;
+    } catch {
+      badRequest(res, 'Invalid JSON body'); return;
+    }
+
+    const { fromOwnerId, toOwnerId, price } = body;
+    if (!fromOwnerId || !toOwnerId) {
+      badRequest(res, '"fromOwnerId" and "toOwnerId" are required'); return;
+    }
+
+    try {
+      const results = await this.ownershipManager.transferCompany(
+        companyId,
+        fromOwnerId,
+        toOwnerId,
+        price,
+      );
+      ok(res, { transferred: results.length, records: results });
+    } catch (err) {
+      badRequest(res, err instanceof Error ? err.message : String(err));
+    }
   }
 }

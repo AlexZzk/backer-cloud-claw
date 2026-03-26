@@ -622,6 +622,8 @@ export interface SceneResident {
   homeZoneId?: string
 }
 
+import type { SceneLayout } from './sceneLayout'
+
 export const scenesApi = {
   list: () =>
     service.get<SceneListItem[]>('/scenes'),
@@ -640,6 +642,116 @@ export const scenesApi = {
 
   setResident: (sceneId: string, workerId: string, data: { isResident: boolean; homeZoneId?: string }) =>
     service.put(`/scenes/${encodeURIComponent(sceneId)}/residents/${encodeURIComponent(workerId)}`, data),
+
+  /** 获取场景 2D 布局（Gather 风格地图用） */
+  layout: (sceneId: string) =>
+    service.get<SceneLayout>(`/scenes/${encodeURIComponent(sceneId)}/layout`),
+}
+
+// ─── Web3 Ownership API ─────────────────────────────────────────────────────
+
+export type OwnerableEntityType = 'scene' | 'worker' | 'company'
+
+export type ListingStatus = 'not_listed' | 'listed' | 'sold'
+
+export interface NftMetadata {
+  contractAddress?: string
+  tokenId?: string
+  chainId?: number
+  metadataUri?: string
+  mintedAt?: number
+}
+
+export interface MarketListing {
+  status: ListingStatus
+  price?: number
+  currency?: string
+  listedAt?: number
+  soldAt?: number
+}
+
+export interface OwnershipTransfer {
+  from: string
+  to: string
+  price: number
+  currency: string
+  timestamp: number
+  txHash?: string
+  note?: string
+}
+
+export interface OwnershipRecord {
+  entityType: OwnerableEntityType
+  entityId: string
+  ownerId: string
+  acquiredAt: number
+  nft?: NftMetadata
+  listing: MarketListing
+  transferHistory: OwnershipTransfer[]
+}
+
+export interface MarketplaceItem {
+  entityType: OwnerableEntityType
+  entityId: string
+  entityName: string
+  entityDescription?: string
+  ownerId: string
+  price: number
+  currency: string
+  listedAt: number
+  nft?: NftMetadata
+}
+
+export const ownershipApi = {
+  /** 获取实体所有权记录 */
+  get: (type: OwnerableEntityType, id: string) =>
+    service.get<OwnershipRecord>(`/ownership/${type}/${encodeURIComponent(id)}`),
+
+  /** 获取交易市场上挂牌出售的所有实体 */
+  marketplace: () =>
+    service.get<MarketplaceItem[]>('/marketplace'),
+
+  /** 转让所有权 */
+  transfer: (
+    type: OwnerableEntityType,
+    id: string,
+    data: { fromOwnerId: string; toOwnerId: string; price?: number; currency?: string; note?: string },
+  ) =>
+    service.post<OwnershipRecord>(`/ownership/${type}/${encodeURIComponent(id)}/transfer`, data),
+
+  /** 挂牌出售 */
+  list: (
+    type: OwnerableEntityType,
+    id: string,
+    data: { ownerId: string; price: number; currency?: string },
+  ) =>
+    service.post<OwnershipRecord>(`/ownership/${type}/${encodeURIComponent(id)}/list`, data),
+
+  /** 下架出售 */
+  delist: (
+    type: OwnerableEntityType,
+    id: string,
+    data: { ownerId: string },
+  ) =>
+    service.delete<OwnershipRecord>(`/ownership/${type}/${encodeURIComponent(id)}/list`, { data }),
+
+  /** 购买 */
+  buy: (
+    type: OwnerableEntityType,
+    id: string,
+    data: { buyerId: string },
+  ) =>
+    service.post<OwnershipRecord>(`/ownership/${type}/${encodeURIComponent(id)}/buy`, data),
+
+  /** 整体出售公司（转让所有场景 + Worker） */
+  sellCompany: (
+    companyId: string,
+    data: { fromOwnerId: string; toOwnerId: string; price?: number },
+  ) =>
+    service.post<{ transferred: number; records: OwnershipRecord[] }>(
+      `/ownership/company/${encodeURIComponent(companyId)}/sell-all`,
+      data,
+    ),
 }
 
 // ─── Analytics API ──────────────────────────────────────────────────────
