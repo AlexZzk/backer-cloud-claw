@@ -532,6 +532,90 @@ export const toolsApi = {
     service.delete(`/tools/${encodeURIComponent(id)}`),
 }
 
+// ─── Scene Runtime API ─────────────────────────────────────────────────
+
+export type PresenceState = 'working' | 'idle' | 'meeting' | 'offline' | 'focus'
+export type SceneZoneType = 'work' | 'meeting' | 'social' | 'private' | 'system' | `custom:${string}`
+
+export interface SceneZone {
+  id: string
+  name: string
+  type: SceneZoneType
+  capacity: number
+  tags?: string[]
+  anchors?: Array<{ id: string; x: number; y: number }>
+}
+
+export interface SceneDefinition {
+  id: string
+  name: string
+  templateId: string
+  version: string
+  zones: SceneZone[]
+}
+
+export interface SceneListItem {
+  id: string
+  name: string
+  templateId: string
+  version: string
+}
+
+export interface SceneEntity {
+  entityId: string
+  workerId: string
+  displayName: string
+  modelId: string
+  presenceState: PresenceState
+  zoneId: string
+  seatId?: string
+  position?: { x: number; y: number }
+  activityLabel: string
+  updatedAt: number
+  assetBinding?: {
+    assetType: 'avatar'
+    assetId: string
+    ownerId: string
+  }
+}
+
+export interface ScenePresenceSnapshot {
+  sceneId: string
+  timestamp: number
+  entities: SceneEntity[]
+  totals: {
+    total: number
+    byState: Record<PresenceState, number>
+  }
+}
+
+export interface SceneResident {
+  workerId: string
+  workerName: string
+  isResident: boolean
+  homeZoneId?: string
+}
+
+export const scenesApi = {
+  list: () =>
+    service.get<SceneListItem[]>('/scenes'),
+
+  get: (sceneId: string) =>
+    service.get<SceneDefinition>(`/scenes/${encodeURIComponent(sceneId)}`),
+
+  presence: (sceneId: string) =>
+    service.get<ScenePresenceSnapshot>(`/scenes/${encodeURIComponent(sceneId)}/presence`),
+
+  presenceEvents: (sceneId: string) =>
+    new EventSource(`${service.defaults.baseURL ?? ''}/scenes/${encodeURIComponent(sceneId)}/events`),
+
+  residents: (sceneId: string) =>
+    service.get<{ sceneId: string; residents: SceneResident[] }>(`/scenes/${encodeURIComponent(sceneId)}/residents`),
+
+  setResident: (sceneId: string, workerId: string, data: { isResident: boolean; homeZoneId?: string }) =>
+    service.put(`/scenes/${encodeURIComponent(sceneId)}/residents/${encodeURIComponent(workerId)}`, data),
+}
+
 // ─── Analytics API ──────────────────────────────────────────────────────
 
 export const analyticsApi = {
