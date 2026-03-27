@@ -195,29 +195,40 @@ function drawZone(ctx: CanvasRenderingContext2D, zone: ZoneDef) {
   ctx.roundRect(bx + WALL, by + WALL, fw, fh, 4)
   ctx.clip()
 
+  const isWork    = zone.colorTheme === 'work'
+  const isMeeting = zone.colorTheme === 'meeting'
+
   for (let tc = 0; tc < width; tc++) {
     for (let tr = 0; tr < height; tr++) {
       const tx = bx + tc * TILE
       const ty = by + tr * TILE
-      ctx.fillStyle = (tc + tr) % 2 === 0 ? th.f1 : th.f2
-      ctx.fillRect(tx, ty, TILE, TILE)
+      if (isWork) {
+        drawCarpetTile(ctx, tx, ty, TILE, (tc + tr) % 2)
+      } else if (isMeeting) {
+        drawWoodTile(ctx, tx, ty, TILE, tc, tr)
+      } else {
+        ctx.fillStyle = (tc + tr) % 2 === 0 ? th.f1 : th.f2
+        ctx.fillRect(tx, ty, TILE, TILE)
+      }
     }
   }
 
-  // Tile grid lines
-  ctx.strokeStyle = th.grid
-  ctx.lineWidth   = 0.5
-  for (let tc = 1; tc < width; tc++) {
-    ctx.beginPath()
-    ctx.moveTo(bx + tc * TILE, by + WALL)
-    ctx.lineTo(bx + tc * TILE, by + WALL + fh)
-    ctx.stroke()
-  }
-  for (let tr = 1; tr < height; tr++) {
-    ctx.beginPath()
-    ctx.moveTo(bx + WALL, by + tr * TILE)
-    ctx.lineTo(bx + WALL + fw, by + tr * TILE)
-    ctx.stroke()
+  // Tile grid lines (plain floors only; textured floors have their own seams)
+  if (!isWork && !isMeeting) {
+    ctx.strokeStyle = th.grid
+    ctx.lineWidth   = 0.5
+    for (let tc = 1; tc < width; tc++) {
+      ctx.beginPath()
+      ctx.moveTo(bx + tc * TILE, by + WALL)
+      ctx.lineTo(bx + tc * TILE, by + WALL + fh)
+      ctx.stroke()
+    }
+    for (let tr = 1; tr < height; tr++) {
+      ctx.beginPath()
+      ctx.moveTo(bx + WALL, by + tr * TILE)
+      ctx.lineTo(bx + WALL + fw, by + tr * TILE)
+      ctx.stroke()
+    }
   }
 
   ctx.restore()
@@ -257,32 +268,118 @@ function drawDeco(ctx: CanvasRenderingContext2D, type: string, cx: number, cy: n
   switch (type) {
 
     case 'monitor': {
-      // Desk surface
-      ctx.fillStyle = '#1e1206'
-      ctx.fillRect(cx - 19, cy + 14, 38, 10)
-      ctx.fillStyle = 'rgba(255,200,100,0.08)'
-      ctx.fillRect(cx - 19, cy + 14, 38, 3)
-      // Monitor bezel
-      ctx.fillStyle = '#141420'
-      rRect(ctx, cx - 16, cy - 13, 32, 22, 3); ctx.fill()
-      // Screen
-      ctx.fillStyle = '#07172a'
-      ctx.fillRect(cx - 13, cy - 10, 26, 16)
-      // Screen glow gradient
-      const sg = ctx.createLinearGradient(cx - 13, cy - 10, cx - 13, cy + 6)
-      sg.addColorStop(0, 'rgba(20,80,200,0.45)')
-      sg.addColorStop(1, 'rgba(5,20,60,0.15)')
-      ctx.fillStyle = sg
-      ctx.fillRect(cx - 13, cy - 10, 26, 16)
-      // Code lines on screen
-      ctx.fillStyle = 'rgba(100,170,255,0.35)'
-      ;[[cx-10,cy-7,18],[cx-10,cy-4,12],[cx-10,cy-1,16],[cx-10,cy+2,8]].forEach(([x,y,w])=>{
-        ctx.fillRect(x as number, y as number, w as number, 1.5)
-      })
-      // Stand
-      ctx.fillStyle = '#141420'
-      ctx.fillRect(cx - 3, cy + 9, 6, 6)
-      ctx.fillRect(cx - 8, cy + 13, 16, 3)
+      // ══ WORKSTATION POD (Gather-style top-down sprite) ══
+      // Layout: cy-22..cy+2 = desk | cy+3..cy+22 = chair
+
+      // ── Chair wheels (5 spokes, bottom of tile) ──────────────────────────
+      ctx.fillStyle = '#0c0c18'
+      for (const [dx, dy] of [[-8,21],[8,21],[0,23],[-5,22],[5,22]] as [number,number][]) {
+        ctx.beginPath(); ctx.arc(cx+dx, cy+dy, 1.8, 0, Math.PI*2); ctx.fill()
+      }
+      // Gas cylinder
+      ctx.fillStyle = '#1e1e2e'
+      ctx.fillRect(cx-2, cy+13, 4, 9)
+
+      // Seat shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.42)'
+      ctx.fillRect(cx-12, cy+8, 24, 12)
+      // Seat cushion gradient
+      const seatG = ctx.createLinearGradient(cx-11, cy+8, cx-11, cy+20)
+      seatG.addColorStop(0, '#3e4258'); seatG.addColorStop(1, '#2d3048')
+      ctx.fillStyle = seatG; ctx.fillRect(cx-11, cy+8, 22, 12)
+      // Seat top shine
+      ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fillRect(cx-10, cy+9, 20, 3)
+      // Armrests
+      ctx.fillStyle = '#20203a'
+      ctx.fillRect(cx-15, cy+9, 5, 8)   // left
+      ctx.fillRect(cx+10, cy+9, 5, 8)   // right
+      // Backrest shadow + body
+      ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(cx-11, cy+4, 22, 5)
+      ctx.fillStyle = '#30345a';         ctx.fillRect(cx-10, cy+4, 20, 4)
+      ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(cx-9, cy+4, 18, 1.5)
+
+      // ── Desk drop shadow ─────────────────────────────────────────────────
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
+      ctx.fillRect(cx-19, cy-21, 39, 24)
+
+      // Desk left / right side walls (dark wood)
+      ctx.fillStyle = '#58360a'
+      ctx.fillRect(cx-19, cy-20, 3, 22)   // left
+      ctx.fillRect(cx+16, cy-20, 3, 22)   // right
+
+      // Desk back wall (top dark bar, shows "depth" facing away)
+      ctx.fillStyle = '#462a06'
+      ctx.fillRect(cx-16, cy-20, 32, 3)
+
+      // Desk surface (warm wood gradient)
+      const deskG = ctx.createLinearGradient(cx-16, cy-17, cx-16, cy+2)
+      deskG.addColorStop(0, '#C49838')
+      deskG.addColorStop(0.45, '#AE8828')
+      deskG.addColorStop(1,  '#927014')
+      ctx.fillStyle = deskG; ctx.fillRect(cx-16, cy-17, 32, 19)
+
+      // Wood grain (subtle vertical lines)
+      ctx.strokeStyle = 'rgba(45,22,0,0.14)'; ctx.lineWidth = 0.8
+      for (const gx of [cx-9, cx-3, cx+3, cx+9]) {
+        ctx.beginPath(); ctx.moveTo(gx, cy-17); ctx.lineTo(gx, cy+2); ctx.stroke()
+      }
+      // Desk front edge strip (darker)
+      ctx.fillStyle = '#684410'; ctx.fillRect(cx-16, cy+1, 32, 2)
+
+      // ── Monitor cast shadow on desk ───────────────────────────────────────
+      ctx.fillStyle = 'rgba(0,0,0,0.32)'; ctx.fillRect(cx-11, cy-17, 22, 3)
+
+      // Monitor outer bezel
+      ctx.fillStyle = '#16162a'
+      ctx.fillRect(cx-11, cy-21, 22, 4)   // top bar
+      ctx.fillRect(cx-11, cy-17, 3,  10)  // left bar
+      ctx.fillRect(cx+8,  cy-17, 3,  10)  // right bar
+      ctx.fillRect(cx-11, cy-7,  22, 2)   // bottom bar
+
+      // Screen area
+      ctx.fillStyle = '#030914'; ctx.fillRect(cx-8, cy-17, 16, 10)
+      // Screen gradient (blue IDE glow)
+      const scrG = ctx.createLinearGradient(cx-8, cy-17, cx-8, cy-7)
+      scrG.addColorStop(0,   'rgba(28,95,230,0.68)')
+      scrG.addColorStop(0.45,'rgba(14,52,165,0.48)')
+      scrG.addColorStop(1,   'rgba(5,20,90,0.22)')
+      ctx.fillStyle = scrG; ctx.fillRect(cx-8, cy-17, 16, 10)
+      // CRT scanlines texture
+      ctx.fillStyle = 'rgba(0,0,0,0.09)'
+      for (let sy = cy-16; sy < cy-7; sy += 2) ctx.fillRect(cx-8, sy, 16, 1)
+      // Syntax-highlighted code lines
+      ctx.fillStyle = 'rgba(100,178,255,0.68)';  ctx.fillRect(cx-6, cy-15, 10, 1.5)
+      ctx.fillStyle = 'rgba(255,200,80,0.58)';   ctx.fillRect(cx+2,  cy-15, 4, 1.5)
+      ctx.fillStyle = 'rgba(100,178,255,0.55)';  ctx.fillRect(cx-6, cy-12, 7,  1.5)
+      ctx.fillStyle = 'rgba(130,225,130,0.52)';  ctx.fillRect(cx-3, cy-12, 4,  1.5)
+      ctx.fillStyle = 'rgba(100,178,255,0.52)';  ctx.fillRect(cx-6, cy-9,  9,  1.5)
+
+      // Monitor stand neck
+      ctx.fillStyle = '#22223c'; ctx.fillRect(cx-2, cy-5, 4, 4)
+      // Stand base
+      ctx.fillStyle = '#1c1c30'; ctx.fillRect(cx-6, cy-2, 12, 2)
+
+      // ── Keyboard ─────────────────────────────────────────────────────────
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.fillRect(cx-9, cy,   18, 5)
+      ctx.fillStyle = '#aaabb8';           ctx.fillRect(cx-9, cy-1, 18, 4)
+      // Key row highlights
+      ctx.fillStyle = 'rgba(255,255,255,0.33)'; ctx.fillRect(cx-8, cy-1, 16, 1)
+      // Key row shadow lines
+      ctx.fillStyle = 'rgba(0,0,0,0.22)'
+      ctx.fillRect(cx-8, cy,   16, 1)
+      ctx.fillRect(cx-8, cy+1, 16, 1)
+
+      // ── Mouse ─────────────────────────────────────────────────────────────
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath(); ctx.ellipse(cx+13, cy, 3, 4.5, 0, 0, Math.PI*2); ctx.fill()
+      ctx.fillStyle = '#a6a6b6'
+      ctx.beginPath(); ctx.ellipse(cx+13, cy, 2.5, 4, 0, 0, Math.PI*2); ctx.fill()
+      // Scroll wheel divider
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(cx+11, cy-2, 4, 1)
+      // Highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.22)'
+      ctx.beginPath(); ctx.ellipse(cx+12, cy-1, 1, 2, -0.2, 0, Math.PI*2); ctx.fill()
+
       break
     }
 
@@ -436,7 +533,6 @@ function drawDeco(ctx: CanvasRenderingContext2D, type: string, cx: number, cy: n
       break
     }
 
-    case 'monitor':  // already handled above (duplicate guard)
     default: {
       ctx.fillStyle = 'rgba(60,60,80,0.5)'
       ctx.fillRect(cx - 8, cy - 8, 16, 16)
@@ -640,6 +736,88 @@ function onMouseLeave() {
 /** shorthand for ctx.roundRect + ctx.beginPath */
 function rRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath(); ctx.roundRect(x, y, w, h, r)
+}
+
+// ─── Floor tile textures ──────────────────────────────────────────────────────
+
+/**
+ * Carpet tile — warm blue-grey fabric weave, used in workstation zone.
+ * parity 0/1 alternates the base shade so tiles have subtle checkerboard depth.
+ */
+function drawCarpetTile(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, parity: number) {
+  // Base shade (two very close dark greys — barely visible, creates carpet depth)
+  ctx.fillStyle = parity === 0 ? '#22262f' : '#1f232c'
+  ctx.fillRect(x, y, size, size)
+
+  // Fabric weave dots (offset grid — mimics loop pile carpet)
+  ctx.fillStyle = 'rgba(255,255,255,0.025)'
+  for (let di = 3; di < size; di += 6) {
+    const jOff = (Math.floor(di / 6) % 2 === 0) ? 0 : 3
+    for (let dj = jOff + 3; dj < size; dj += 6) {
+      ctx.fillRect(x + di, y + dj, 1.5, 1.5)
+    }
+  }
+
+  // Subtle diagonal sheen (mimics nap direction)
+  ctx.fillStyle = 'rgba(160,175,220,0.018)'
+  for (let i = 0; i < size * 2; i += 10) {
+    ctx.beginPath()
+    ctx.moveTo(x + i, y)
+    ctx.lineTo(x, y + i)
+    ctx.lineWidth = 1.5
+    ctx.strokeStyle = 'rgba(160,175,220,0.015)'
+    ctx.stroke()
+  }
+
+  // Tile edge seam (very faint, shows carpet tile grid)
+  ctx.strokeStyle = 'rgba(0,0,0,0.18)'
+  ctx.lineWidth = 0.5
+  ctx.strokeRect(x + 0.25, y + 0.25, size - 0.5, size - 0.5)
+}
+
+/**
+ * Wood plank floor — warm dark oak, used in meeting room zone.
+ * Planks run left-right; seam position is staggered per row.
+ */
+function drawWoodTile(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, col: number, row: number) {
+  // Plank base colour — 3 shades cycling per row
+  const shades = ['#1c1006', '#1e1308', '#190e05']
+  ctx.fillStyle = shades[row % 3]
+  ctx.fillRect(x, y, size, size)
+
+  // Top highlight (plank face catches light)
+  ctx.fillStyle = 'rgba(165,95,25,0.08)'
+  ctx.fillRect(x, y, size, Math.ceil(size * 0.3))
+
+  // Grain lines (horizontal — planks run left/right)
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)'
+  ctx.lineWidth = 0.5
+  for (const f of [0.33, 0.66]) {
+    ctx.beginPath()
+    ctx.moveTo(x, y + size * f)
+    ctx.lineTo(x + size, y + size * f)
+    ctx.stroke()
+  }
+
+  // Vertical plank seam — offset by row so joints don't align (brick pattern)
+  const seamOffset = (Math.floor(row / 2) % 2 === 0) ? 0.5 : 0.0
+  if (Math.abs((col + seamOffset) % 1) < 0.1 || Math.abs((col + seamOffset) % 1 - 0.5) < 0.1) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'
+    ctx.lineWidth = 0.75
+    const sx = x + ((col % 2 === 0) === (row % 2 === 0) ? 0 : size / 2)
+    if (sx > x && sx < x + size) {
+      ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(sx, y + size); ctx.stroke()
+    }
+  }
+  // Always draw the right-edge seam of every other tile
+  if ((col + Math.floor(row / 2)) % 2 === 0) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)'
+    ctx.lineWidth = 0.75
+    ctx.beginPath()
+    ctx.moveTo(x + size / 2, y)
+    ctx.lineTo(x + size / 2, y + size)
+    ctx.stroke()
+  }
 }
 </script>
 
