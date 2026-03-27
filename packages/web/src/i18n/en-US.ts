@@ -28,12 +28,11 @@ export default {
   nav: {
     chat: 'Chat',
     workers: 'Workers',
-    scenes: 'Scenes',
+    office: 'Office',
     org: 'Org',
     analytics: 'Analytics',
     skills: 'Skills',
     tools: 'Tools',
-    space: 'Space',
     settings: 'Settings',
   },
   scene: {
