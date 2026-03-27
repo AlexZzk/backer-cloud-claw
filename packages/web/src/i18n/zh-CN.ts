@@ -28,12 +28,11 @@ export default {
   nav: {
     chat: '对话',
     workers: 'Worker',
-    scenes: '场景',
+    office: '办公室',
     org: '组织',
     analytics: '数据',
     skills: '技能',
     tools: '工具',
-    space: '空间',
     settings: '设置',
   },
   scene: {

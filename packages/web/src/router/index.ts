@@ -31,8 +31,7 @@ const router = createRouter({
         },
         {
           path: 'scenes',
-          name: 'scenes',
-          component: () => import('@/views/SceneView.vue'),
+          redirect: '/space',
         },
         {
           path: 'org',
